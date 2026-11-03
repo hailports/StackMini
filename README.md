@@ -167,9 +167,14 @@ python -m hailports setup --dry-run --non-interactive --target-os windows
 
 `--target-os` simulates another system when you are not on it.
 
+## Session keepers
+
+`contrib/session_keepers/` has reference scripts that keep a Zoom web Team Chat or Outlook on the web session readable in a Chrome driven over CDP. A watchdog checks the page every 180 seconds. It tells signed in apart from signed out, an SSO error, or a chat list with no rows. After three bad checks it tries one fix inside the same tab, and then sends a single login-link alert. A browser keeper relaunches Chrome only after three failed probes in a row, runs it with `--disable-http2`, and then a post-launch hook restores the saved sign-in and expands the chat list. They are not installed by `hailports setup`. See `contrib/session_keepers/README.md`.
+
 ## More
 
 - Feature map: `INVENTORY.md`
+- Session keepers: `contrib/session_keepers/README.md`
 - Reference model and the Metal build: `docs/MODEL.md`
 - License: `LICENSE` (MIT)
 - Contributing: `CONTRIBUTING.md`
