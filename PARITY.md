@@ -1,0 +1,38 @@
+# Parity
+
+Each row is a feature from `INVENTORY.md` or from the parity request. Status is what the tests on this machine showed.
+
+| Feature | Module | Test | Status |
+| --- | --- | --- | --- |
+| Command-line chat | `hailports/cli.py`, `hailports/router.py` | `tests/test_modes.py::test_three_modes_with_fakes` | pass |
+| Whole-thread memory, summary, reset | `hailports/threads.py` | `tests/test_parity.py::test_thread_summary_and_reset`, `test_cli_thread_reset_and_idle` | pass |
+| Web chat, interactive before batch | `hailports/webchat.py` | `tests/test_appliance.py::test_priority_gate`, `test_webchat_forwards`, `tests/test_modes.py::test_webchat_router_stats` | pass |
+| Web chat thread and reset | `hailports/webchat.py` | `tests/test_parity.py::test_cli_thread_reset_and_idle` (page script) | pass |
+| iMessage poll | `hailports/imessage.py` | `tests/test_appliance.py::test_imessage_guard` | pass on Linux as a macOS-only guard. Sending still needs a Mac. |
+| iMessage reply text | `hailports/imessage.py` `compose` | `tests/test_parity.py::test_model_replies_are_not_canned_templates` | pass. The reply is model text. The Messages app is not polled on this box. |
+| Web fetch | `hailports/webtools.py` | `tests/test_appliance.py::test_sanitize_and_plugins` | pass |
+| Web search and news | `hailports/webtools.py` | `tests/test_parity.py::test_web_search_and_news` | pass against a local server. The search URL and the news URL come from config. |
+| Ask / do, read then draft | `hailports/askdo.py` | `tests/test_parity.py::test_ask_do_reads_then_drafts`, `tests/test_appliance.py::test_ask_runbook_guard_story` | pass. `gather` does not write. `respond` is the model reply. |
+| Grounded draft with citation hold | `hailports/drafter.py`, `hailports/features.py` | `tests/test_parity.py::test_citation_hold_and_model_draft`, `tests/test_appliance.py::test_draft_and_runner` | pass. A line with no `[n]` is held and not returned as the draft. |
+| Draft queue | `hailports/draft_runner.py` | `tests/test_appliance.py::test_draft_and_runner` | pass. With a router, the queue uses the citation hold. |
+| Story card | `hailports/story.py` | `tests/test_parity.py::test_model_replies_are_not_canned_templates`, `tests/test_appliance.py::test_ask_runbook_guard_story` | pass. `hailports story` asks the model. `story_from_request` remains the offline card shape. |
+| Sprint packet and focus blocks | `hailports/sprint.py`, `hailports/calendar_blocker.py` | `tests/test_parity.py::test_sprint_packet_and_near_duplicate_guard`, `tests/test_appliance.py::test_ask_runbook_guard_story` | pass. The packet is the plan, the blocks, and an `.ics` body. |
+| Duplicate card guard | `hailports/ticket_guard.py`, `hailports/plugins/tracker.py` | `tests/test_parity.py::test_sprint_packet_and_near_duplicate_guard` | pass. Exact titles and near-duplicate titles are refused. Nothing is posted to a remote tracker. |
+| Runbook index | `hailports/runbooks.py` | `tests/test_appliance.py::test_ask_runbook_guard_story` | pass |
+| Correction memory into the prompt and a runbook | `hailports/learning.py` | `tests/test_parity.py::test_learning_loop_updates_prompt_and_runbook` | pass |
+| Notes ingest | `hailports/notes.py` | `tests/test_parity.py::test_ingest_connectors_and_embed_server` | pass for files, HTML, and a URL fetch. |
+| Embeddings (bge-small server) | `hailports_setup/models.py`, `hailports/notes.py` | `tests/test_parity.py::test_ingest_connectors_and_embed_server` | pass for the server flags and the `/v1/embeddings` client. The GGUF is not in the repo. |
+| Hybrid search | `hailports/notes.py` | `tests/test_parity.py::test_hybrid_search_prefers_the_closer_vector` | pass |
+| Freshness and embed auto-heal | `hailports/notes.py`, `hailports/sentinel.py` | `tests/test_parity.py::test_freshness_and_embed_autoheal` | pass. A dead embed URL is restarted only through the service manager when the recorded process id matches. |
+| Focus list | `hailports/worknow.py` | `tests/test_appliance.py::test_brain_learn_now`, `tests/test_parity.py::test_model_replies_are_not_canned_templates` | pass. `hailports now` asks the model when one is up, and prints the list when it is not. |
+| Service-file hash | `hailports/integrity.py` | `tests/test_appliance.py::test_integrity` | pass |
+| Memory budget and exact-PID restart | `hailports/memory.py`, `hailports/osapi.py` | `tests/test_appliance.py::test_exact_pid_restart`, `tests/test_parity.py::test_memory_watch_restarts_only_matching_pid` | pass |
+| Idle useful work | `hailports/idle.py` | `tests/test_parity.py::test_idle_skips_when_busy_and_does_not_delete` | pass. Interactive use skips the job. Jobs do not delete files. |
+| Precompute / compress before a paid call | `hailports/precompute.py`, `hailports/router.py` | `tests/test_parity.py::test_precompute_packet_drops_the_long_tail`, `tests/test_modes.py::test_hybrid_compresses_before_cloud` | pass |
+| Vision, including HEIC | `hailports/images.py`, `hailports/features.py` | `tests/test_parity.py::test_vision_png_and_heic_dependency`, `tests/test_modes.py::test_vision_hybrid_sends_description` | pass for PNG and for the HEIC error when pillow-heif is missing. A real HEIC file was not decoded on this box. |
+| Stats line on every model reply | `hailports/stats.py` | `tests/test_modes.py::test_three_modes_with_fakes`, `tests/test_parity.py::test_model_replies_are_not_canned_templates` | pass |
+| Login-broken alert on a private channel | `hailports/alerts.py` | `tests/test_parity.py::test_login_alert_stays_on_a_private_channel` | pass. Loopback POST plus a local outbox. A public URL is refused. |
+| Three modes and the wizard | `hailports/wizard.py`, `hailports/router.py` | `tests/test_modes.py`, `tests/test_wizard_pexpect.py` | pass, including the interactive pexpect wizard |
+| Optional plugs | `hailports/plugins/` | `tests/test_appliance.py::test_sanitize_and_plugins` | off until the token is in the environment. A placeholder in the config file does not turn a plug on. |
+
+`handle()` in `hailports/askdo.py` is still the deterministic classifier the older unit test calls. `hailports ask` does not print that text. It reads notes, then prints a model reply with the stats line.

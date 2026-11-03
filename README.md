@@ -1,0 +1,177 @@
+# HailPorts appliance
+
+Chat, a private note file, and drafts that stick to notes you provide. One command, `hailports`, runs it on macOS (Apple silicon and Intel), Windows 10 and 11, and Linux (Ubuntu, Debian, Fedora, Arch).
+
+It can use a local llama.cpp model, a hosted OpenAI-compatible endpoint, or both.
+
+## Features
+
+- Command line chat against a local OpenAI-compatible server
+- Web chat that lets an interactive turn go ahead of a batch turn
+- Optional iMessage poll on macOS
+- Telegram, Signal, and Matrix bridge stubs (off until you set a token)
+- Web fetch, web search, and news feeds. Page text is cleaned before the model sees it
+- Ask / do that reads notes and runbooks, then asks the model. It does not change files
+- Grounded drafter. A line without a source citation is held
+- Draft queue, story card, sprint packet, and calendar focus blocks as an `.ics` file
+- Duplicate-card guard, including a near-duplicate title
+- Notes database with file and page ingest, bge-small embeddings, and hybrid search
+- Freshness check that restarts a dead embed server through the service manager
+- Focus list, correction memory that is written back into the prompt and a runbook
+- Idle jobs (refresh notes, summarize the thread, digest news) so a free model still works
+- Whole-thread chat memory, a summary when the thread gets long, and `reset`
+- Memory budget that restarts a service only through the service manager, and only when the recorded process id still matches
+- Login-failure alert to a loopback channel and a local outbox
+- Service-file hash
+- Plugs for a CRM, a tracker, mail, meetings, and a file library. Placeholder config keeps them off
+
+## Modes
+
+Pick the mode in `hailports setup`. Change it later with `hailports mode`.
+
+| Mode | What runs |
+| --- | --- |
+| local | Every feature uses the local llama.cpp server. Nothing is sent to a hosted model. |
+| hybrid | The local model reads, summarizes, retrieves, drafts, and compresses. A cloud model is used only when the reply looks unsure, the request is complex, or the reply is very long. The cloud call gets a short precomputed packet, and the stats line shows how many tokens that saved. |
+| api | No local model, no llama.cpp build, and no model download. Chat, notes embeddings, drafts, vision, and web tools call a hosted endpoint. This is the mode for a small machine. |
+
+Hosted providers: any OpenAI-compatible base URL (OpenAI, xAI, OpenRouter, Groq, Together, or another local server), plus Anthropic and Google adapters. The API key belongs in `HAILPORTS_API_KEY` or the OS keychain. It is not written to the config file.
+
+Every reply ends with a stats line that names the provider, for example `hailports-stats provider=local mode=local ...`.
+
+`hailports doctor` checks the mode you picked. In api mode it does not look for a local model.
+
+## Layout
+
+```mermaid
+flowchart LR
+  setup[hailports setup] --> router[Router]
+  router --> local[Local model]
+  router --> cloud[Cloud API]
+  cli[hailports chat] --> router
+  web[hailports serve] --> router
+  brain[Notes] --> router
+```
+
+Web chat listens on 127.0.0.1 port 8080 and talks to llama-server on port 18080. Notes default to port 8078. Embeddings, if you run them, default to port 8097. Change the ports in the config file.
+
+## Requirements
+
+- Python 3.10 or newer
+- A few GB of disk for a small model, or about 16 GB for the vision model described in `docs/MODEL.md`
+- On macOS, Xcode command line tools if you build llama.cpp yourself
+- On Windows, the prebuilt zip, or Visual Studio build tools if you compile
+- On Linux, the Ubuntu prebuilt is tried first. A source build needs cmake and a C++ compiler (`build-essential` on Debian and Ubuntu, `gcc-c++` and cmake on Fedora, `base-devel` and cmake on Arch)
+
+Python packages come from the project file:
+
+```sh
+python -m pip install .
+```
+
+HEIC photos need the optional extra, which is not installed by default:
+
+```sh
+python -m pip install "hailports-appliance[heif]"
+```
+
+If that extra is missing, `hailports chat --image photo.heic` stops with that install command. Tests and the interactive wizard driver are the `dev` extra: `python -m pip install ".[dev]"`.
+
+## Quick start
+
+```sh
+pipx install .
+hailports setup
+```
+
+`python -m pip install --user .` then `hailports setup` is the same bootstrap when pipx is not installed. The console command is `hailports` on macOS, Windows, and Linux.
+
+Setup is a guided terminal wizard. It explains each step, accepts `back` and `skip`, and can be run again. `--yes` accepts the defaults without questions. When a step fails, it says what went wrong, how to fix it, and offers a retry. After a model or an API key is in place, `hailports ask "why did the build fail"` answers from the setup log.
+
+```sh
+hailports doctor
+hailports chat
+hailports serve
+```
+
+Add `--model tiny` for a plumbing-sized GGUF, `small` under 8 GB, `balanced` for a 7B text model, or `vision` for MiniCPM-V 4.7 when you have about 20 GB and Metal or CUDA.
+
+Copy `config.example.yaml` if you want to edit by hand. Leave the token fields as `CHANGE_ME`. Put real tokens in the environment names from `.env.example`. A value in the yaml file is ignored.
+
+## Per system
+
+### macOS
+
+```sh
+python3 -m pip install --user .
+hailports setup
+```
+
+Apple silicon and Intel both use a Metal llama.cpp build when you compile, or the matching macOS tarball when you download. Services are launchd agents. The label is whatever you type at the prompt (default `com.hailports.darwin`). iMessage is optional and stays off unless you pass `--modules` including `imessage`. The model listens on 127.0.0.1.
+
+### Windows
+
+```powershell
+py -m pip install --user .
+hailports setup
+```
+
+CPU, CUDA, Vulkan, or ROCm zip from the llama.cpp releases. The installer writes a Task Scheduler XML in UTF-8. You can point NSSM at the same `llama-server` command if you would rather have a service. Auto-heal calls `schtasks /Run` for that task name. It does not kill processes by image name. The model listens on 127.0.0.1.
+
+### Linux
+
+```sh
+python3 -m pip install --user .
+hailports setup
+```
+
+Ubuntu, Debian, Fedora, and Arch share the detection path. A user systemd unit is the service. If `systemctl --user` is not available, the unit file is still written and you can start `llama-server` in the foreground with the command the installer prints. Auto-heal uses `systemctl --user restart` and only when the stored process id is still the one the service owns. The model listens on 127.0.0.1.
+
+## Commands
+
+`hailports --help` lists them. Each command has its own `--help`.
+
+- `setup` guided install
+- `doctor` test the current mode
+- `mode` show or switch local, hybrid, or api
+- `chat` a terminal chat. `reset` drops the thread. `--image` attaches a picture
+- `serve` web chat on 127.0.0.1
+- `brain` ingest, ingest-path, search, and status
+- `brain-add` and `brain-find` for a note without embeddings
+- `drafter` a draft from notes you pass in with `--source`
+- `draft` queue one grounded draft
+- `services` install, start, stop, restart, status, and logs, through the service manager only
+- `plugins` list, enable, and configure. Tokens are refused on the command line
+- `ask` questions, including setup questions once a model or API is configured
+- `idle` run one useful job
+- `alerts` probe a login URL and write a local outbox
+- `health` short reachability check
+- `story` a story card
+- `now` the focus list
+- `learn` save a correction
+- `sprint` pack a backlog into focus blocks
+- `guard` refuse a duplicate card
+- `block` write an `.ics` focus block
+- `imessage` macOS poll hint, or a model reply
+- `update` and `uninstall`
+
+## Tests
+
+```sh
+python -m compileall -q hailports hailports_setup setup.py
+python -m pytest -q
+python -m hailports setup --dry-run --non-interactive --target-os linux
+python -m hailports setup --dry-run --non-interactive --target-os darwin
+python -m hailports setup --dry-run --non-interactive --target-os windows
+```
+
+`--target-os` simulates another system when you are not on it.
+
+## More
+
+- Feature map: `INVENTORY.md`
+- Reference model and the Metal build: `docs/MODEL.md`
+- License: `LICENSE` (MIT)
+- Contributing: `CONTRIBUTING.md`
+- Security: `SECURITY.md`
+- Sponsor link: `.github/FUNDING.yml` is a placeholder until a real URL exists
