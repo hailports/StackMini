@@ -25,6 +25,8 @@ This repo is a fresh write of a local model appliance. Private trees, databases,
 | Correction memory | hailports/learning.py |
 | Whole-thread chat memory | hailports/threads.py |
 | Idle useful work, one deep note at a time with linked clips | hailports/idle.py |
+| Open-card lap, one changed card, next step held for a go | hailports/openloop.py |
+| Suggested card held until Approve and Post, Edit, or Dismiss | hailports/suggest.py, hailports/ticket_guard.py |
 | Precomputed packet for a paid call | hailports/precompute.py, hailports/router.py |
 | Login-broken alert | hailports/alerts.py |
 | Vision input | hailports/images.py, hailports_setup, docs/MODEL.md |
