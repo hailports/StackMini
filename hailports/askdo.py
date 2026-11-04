@@ -21,7 +21,7 @@ def classify(text: str) -> str:
     return "do"
 
 
-def gather(text: str, runbook_root, brain=None, allow_root=None) -> dict:
+def gather(text: str, runbook_root, brain=None, allow_root=None, pages=None, allowed_repos=None) -> dict:
     """Read runbooks and notes. This does not write, delete, or run a command."""
     kind = classify(text)
     actions: list[str] = []
@@ -52,13 +52,26 @@ def gather(text: str, runbook_root, brain=None, allow_root=None) -> dict:
                 if root not in target.parents and target != root:
                     continue
                 notes.append(target.read_text(encoding="utf-8", errors="replace")[:4000])
-    return {
+    links: list[str] = []
+    if pages:
+        from hailports.contextpack import pack_pages
+        packed = pack_pages(text, list(pages), allowed_repos=allowed_repos)
+        if packed.get("blocked"):
+            return {"kind": "refuse", "text": "", "notes": [], "actions": ["held"], "changed": False, "runbooks": []}
+        if packed.get("text"):
+            actions.append("read-context")
+            notes.append(packed["text"])
+        links = list(packed.get("kinds") or [])
+    out = {
         "kind": kind,
         "notes": notes,
         "actions": actions,
         "changed": False,
         "runbooks": titles,
     }
+    if pages is not None:
+        out["links"] = links
+    return out
 
 
 def respond(router, text: str, bundle: dict):
@@ -72,14 +85,34 @@ def respond(router, text: str, bundle: dict):
             task="read",
         )
     notes = "\n\n".join(bundle.get("notes") or []) or "(no local notes)"
+    lessons = str(bundle.get("lessons") or "").strip()
+    if lessons:
+        notes = notes + "\n\nPRIOR\n" + lessons
     task = "draft" if bundle.get("kind") == "do" else "read"
-    return router.complete(
+    reply = router.complete(
         [
             {"role": "system", "content": "Use only the notes. Say what was read. Do not claim any file was changed."},
             {"role": "user", "content": "Actions: " + ", ".join(bundle.get("actions") or []) + "\nNotes:\n" + notes + "\n\nRequest: " + text},
         ],
         task=task,
     )
+    if not bundle.get("check"):
+        return reply
+    from hailports.contextpack import apply_check
+
+    def complete(messages, max_tokens=180):
+        got = router.complete(messages, task="read", max_tokens=max_tokens)
+        return {"ok": True, "text": getattr(got, "text", "") or "", "reason": ""}
+
+    checked = apply_check(text, notes, getattr(reply, "text", "") or "", complete=complete)
+    if not checked.get("ok"):
+        reply.text = ""
+        reply.raw = dict(getattr(reply, "raw", None) or {})
+        reply.raw["held"] = True
+        reply.raw["reason"] = checked.get("reason") or "hold"
+        return reply
+    reply.text = checked.get("text") or ""
+    return reply
 
 
 def handle(text: str, runbook_root, sources: list[str] | None = None) -> dict:

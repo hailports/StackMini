@@ -6,6 +6,8 @@ import re
 import threading
 import time
 
+from hailports.contextpack import skip_unchanged, stable_fp
+
 JOBS = ("freshness", "reembed", "summarize-thread", "news-digest", "compress-context", "deep-fill")
 
 # One note, then stop. The ceiling is the size of one finished note.
