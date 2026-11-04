@@ -5,7 +5,16 @@ from __future__ import annotations
 import json
 
 from hailports.askdo import gather, respond
-from hailports.contextpack import apply_check, pack_pages, record_pair, similar_text, skip_unchanged, stable_fp
+from hailports.contextpack import (
+    answers_the_ask,
+    apply_check,
+    extract_ask,
+    pack_pages,
+    record_pair,
+    similar_text,
+    skip_unchanged,
+    stable_fp,
+)
 from hailports.draft_runner import run_round
 from hailports.idle import skip_unchanged as idle_skip
 from hailports.learning import record_pair as learn_record
@@ -93,6 +102,70 @@ def test_invented_claim_is_not_staged():
     assert held["ok"] is False
     assert held["text"] == ""
     assert "not_in_context" in held["reason"]
+    assert held["attempts"] == 2
+
+
+def test_tag_change_misses_the_ask_and_the_edit_fix_passes():
+    ask = (
+        "Tags: board-cleanup:2026-08-12\nParent: 900\n"
+        "Description:\nInventory the approval groups and design the migration waves."
+    )
+    tag = 'on 2026-08-12 the tags were updated to include "board-cleanup:2026-08-12".'
+    assert extract_ask(ask).lower().startswith("inventory")
+    ok, why = answers_the_ask(ask, tag)
+    assert ok is False
+    assert why.startswith("off_topic")
+
+    def complete(messages, max_tokens=80):
+        if "Grade one draft" in messages[0]["content"]:
+            return {"ok": True, "text": '{"pass": true, "answers_ask": true, "reason": "mentions it"}', "reason": ""}
+        return {"ok": True, "text": tag, "reason": ""}
+
+    held = apply_check(ask, "Tags: board-cleanup:2026-08-12\nParent: 900", tag, complete=complete)
+    assert held["ok"] is False
+    assert held["text"] == ""
+    assert "off_topic" in held["reason"]
+
+    edit_ask = "Description:\nPermissions error when trying to edit employee records."
+    edit = "the earlier fix did not allow dealers to edit branch contacts. the account stays read only."
+    assert answers_the_ask(edit_ask, edit)[0] is True
+    good = apply_check(
+        edit_ask,
+        "dealers can edit branch contacts. the account stays read only.",
+        edit,
+        complete=lambda messages, max_tokens=80: {"ok": True, "text": '{"pass": true, "reason": "answers the edit"}', "reason": ""},
+    )
+    assert good["ok"] is True
+    assert good["status"] == "pass"
+
+
+def test_unparsed_grade_retries_once_and_then_holds():
+    calls = {"n": 0}
+
+    def messy(messages, max_tokens=80):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"ok": True, "text": "looks fine", "reason": ""}
+        return {"ok": True, "text": '{"pass": true, "reason": "answers the edit"}', "reason": ""}
+
+    kept = apply_check(
+        "can they edit contacts?",
+        "they can edit contacts",
+        "they can edit the contacts now",
+        complete=messy,
+    )
+    assert kept["ok"] is True
+    assert calls["n"] == 2
+
+    held = apply_check(
+        "can they edit contacts?",
+        "they can edit contacts",
+        "they can edit the contacts now",
+        complete=lambda messages, max_tokens=80: {"ok": True, "text": "still prose", "reason": ""},
+    )
+    assert held["ok"] is False
+    assert held["text"] == ""
+    assert held["reason"] == "grade_unparsed"
     assert held["attempts"] == 2
 
 

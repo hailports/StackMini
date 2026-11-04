@@ -366,50 +366,146 @@ def _lower_voice(text: str) -> str:
     return "\n".join(lines).strip()
 
 
-def _parse_grade(text: str) -> dict:
-    match = re.search(r"\{[^{}]+\}", text or "")
-    if not match:
-        return {"pass": False, "reason": "grade_unparsed"}
-    try:
-        row = json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return {"pass": False, "reason": "grade_unparsed"}
+_ASK_HEADER = re.compile(
+    r"(?im)^(state|area|iteration|tags|priority|parent|changed|assigned to)\s*:"
+)
+_ASK_STOP = {
+    "this", "that", "with", "from", "have", "been", "were", "they", "them", "your",
+    "about", "into", "over", "after", "before", "when", "what", "which", "where",
+    "would", "could", "should", "please", "thanks", "there", "their", "task",
+    "user", "story", "parent", "tags", "updated", "include", "state", "changed",
+    "priority", "description", "only", "also", "then", "does", "for", "and", "the",
+}
+
+
+def extract_ask(text: str) -> str:
+    """The specific question or request in the latest message."""
+    raw = (text or "").replace("\r", "")
+    parts = re.split(r"\n(?:---+|LATEST(?: MESSAGE)?)\n", raw, flags=re.I)
+    blob = parts[-1].strip()
+    described = re.search(r"(?is)\bDescription:\s*(.*)$", blob)
+    if described and len(described.group(1).strip()) >= 20:
+        blob = described.group(1).strip()
+    kept = [line for line in blob.splitlines() if not _ASK_HEADER.match(line.strip())]
+    body = "\n".join(kept).strip()
+    questions = re.findall(r"[^\n?]{8,}\?", body)
+    if questions:
+        return _clip(" ".join(q.strip() for q in questions[-2:]), 500)
+    return _clip(body, 500)
+
+
+def _ask_words(text: str) -> list:
+    out = []
+    seen = set()
+    for word in re.findall(r"[A-Za-z][A-Za-z']{3,}", text or ""):
+        low = word.lower().replace("'", "")
+        if len(low) < 4 or low in _ASK_STOP or low in seen:
+            continue
+        seen.add(low)
+        out.append(low)
+    return out
+
+
+def answers_the_ask(ask: str, draft: str) -> tuple[bool, str]:
+    """False when the draft does not touch the ask in the latest message."""
+    extracted = extract_ask(ask)
+    if len(extracted) < 12:
+        return True, ""
+    ask_words = _ask_words(extracted)
+    if len(ask_words) < 2:
+        return True, ""
+    stems = set()
+    for word in _ask_words(draft):
+        stems.add(word)
+        if len(word) >= 5:
+            stems.add(word[:5])
+    for word in ask_words:
+        if word in stems or (len(word) >= 5 and word[:5] in stems):
+            return True, ""
+    return False, "off_topic: " + _clip(extracted, 90)
+
+
+def _grade_row(row: dict) -> dict:
     passed = row.get("pass")
     if isinstance(passed, str):
-        passed = passed.strip().lower() in {"true", "yes", "pass"}
+        passed = passed.strip().strip('"').lower() in {"true", "yes", "pass"}
+    answers = row.get("answers_ask")
+    if isinstance(answers, str):
+        answers = answers.strip().strip('"').lower() in {"true", "yes", "pass"}
     reason = _clip(str(row.get("reason") or ""), 160)
+    if answers is False:
+        passed = False
+        reason = reason or "off_topic"
     return {"pass": bool(passed), "reason": reason or ("pass" if passed else "fail")}
 
 
+def _parse_grade(text: str) -> dict:
+    raw = re.sub(r"(?is)^```(?:json)?\s*|\s*```$", "", (text or "").strip())
+    candidates = [raw] if raw.startswith("{") else []
+    candidates.extend(re.findall(r"\{[^{}]+\}", raw))
+    for cand in candidates:
+        try:
+            row = json.loads(re.sub(r",\s*}", "}", cand))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict) and ("pass" in row or "answers_ask" in row):
+            return _grade_row(row)
+    match = re.search(
+        r"""['"]?pass['"]?\s*[:=]\s*(true|false|yes|no|"true"|"false")""",
+        raw,
+        re.I,
+    )
+    if not match:
+        return {"pass": False, "reason": "grade_unparsed"}
+    bit = match.group(1).strip('"').lower() in {"true", "yes"}
+    reason_m = re.search(r"""['"]?reason['"]?\s*[:=]\s*['"]([^'"]+)""", raw)
+    reason = reason_m.group(1) if reason_m else ("pass" if bit else "fail")
+    return {"pass": bit, "reason": _clip(reason, 160)}
+
+
 def apply_check(ask: str, context: str, draft: str, *, complete) -> dict:
-    """Grade once. Rewrite once. A second failure returns empty text."""
+    """Grade once. Retry a bad parse once. Rewrite once. A second miss returns empty text."""
     draft = (draft or "").strip()
     if not draft:
         return {"ok": False, "text": "", "status": "fail", "reason": "empty", "attempts": 1}
 
     def grade(text: str) -> dict:
+        extracted = extract_ask(ask)
         messages = [
             {"role": "system", "content": (
-                "Grade one draft. Reply with one JSON object and nothing else. "
-                "Pass only when every concrete claim is written in the ask or the context, "
-                "the reply answers the ask, the words are plain, and it names no tool, model, or bot. "
-                "Outside knowledge is a fail."
+                "Grade one draft. Reply with one JSON object and nothing else: "
+                '{"extracted_ask":"the question","answers_ask":true,"pass":true,"reason":"short"}. '
+                "First put the specific question or request from the latest message into extracted_ask. "
+                "answers_ask is true only when the draft directly answers that question. "
+                "A tag change, a date, or a field update is not an answer when the ask asks for something else. "
+                "Pass only when answers_ask is true and every concrete claim is written in the ask or the context, "
+                "the words are plain, and it names no tool, model, or bot. Outside knowledge is a fail."
             )},
-            {"role": "user", "content": "ASK\n{0}\n\nCONTEXT\n{1}\n\nDRAFT\n{2}".format(
-                _clip(ask, 900), _clip(context, 1800), _clip(text, 900)
+            {"role": "user", "content": "EXTRACTED ASK\n{0}\n\nASK\n{1}\n\nCONTEXT\n{2}\n\nDRAFT\n{3}".format(
+                _clip(extracted, 500), _clip(ask, 900), _clip(context, 1800), _clip(text, 900)
             )},
         ]
-        got = complete(messages, 80)
+        try:
+            got = complete(messages, 80, json_mode=True)
+        except TypeError:
+            got = complete(messages, 80)
         if not got.get("ok"):
             return {"pass": False, "reason": got.get("reason") or "grade_error"}
         missing = unsupported_claims(ask, context, text)
         if missing:
             return {"pass": False, "reason": "not_in_context: " + ", ".join(missing)}
+        on_topic, why = answers_the_ask(ask, text)
+        if not on_topic:
+            return {"pass": False, "reason": why}
         return _parse_grade(got.get("text") or "")
 
     first = grade(draft)
     if first.get("reason") == "preempted":
         return {"ok": False, "text": "", "status": "fail", "reason": "preempted", "attempts": 1}
+    if first.get("reason") == "grade_unparsed":
+        first = grade(draft)
+        if first.get("reason") == "grade_unparsed":
+            return {"ok": False, "text": "", "status": "fail", "reason": "grade_unparsed", "attempts": 2}
     if first.get("pass") and not _AI.search(draft):
         return {"ok": True, "text": _lower_voice(draft), "status": "pass", "reason": "", "attempts": 1}
     messages = [

@@ -127,6 +127,13 @@ def run_job(name: str, *, router, brain, thread_con, news_fetch=None, now: float
             return result
         items, pages = items_from_brain(brain)
         if not items:
+            titles = set()
+            try:
+                titles = {str(row[0] or "") for row in brain.execute("select title from docs").fetchall()}
+            except Exception:
+                titles = set()
+            items = follow_items(pages, titles)
+        if not items:
             result["skipped"] = True
             return result
         chosen = take_one(items)
@@ -135,8 +142,10 @@ def run_job(name: str, *, router, brain, thread_con, news_fetch=None, now: float
         result.update(filled)
         result["changed_user_files"] = False
         if filled.get("ended") and filled.get("text"):
+            from hailports.contextpack import stable_fp as _fp
             from hailports.notes import add
-            add(brain, "deep " + str(filled.get("label") or "note"), filled["text"])
+            fp = str((chosen[0] if chosen else {}).get("fp") or "") or _fp(str((chosen[0] if chosen else {}).get("text") or ""))
+            add(brain, "deep " + str(filled.get("label") or "note"), filled["text"].rstrip() + "\nfp: " + fp)
             result["stored"] = True
         else:
             result["stored"] = False
@@ -208,9 +217,33 @@ def page_from_doc(doc_id: int, title: str, body: str) -> dict:
     }
 
 
+def _note_fps(rows) -> dict[str, str]:
+    found = {}
+    for _doc_id, title, body in rows:
+        name = str(title or "")
+        if not name.startswith("deep "):
+            continue
+        match = re.search(r"(?m)^fp: ([0-9a-f]{8,16})\s*$", body or "")
+        if match:
+            found[name[5:]] = match.group(1)
+    return found
+
+
+def _due(label: str, text: str, titles: set[str], fps: dict[str, str]) -> bool:
+    """False when a stored note exists and its fingerprint still matches."""
+    if f"deep {label}" not in titles:
+        return True
+    current = stable_fp(text)
+    stored = fps.get(label)
+    if stored and stored != current:
+        return True
+    return False
+
+
 def items_from_brain(con) -> tuple[list[dict], list[dict]]:
     rows = con.execute("select id, title, body from docs").fetchall()
     titles = {str(title or "") for _doc_id, title, _body in rows}
+    fps = _note_fps(rows)
     pages = [page_from_doc(int(doc_id), title or "", body or "") for doc_id, title, body in rows]
     items = []
     for page in pages:
@@ -219,15 +252,60 @@ def items_from_brain(con) -> tuple[list[dict], list[dict]]:
         if str(page["title"]).startswith("deep "):
             continue
         label = str(page["ref"])
-        if f"deep {label}" in titles:
+        if not _due(label, page["body"], titles, fps):
             continue
         items.append({
             "label": label,
             "ref": page["ref"],
             "source": page["source"],
             "text": page["body"],
+            "fp": stable_fp(page["body"]),
         })
     return items, pages
+
+
+def follow_items(pages: list[dict], titles: set[str]) -> list[dict]:
+    """Later sources once the primary note for a page is already stored.
+
+    Open items get a local reply. A parent that has no note of its own is next.
+    A stored note can be checked once against the current page.
+    """
+    by_ref = {str(page.get("ref") or ""): page for page in pages}
+    items = []
+    seen = set()
+
+    def add(label: str, source: str, ref: str, text: str) -> None:
+        if not text or label in seen or f"deep {label}" in titles:
+            return
+        if _blocked(text):
+            return
+        seen.add(label)
+        items.append({
+            "label": label,
+            "ref": ref,
+            "source": source,
+            "text": text,
+            "fp": stable_fp(text),
+        })
+
+    for page in pages:
+        if str(page.get("title") or "").startswith("deep "):
+            continue
+        if page.get("source") not in _WORK_SOURCES:
+            continue
+        ref = str(page.get("ref") or "")
+        body = str(page.get("body") or "")
+        if f"deep {ref}" in titles and _is_open(page):
+            add("reply-" + ref, "reply", ref, "Local pre-draft only. Not sent.\n" + body)
+        if f"deep {ref}" in titles:
+            add("recheck-" + ref, "recheck", ref, "Recheck the stored note against this page.\n" + body)
+        parent = _parent_id(body)
+        if parent:
+            parent_ref = "card-" + parent
+            parent_page = by_ref.get(parent_ref)
+            if parent_page and f"deep {parent_ref}" not in titles:
+                add(parent_ref, "parent", parent_ref, str(parent_page.get("body") or ""))
+    return items
 
 
 def _clip_text(text: str, limit: int) -> str:
