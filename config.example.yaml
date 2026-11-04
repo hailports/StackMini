@@ -26,6 +26,9 @@ alerts:
   private_url: ""
 idle:
   interval_s: 120
+  # Pull requests clipped into a deep note must use one of these owner/name pairs.
+  # Leave this empty to keep every pull page you already stored.
+  allowed_repos: []
 thread:
   summary_chars: 2400
 modules:

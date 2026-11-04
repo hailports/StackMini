@@ -23,7 +23,7 @@ from hailports.draft_runner import connect as draft_connect
 from hailports.draft_runner import enqueue, pending, run_next
 from hailports.features import draft_reply, see
 from hailports.httpjson import ProviderError
-from hailports.idle import next_job, run_job
+from hailports.idle import allowed_repos_from, next_job, run_job
 from hailports.images import to_png_bytes
 from hailports.imessage import MacOnly, compose, poll_hint
 from hailports.learning import connect as learn_connect
@@ -468,7 +468,14 @@ def _cmd_idle(cfg: dict, cfg_path: Path) -> int:
         from hailports.webtools import news as fetch_news
         fetch = lambda: fetch_news(news_url)
     try:
-        result = run_job(name, router=router, brain=brain, thread_con=threads, news_fetch=fetch)
+        result = run_job(
+            name,
+            router=router,
+            brain=brain,
+            thread_con=threads,
+            news_fetch=fetch,
+            allowed_repos=allowed_repos_from(cfg),
+        )
     except ProviderError as exc:
         return _fail_provider(exc)
     last[name] = time_now()

@@ -12,13 +12,13 @@ It can use a local llama.cpp model, a hosted OpenAI-compatible endpoint, or both
 - Telegram, Signal, and Matrix bridge stubs (off until you set a token)
 - Web fetch, web search, and news feeds. Page text is cleaned before the model sees it
 - Ask / do that reads notes and runbooks, then asks the model. It does not change files
-- Grounded drafter. A line without a source citation is held
+- Grounded drafter. A line without a source citation is held. A quoted scheduling line does not hide a later note. Each skip is logged with its reason and the subject or sender
 - Draft queue, story card, sprint packet, and calendar focus blocks as an `.ics` file
 - Duplicate-card guard, including a near-duplicate title
 - Notes database with file and page ingest, bge-small embeddings, and hybrid search
 - Freshness check that restarts a dead embed server through the service manager
 - Focus list, correction memory that is written back into the prompt and a runbook
-- Idle jobs (refresh notes, summarize the thread, digest news) so a free model still works
+- Idle jobs (refresh notes, summarize the thread, digest news, one deep note at a time) so a free model still works. Linked clips for the next item are gathered while the current note is written
 - Whole-thread chat memory, a summary when the thread gets long, and `reset`
 - Memory budget that restarts a service only through the service manager, and only when the recorded process id still matches
 - Login-failure alert to a loopback channel and a local outbox

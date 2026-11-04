@@ -11,8 +11,8 @@ This repo is a fresh write of a local model appliance. Private trees, databases,
 | iMessage replies | hailports/imessage.py (macOS only) |
 | Web fetch, search, and news | hailports/webtools.py |
 | Ask versus do, runbook match | hailports/askdo.py, hailports/runbooks.py |
-| Draft only from notes you supply, citation hold | hailports/drafter.py, hailports/features.py |
-| Draft queue | hailports/draft_runner.py |
+| Draft only from notes you supply, citation hold, newest-text scheduling confirm | hailports/drafter.py, hailports/features.py |
+| Draft queue, one id per round, skip reason in the log | hailports/draft_runner.py |
 | Story card from a short request | hailports/story.py |
 | Sprint pack and focus blocks | hailports/sprint.py, hailports/calendar_blocker.py |
 | Do not open a duplicate card | hailports/ticket_guard.py, hailports/plugins/tracker.py |
@@ -24,7 +24,7 @@ This repo is a fresh write of a local model appliance. Private trees, databases,
 | Memory budget and exact-PID restart | hailports/memory.py, hailports/osapi.py |
 | Correction memory | hailports/learning.py |
 | Whole-thread chat memory | hailports/threads.py |
-| Idle useful work | hailports/idle.py |
+| Idle useful work, one deep note at a time with linked clips | hailports/idle.py |
 | Precomputed packet for a paid call | hailports/precompute.py, hailports/router.py |
 | Login-broken alert | hailports/alerts.py |
 | Vision input | hailports/images.py, hailports_setup, docs/MODEL.md |
