@@ -9,6 +9,7 @@ from pathlib import Path
 from hailports.idle import (
     DEEP_CAP,
     deep_fill_one,
+    follow_items,
     items_from_brain,
     linked_clips,
     note_ended,
@@ -191,6 +192,26 @@ def test_deep_fill_stores_one_note_and_does_not_delete(tmp_path: Path):
     assert "deep learn-2" not in titles
     left, _pages = items_from_brain(con)
     assert [item["label"] for item in left] == ["learn-2"]
+
+
+def test_empty_primary_falls_through_to_a_reply():
+    pages = [
+        _page(
+            "card-100",
+            "tracker",
+            "state: open\nParent: 90\nThe pump schedule needs a longer note about pressure.\n",
+            title="Gate",
+            state="open",
+        ),
+    ]
+    titles = {"deep card-100"}
+    nxt = follow_items(pages, titles)
+    labels = [item["label"] for item in nxt]
+    assert labels[0] == "reply-card-100"
+    assert "recheck-card-100" in labels
+    assert take_one(nxt)[0]["label"] == "reply-card-100"
+    done = titles | {"deep reply-card-100", "deep recheck-card-100"}
+    assert follow_items(pages, done) == []
 
 
 def _router_pair(text: str):

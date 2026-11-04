@@ -58,6 +58,30 @@ class OpenAICompatProvider:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        # Local llama.cpp can reuse the stable prefix and force a grade object.
+        # Cloud hosts reject those fields, so they stay off that path.
+        if self.label == "local":
+            payload["cache_prompt"] = True
+            blob = "\n".join(str(m.get("content") or "") for m in messages if isinstance(m, dict))
+            if "Grade one draft" in blob and "extracted_ask" in blob:
+                payload["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "grade",
+                        "strict": True,
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "extracted_ask": {"type": "string"},
+                                "answers_ask": {"type": "boolean"},
+                                "pass": {"type": "boolean"},
+                                "reason": {"type": "string"},
+                            },
+                            "required": ["extracted_ask", "answers_ask", "pass", "reason"],
+                        },
+                    },
+                }
         doc = request_json(
             self._v1() + "/chat/completions",
             payload,
