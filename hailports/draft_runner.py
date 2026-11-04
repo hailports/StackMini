@@ -70,6 +70,24 @@ def _ensure(con: sqlite3.Connection) -> None:
     con.commit()
 
 
+_FINAL_DECISIONS = ("no_reply_needed", "reply", "add_only_new")
+
+
+def decision_cached(prev: dict | None) -> str:
+    """A stored decision for this message. Empty when the message still needs a read.
+
+    The same message is not judged again. A new message is a new id, or a new
+    content hash when the caller has one.
+    """
+    prev = prev or {}
+    dec = str(prev.get("decision") or "")
+    if dec not in _FINAL_DECISIONS:
+        return ""
+    if not str(prev.get("decision_hash") or ""):
+        return ""
+    return dec
+
+
 def normalize_mid(message_id: str) -> str:
     """One id per note. Capital letters and angle brackets do not make a second copy."""
     return str(message_id or "").strip().strip("<>").lower()
@@ -205,6 +223,19 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
             continue
         decision = _apply_badge(row, book)
         prev = dict(prior.get(mid) or {})
+        cached = decision_cached(prev)
+        incoming = str(row.get("content_hash") or "")
+        stored_hash = str(prev.get("decision_hash") or "")
+        if cached and (not incoming or incoming == stored_hash):
+            noted = bool(prev.get("decision_noted"))
+            prev["decision_noted"] = True
+            _remember(prior, mid, prev)
+            if not noted:
+                emit("decision_" + cached, subject, sender)
+            continue
+        fetcher = row.get("fetch_body")
+        if callable(fetcher) and not body.strip():
+            body = str(fetcher() or "")
         if prev.get("discarded_at"):
             _remember(prior, mid, prev)
             emit("discarded", subject, sender)
