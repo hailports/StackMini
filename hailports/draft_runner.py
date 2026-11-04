@@ -6,6 +6,13 @@ import sqlite3
 import time
 from pathlib import Path
 
+from hailports.chat_badge import (
+    after_save,
+    decide_rebadge,
+    note_restored,
+    read_code,
+    secret_hold,
+)
 from hailports.drafter import (
     NoSource,
     draft,
@@ -125,12 +132,47 @@ def _remember(prior: dict, mid: str, prev: dict) -> None:
         prior[mid] = prev
 
 
-def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | None = None, cleaner=None, now=None) -> dict:
+def _apply_badge(row: dict, book: dict) -> dict | None:
+    """Judge a badge only when the row says how the chat was opened."""
+    if "unread_before" not in row and "opened_by_runner" not in row:
+        return None
+    chat_id = str(row.get("chat_id") or "")
+    decision = decide_rebadge(
+        book,
+        chat_id,
+        opened_by_runner=bool(row.get("opened_by_runner")),
+        unread_before=row.get("unread_before") is True,
+        latest_from_self=bool(row.get("latest_from_self")),
+        message_id=str(row.get("source_message_id") or ""),
+    )
+    if decision["action"] == "restore":
+        note_restored(book, chat_id, str(row.get("source_message_id") or ""))
+    return decision
+
+
+def _with_badge(item: dict, decision: dict | None) -> dict:
+    """A saved draft does not itself mark the chat unread."""
+    item["marks_unread"] = False
+    if not decision:
+        return item
+    item["badge_action"] = decision["action"]
+    item["badge_reason"] = decision["reason"]
+    saved = after_save(decision["reason"] if decision["action"] == "skip" else "")
+    item["left_read"] = saved["left_read"]
+    if saved["error"]:
+        item["error"] = saved["error"]
+    return item
+
+
+def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | None = None, cleaner=None, now=None, badges: dict | None = None) -> dict:
     """One pass over the inbox. Nothing in this pass is sent.
 
     The same message id is handled once. A later copy is a duplicate skip.
+    A chat that cannot be read while closed is skipped with a reason.
+    Pass the same badge book each round so a restored message stays once.
     """
     prior = dict(prior or {})
+    book = badges if badges is not None else {}
     seen: set[str] = set()
     skipped: list[dict] = []
     lines: list[str] = []
@@ -153,6 +195,15 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
             continue
         if mid:
             seen.add(mid)
+        if row.get("may_open") is False and not body.strip():
+            emit("no_open passive_empty", subject, sender, read_code(row.get("read_error") or "history_empty"))
+            continue
+        newest_for_hold = newest_unquoted(body)
+        held_secret = secret_hold(newest_for_hold)
+        if held_secret:
+            emit("secret", subject, sender, held_secret)
+            continue
+        decision = _apply_badge(row, book)
         prev = dict(prior.get(mid) or {})
         if prev.get("discarded_at"):
             _remember(prior, mid, prev)
@@ -180,14 +231,14 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
             prev["discard_parked"] = False
             prev["error"] = ""
             _remember(prior, mid, prev)
-            drafts.append({
+            drafts.append(_with_badge({
                 "message_id": mid,
                 "subject": subject,
                 "from": sender,
                 "text": reply,
                 "sent": False,
                 "via": "sched_confirm",
-            })
+            }, decision))
             continue
         newest = newest_unquoted(body)
         if scheduling_question(newest):
@@ -216,6 +267,12 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
             _remember(prior, mid, prev)
             emit("need_citation", subject, sender)
             continue
+        draft_secret = secret_hold(text)
+        if draft_secret:
+            _park(prev, "secret", reopened)
+            _remember(prior, mid, prev)
+            emit("secret", subject, sender, draft_secret)
+            continue
         if row.get("require_pass") and not has_pass(text):
             text = stamp_pass(text)
         prev["draft_ok"] = True
@@ -223,15 +280,15 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
         prev["discard_parked"] = False
         prev["error"] = ""
         _remember(prior, mid, prev)
-        drafts.append({
+        drafts.append(_with_badge({
             "message_id": mid,
             "subject": subject,
             "from": sender,
             "text": text,
             "sent": False,
             "via": "draft",
-        })
-    return {"drafted": len(drafts), "drafts": drafts, "skipped": skipped, "log": lines, "prior": prior}
+        }, decision))
+    return {"drafted": len(drafts), "drafts": drafts, "skipped": skipped, "log": lines, "prior": prior, "badges": book}
 
 
 def enqueue(con: sqlite3.Connection, ask: str, sources: list[str]) -> int:

@@ -12,7 +12,7 @@ This repo is a fresh write of a local model appliance. Private trees, databases,
 | Web fetch, search, and news | hailports/webtools.py |
 | Ask versus do, runbook match | hailports/askdo.py, hailports/runbooks.py |
 | Draft only from notes you supply, citation hold, newest-text scheduling confirm | hailports/drafter.py, hailports/features.py |
-| Draft queue, one id per round, skip reason in the log | hailports/draft_runner.py |
+| Draft queue, one id per round, skip reason in the log, chat badge restored once | hailports/draft_runner.py, hailports/chat_badge.py |
 | Story card from a short request | hailports/story.py |
 | Sprint pack and focus blocks | hailports/sprint.py, hailports/calendar_blocker.py |
 | Do not open a duplicate card | hailports/ticket_guard.py, hailports/plugins/tracker.py |
