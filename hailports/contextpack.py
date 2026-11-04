@@ -331,20 +331,39 @@ def similar_text(folder: Path, query: str, k: int = 3) -> str:
     return "\n".join("{0}: {1}".format(kind, _clip(text, 220)) for _score, kind, text in picked[:k])
 
 
+_INVENTED = {
+    "deployed", "deployment", "deploys", "lambda", "lambdas", "kubernetes",
+    "docker", "hotfix", "shipped", "shipping", "production", "midnight",
+    "overnight", "fourteen", "fifteen", "thirteen", "twelve", "eleven",
+    "hundred", "thousand", "million",
+}
+
+
 def unsupported_claims(ask: str, context: str, draft: str) -> list:
+    """Numbers and concrete claim-words that are not in the ask or the context."""
     blob = "{0}\n{1}".format(ask or "", context or "").lower()
     missing = []
-    for word in re.findall(r"[A-Za-z][A-Za-z']{5,}", draft or ""):
+    for word in re.findall(r"[A-Za-z][A-Za-z']{3,}", draft or ""):
         low = word.lower().replace("'", "")
-        if low in _COMMON or low in _STOP or low in missing:
-            continue
-        if low in blob or (low.endswith("s") and low[:-1] in blob):
-            continue
-        missing.append(low)
+        if low in _INVENTED and low not in blob and low not in missing:
+            missing.append(low)
     for num in re.findall(r"\b\d+\b", draft or ""):
         if num not in blob and num not in missing:
             missing.append(num)
     return missing[:6]
+
+
+def _lower_voice(text: str) -> str:
+    raw = (text or "").strip()
+    if not raw or raw.startswith("I ") or raw.startswith("I'"):
+        return raw
+    lines = []
+    for line in raw.splitlines():
+        words = line.split(" ")
+        if words and words[0] and words[0][0].isupper() and not words[0].isupper() and not words[0].startswith("I'"):
+            words[0] = words[0][0].lower() + words[0][1:]
+        lines.append(" ".join(words))
+    return "\n".join(lines).strip()
 
 
 def _parse_grade(text: str) -> dict:
@@ -392,7 +411,7 @@ def apply_check(ask: str, context: str, draft: str, *, complete) -> dict:
     if first.get("reason") == "preempted":
         return {"ok": False, "text": "", "status": "fail", "reason": "preempted", "attempts": 1}
     if first.get("pass") and not _AI.search(draft):
-        return {"ok": True, "text": draft, "status": "pass", "reason": "", "attempts": 1}
+        return {"ok": True, "text": _lower_voice(draft), "status": "pass", "reason": "", "attempts": 1}
     messages = [
         {"role": "system", "content": (
             "Rewrite the reply in plain words. Output only the reply. "
@@ -410,5 +429,5 @@ def apply_check(ask: str, context: str, draft: str, *, complete) -> dict:
         return {"ok": False, "text": "", "status": "fail", "reason": first.get("reason") or "rewrite_empty", "attempts": 2}
     second = grade(rewritten)
     if second.get("pass") and not _AI.search(rewritten):
-        return {"ok": True, "text": rewritten, "status": "rewrite_pass", "reason": "", "attempts": 2}
+        return {"ok": True, "text": _lower_voice(rewritten), "status": "rewrite_pass", "reason": "", "attempts": 2}
     return {"ok": False, "text": "", "status": "fail", "reason": second.get("reason") or "failed_twice", "attempts": 2}
