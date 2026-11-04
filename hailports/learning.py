@@ -63,6 +63,18 @@ def write_runbook(con: sqlite3.Connection, root: Path) -> Path:
     return path
 
 
+def record_pair(folder: Path, surface: str, key: str, staged: str, sent: str) -> str:
+    """Remember an edit. A matching send is a gold example. A changed send is a lesson."""
+    from hailports.contextpack import record_pair as remember
+    return remember(Path(folder), surface, key, staged, sent)
+
+
+def similar(folder: Path, query: str, k: int = 3) -> str:
+    """The two or three closest lessons and examples for this ask."""
+    from hailports.contextpack import similar_text
+    return similar_text(Path(folder), query, k=k)
+
+
 def prompt_with_lessons(con: sqlite3.Connection, runbook_root: Path | None = None, limit: int = 8) -> str:
     parts = [system_addon(con, limit)]
     if runbook_root:

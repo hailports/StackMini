@@ -248,6 +248,21 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
             continue
         sources = list(row.get("sources") or [])
         ask = str(row.get("ask") or subject or newest)
+        link_kinds: list[str] = []
+        if row.get("pages"):
+            from hailports.contextpack import pack_pages
+            packed = pack_pages(
+                "\n".join([subject, body, ask]),
+                list(row.get("pages") or []),
+                ticket_id=str(row.get("ticket_id") or ""),
+                allowed_repos=row.get("allowed_repos"),
+            )
+            if packed.get("blocked"):
+                emit("data_line", subject, sender)
+                continue
+            if packed.get("text"):
+                sources = sources + [packed["text"]]
+            link_kinds = list(packed.get("kinds") or [])
         try:
             if router is None:
                 text = draft(ask, sources)
@@ -273,6 +288,25 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
             _remember(prior, mid, prev)
             emit("secret", subject, sender, draft_secret)
             continue
+        if row.get("check"):
+            if router is None:
+                _park(prev, "hold", reopened)
+                _remember(prior, mid, prev)
+                emit("hold", subject, sender, "no_model")
+                continue
+            from hailports.contextpack import apply_check
+
+            def _one(messages, max_tokens=180, _router=router):
+                got = _router.complete(messages, task="read", max_tokens=max_tokens)
+                return {"ok": True, "text": getattr(got, "text", "") or "", "reason": ""}
+
+            checked = apply_check(ask, "\n".join(sources), text, complete=_one)
+            if not checked.get("ok"):
+                _park(prev, "hold", reopened)
+                _remember(prior, mid, prev)
+                emit("hold", subject, sender, str(checked.get("reason") or "hold")[:80])
+                continue
+            text = checked.get("text") or ""
         if row.get("require_pass") and not has_pass(text):
             text = stamp_pass(text)
         prev["draft_ok"] = True
@@ -280,14 +314,17 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
         prev["discard_parked"] = False
         prev["error"] = ""
         _remember(prior, mid, prev)
-        drafts.append(_with_badge({
+        staged = {
             "message_id": mid,
             "subject": subject,
             "from": sender,
             "text": text,
             "sent": False,
             "via": "draft",
-        }, decision))
+        }
+        if link_kinds:
+            staged["links"] = link_kinds
+        drafts.append(_with_badge(staged, decision))
     return {"drafted": len(drafts), "drafts": drafts, "skipped": skipped, "log": lines, "prior": prior, "badges": book}
 
 
