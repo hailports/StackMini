@@ -561,7 +561,7 @@ def write_report(meta: dict) -> None:
 
 
 MAIL_BASELINE = "0/20"
-SWAP_LINE_MB = 2800
+SWAP_LINE_MB = 5600
 MAIL_CAP = 10
 
 
