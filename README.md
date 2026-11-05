@@ -24,6 +24,7 @@ It can use a local llama.cpp model, a hosted OpenAI-compatible endpoint, or both
 - Login-failure alert to a loopback channel and a local outbox
 - Service-file hash
 - Plugs for a CRM, a tracker, mail, meetings, and a file library. Placeholder config keeps them off
+- Optional TypeSafe System One (Jev) classifier for cheap yes/no, choice, and score judgments. Fail-open. Kill switch `JEV_DISABLE=1`. See `contrib/jev/README.md`
 
 ## Modes
 
