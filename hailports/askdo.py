@@ -104,7 +104,9 @@ def respond(router, text: str, bundle: dict):
         got = router.complete(messages, task="read", max_tokens=max_tokens)
         return {"ok": True, "text": getattr(got, "text", "") or "", "reason": ""}
 
-    checked = apply_check(text, notes, getattr(reply, "text", "") or "", complete=complete)
+    work = bundle.get("work") if isinstance(bundle.get("work"), dict) else None
+    proof = bundle.get("proof") if isinstance(bundle.get("proof"), dict) else work
+    checked = apply_check(text, notes, getattr(reply, "text", "") or "", complete=complete, proof=proof, work=work)
     if not checked.get("ok"):
         reply.text = ""
         reply.raw = dict(getattr(reply, "raw", None) or {})
