@@ -1,8 +1,8 @@
 """Suggest one card from a real ask, and hold it until a person clicks.
 
 Opening a link does not create a card. A test token cannot create one.
-The same source and the same ask are not suggested twice. Search failures
-and existing matches fail closed.
+The same source, the same ask, and a similar title already mailed are not
+suggested twice. Search failures and existing matches fail closed.
 """
 
 from __future__ import annotations
@@ -124,11 +124,111 @@ def fuzzy_duplicate(title: str, description: str, rows: list, now: float | None 
     return {"duplicate": False, "reason": "clear"}
 
 
+def title_key(title: str) -> str:
+    """Stable id from title keywords. Requester text is not part of it."""
+    raw = "\n".join(keywords(title))
+    return hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:24]
+
+
+def _within_window(entry, now: float) -> bool:
+    if isinstance(entry, dict) and entry.get("at"):
+        try:
+            return now - float(entry["at"]) <= WINDOW_S
+        except (TypeError, ValueError):
+            return True
+    return True
+
+
+_NONE_WORD = re.compile(r"(?i)^(?:none|n/?a|null|empty|tbd)$")
+
+
+def _real_acceptance(acceptance) -> list:
+    if isinstance(acceptance, str):
+        acceptance = [part.strip() for part in acceptance.split(";")]
+    kept = []
+    for item in acceptance or []:
+        text = scrub(str(item))
+        if not text:
+            continue
+        parts = [part for part in re.split(r"[\s,;]+", text) if part]
+        if parts and all(_NONE_WORD.fullmatch(part) for part in parts):
+            continue
+        kept.append(text)
+    return kept
+
+
+def thin_reason(title: str, acceptance=None) -> str:
+    """Blank when the title has 3+ keywords and acceptance is not empty or none."""
+    if len(keywords(title or "")) < 3:
+        return "thin_title"
+    if acceptance is None:
+        return ""
+    if not _real_acceptance(acceptance):
+        return "thin_acceptance"
+    return ""
+
+
+def prior_title_hit(title: str, store: dict, now: float) -> dict:
+    """Fuzzy match against titles already mailed or dismissed. Same overlap rules."""
+    rows = []
+    for row in (store or {}).get("mailed_titles") or []:
+        if not isinstance(row, dict):
+            continue
+        rows.append({
+            "title": row.get("title") or "",
+            "description": " ".join(row.get("title_keys") or []),
+            "ref": row.get("source") or row.get("idem") or "",
+            "ts": row.get("at") or 0,
+        })
+    found = fuzzy_duplicate(title or "", "", rows, now)
+    if found.get("reason") == "thin":
+        return {"duplicate": False, "reason": "thin"}
+    return found
+
+
+def _note_title(store: dict, source: str, idem: str, now: float, how: str, title: str) -> dict:
+    fp = title_key(title)
+    if not fp:
+        return store
+    titles = dict(store.get("title_keys") or {})
+    titles[fp] = {"at": now, "how": how, "idem": idem, "source": source}
+    kept_keys = {}
+    for key, rec in titles.items():
+        if key == fp or _within_window(rec, now):
+            kept_keys[key] = rec
+    store["title_keys"] = kept_keys
+    if how == "dismiss":
+        never = set(store.get("never") or [])
+        never.add(fp)
+        store["never"] = sorted(never)
+    if how in ("email", "dismiss", "sent"):
+        rows = [row for row in (store.get("mailed_titles") or []) if isinstance(row, dict)]
+        rows.append({
+            "at": now,
+            "title_keys": keywords(title),
+            "title": (title or "")[:120],
+            "idem": idem,
+            "source": source,
+        })
+        cutoff = float(now) - WINDOW_S
+        fresh = []
+        for row in rows:
+            try:
+                at = float(row.get("at") or 0)
+            except (TypeError, ValueError):
+                at = 0.0
+            if at and at < cutoff:
+                continue
+            fresh.append(row)
+        store["mailed_titles"] = fresh[-200:]
+    return store
+
+
 def _day(now: float) -> str:
     return time.strftime("%Y%m%d", time.localtime(now))
 
 
-def allow(store: dict, source: str, idem: str, now: float, cap: int = DAILY_CAP) -> tuple:
+def allow(store: dict, source: str, idem: str, now: float, cap: int = DAILY_CAP, title: str = "") -> tuple:
     store = store or {}
     if source and source in (store.get("sources") or {}):
         return False, "source"
@@ -139,13 +239,25 @@ def allow(store: dict, source: str, idem: str, now: float, cap: int = DAILY_CAP)
         return False, "never"
     if idem and idem in never:
         return False, "never"
+    fp = title_key(title) if title else ""
+    if fp:
+        if fp in never:
+            return False, "never"
+        rec = (store.get("title_keys") or {}).get(fp)
+        if rec and _within_window(rec, now):
+            return False, "title"
+        if len(keywords(title)) < 3:
+            return False, "thin_title"
+        hit = prior_title_hit(title, store, now)
+        if hit.get("duplicate"):
+            return False, "title_fuzzy"
     sent = int((store.get("days") or {}).get(_day(now)) or 0)
     if sent >= cap:
         return False, "cap"
     return True, "ok"
 
 
-def mark(store: dict, source: str, idem: str, now: float, how: str) -> dict:
+def mark(store: dict, source: str, idem: str, now: float, how: str, title: str = "") -> dict:
     store = dict(store or {})
     sources = dict(store.get("sources") or {})
     sources[source] = {"at": now, "how": how, "idem": idem}
@@ -166,6 +278,8 @@ def mark(store: dict, source: str, idem: str, now: float, how: str) -> dict:
         key = _day(now)
         days[key] = int(days.get(key) or 0) + 1
         store["days"] = days
+    if title:
+        store = _note_title(store, source, idem, now, how, title)
     return store
 
 
@@ -284,8 +398,11 @@ def pick(rows: list, known_ids: set, store: dict, catalog: list, now: float, ope
             continue
         src = source_key(str(row.get("source") or ""), str(row.get("ref") or ""))
         idem = idempotency_key(story.get("requester") or who, story.get("title") or "")
-        ok, _why = allow(store, src, idem, now)
+        titled = story.get("title") or ""
+        ok, _why = allow(store, src, idem, now, title=titled)
         if not ok:
+            continue
+        if thin_reason(titled, story.get("acceptance")):
             continue
         found = fuzzy_duplicate(story.get("title") or "", story.get("description") or "", catalog, now)
         if found.get("duplicate"):
