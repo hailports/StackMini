@@ -15,6 +15,31 @@ def over_budget(used_mb: float, budget_mb: float) -> bool:
     return budget_mb > 0 and used_mb > budget_mb
 
 
+def model_command_matches(text: str, model_token: str = "") -> bool:
+    """True for the draft server on either published port, or an explicit model token.
+
+    A different port, such as an embed server, does not match unless the token is in the command.
+    """
+    raw = text or ""
+    if "llama-server" not in raw:
+        return False
+    if "--port 18080" in raw or "--port 8080" in raw:
+        return True
+    token = (model_token or "").strip()
+    return bool(token) and token in raw
+
+
+def refuses_model_or_reboot(command: str, model_token: str = "") -> bool:
+    """A healer may reclaim memory. It may not kill the model server or reboot."""
+    import re
+    low = (command or "").lower()
+    if re.search(r"\b(reboot|shutdown|halt)\b", low):
+        return True
+    if re.search(r"\b(kill|killall|pkill|kickstart)\b", low) and model_command_matches(command, model_token):
+        return True
+    return False
+
+
 def tick(mgr: ServiceManager, label: str, recorded_pid: int | None, current_pid: int | None, used_mb: float, budget_mb: float, model_healthy: bool) -> str:
     if not over_budget(used_mb, budget_mb):
         return "within-budget"
