@@ -563,8 +563,13 @@ def decide(item: dict, form: dict | None, intent: str, search_fn, create_fn, now
         }
     try:
         created = create_fn(story) if create_fn else {"ok": False}
-    except Exception:
-        return {"ok": False, "error": "create_failed", "mutated": False, "created": False}
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": "create_failed:{0}".format(type(exc).__name__),
+            "mutated": False,
+            "created": False,
+        }
     if not created or not created.get("ok") or not created.get("work_item_id"):
         return {"ok": False, "error": created.get("error") if isinstance(created, dict) else "create_failed",
                 "mutated": False, "created": False}
@@ -975,6 +980,117 @@ def mint_test(home: Path, story: dict | None = None) -> dict:
     }
 
 
+
+_WI_PROJECT = "operator"
+_PARENT_URL = "https://operator/operator/operator/_apis/wit/workItems/{0}"
+
+
+def _code_roots() -> list:
+    """Stack root, then tools, then the appliance cli.
+
+    `import tools` is the package under the stack root. Putting only the tools
+    directory on the path makes that import fail before any work item is posted.
+    """
+    root = Path.home() / "claude-stack"
+    return [str(root), str(root / "tools"), str(Path.home() / "llm-appliance/cli")]
+
+
+def _assignee_op(unique: str) -> dict | None:
+    unique = str(unique or "").strip()
+    if not unique:
+        return None
+    return {"op": "add", "path": "/fields/System.AssignedTo", "value": unique}
+
+
+def _parent_op(parent: str, url: str) -> dict | None:
+    parent = str(parent or "").strip()
+    if not parent.isdigit():
+        return None
+    return {
+        "op": "add",
+        "path": "/relations/-",
+        "value": {
+            "rel": "System.LinkTypes.Hierarchy-Reverse",
+            "url": url.format(parent),
+        },
+    }
+
+
+def _create_ops(story: dict, assignee: str, parent_exists: bool) -> list:
+    desc = "<div>{0}</div>".format(html.escape(story.get("description") or ""))
+    if story.get("source_url"):
+        desc += "<p>Source: {0}</p>".format(html.escape(story["source_url"]))
+    ac = "<ul>" + "".join(
+        "<li>{0}</li>".format(html.escape(c)) for c in (story.get("acceptance") or [])
+    ) + "</ul>"
+    wtype = "Bug" if story.get("type") == "Bug" else "User Story"
+    field = (
+        "/fields/Microsoft.VSTS.TCM.ReproSteps" if wtype == "Bug" else "/fields/System.Description"
+    )
+    ops = [
+        {"op": "add", "path": "/fields/System.Title", "value": story.get("title")},
+        {"op": "add", "path": "/fields/System.AreaPath", "value": story.get("area") or DEFAULT_AREA},
+        {"op": "add", "path": "/fields/System.IterationPath", "value": story.get("iteration") or DEFAULT_ITERATION},
+        {"op": "add", "path": field, "value": desc},
+        {"op": "add", "path": "/fields/Microsoft.VSTS.Common.AcceptanceCriteria", "value": ac},
+    ]
+    assigned = _assignee_op(assignee)
+    if assigned:
+        ops.insert(3, assigned)
+    if parent_exists:
+        link = _parent_op(str(story.get("parent") or ""), _PARENT_URL)
+        if link:
+            ops.append(link)
+    return ops
+
+
+def _signed_in_unique(ado, bridge, project: str) -> str:
+    """Unique name of the signed-in session. A fixed address is not a known identity."""
+    safe = str(project or "").replace("'", "''")
+    if not safe:
+        return ""
+    try:
+        data = bridge.api(
+            "POST",
+            "{0}/_apis/wit/wiql?api-version=7.0&$top=1".format(safe),
+            body={
+                "query": (
+                    "SELECT [System.Id] FROM WorkItems WHERE "
+                    "[System.TeamProject] = '{0}' AND [System.AssignedTo] = @Me"
+                ).format(safe)
+            },
+        ) or {}
+        ids = []
+        for row in (data.get("workItems") or []):
+            try:
+                ids.append(int(row.get("id")))
+            except (TypeError, ValueError, AttributeError):
+                continue
+        if not ids or not hasattr(ado, "work_items"):
+            return ""
+        items = ado.work_items(bridge, ids[:1], fields=["System.AssignedTo"])
+        who = ((items[0].get("fields") or {}).get("System.AssignedTo") or {})
+        if isinstance(who, dict):
+            return str(who.get("uniqueName") or "")
+    except Exception:
+        return ""
+    return ""
+
+
+def _work_item_exists(bridge, project: str, parent: str) -> bool:
+    parent = str(parent or "").strip()
+    if not parent.isdigit():
+        return False
+    try:
+        bridge.api(
+            "GET",
+            "{0}/_apis/wit/workitems/{1}?api-version=7.0&fields=System.Id".format(project, parent),
+        )
+        return True
+    except Exception:
+        return False
+
+
 def exec_approved(item: dict) -> dict:
     """Called by the approve server on POST. Dry-run never opens a client."""
     form = item.get("_form") or None
@@ -1023,70 +1139,66 @@ def exec_approved(item: dict) -> dict:
 
     def create_fn(story: dict) -> dict:
         import sys
-        tools = str(Path.home() / "claude-stack/tools")
-        cli = str(Path.home() / "llm-appliance/cli")
-        for p in (tools, cli):
-            if p not in sys.path:
-                sys.path.insert(0, p)
-        import ado_client as ado
-        import ado_create_guard as guard
-        from tools import ado_sf_comment_gates as gates
-        ado.assert_no_ai_trace(story.get("title") or "")
-        desc = "<div>{0}</div>".format(html.escape(story.get("description") or ""))
-        if story.get("source_url"):
-            desc += "<p>Source: {0}</p>".format(html.escape(story["source_url"]))
-        ac = "<ul>" + "".join("<li>{0}</li>".format(html.escape(c)) for c in (story.get("acceptance") or [])) + "</ul>"
-        gates.assert_work_item_field_safe(desc)
-        gates.assert_work_item_field_safe(ac)
-        wtype = "Bug" if story.get("type") == "Bug" else "User Story"
-        field = "/fields/Microsoft.VSTS.TCM.ReproSteps" if wtype == "Bug" else "/fields/System.Description"
-        ops = [
-            {"op": "add", "path": "/fields/System.Title", "value": story.get("title")},
-            {"op": "add", "path": "/fields/System.AreaPath", "value": story.get("area") or DEFAULT_AREA},
-            {"op": "add", "path": "/fields/System.IterationPath", "value": story.get("iteration") or DEFAULT_ITERATION},
-            {"op": "add", "path": "/fields/System.AssignedTo", "value": "redacted-email"},
-            {"op": "add", "path": field, "value": desc},
-            {"op": "add", "path": "/fields/Microsoft.VSTS.Common.AcceptanceCriteria", "value": ac},
-        ]
-        parent = str(story.get("parent") or "")
-        if parent.isdigit():
-            ops.append({
-                "op": "add", "path": "/relations/-",
-                "value": {
-                    "rel": "System.LinkTypes.Hierarchy-Reverse",
-                    "url": "https://operator/operator/operator/_apis/wit/workItems/{0}".format(parent),
-                },
-            })
-        bridge = ado.AdoBridge().connect()
         key = item.get("_guard_key") or ""
+        for path in _code_roots():
+            if path not in sys.path:
+                sys.path.insert(0, path)
+        import ado_create_guard as guard
+        created_id = ""
         try:
+            import ado_client as ado
+            from tools import ado_sf_comment_gates as gates
+            ado.assert_no_ai_trace(story.get("title") or "")
+            for op in _create_ops(story, "", False):
+                if op["path"] in (
+                    "/fields/Microsoft.VSTS.TCM.ReproSteps",
+                    "/fields/System.Description",
+                    "/fields/Microsoft.VSTS.Common.AcceptanceCriteria",
+                ):
+                    gates.assert_work_item_field_safe(str(op.get("value") or ""))
+            bridge = ado.AdoBridge().connect()
             try:
+                who = _signed_in_unique(ado, bridge, _WI_PROJECT)
+                parent = str(story.get("parent") or "")
+                exists = _work_item_exists(bridge, _WI_PROJECT, parent)
+                ops = _create_ops(story, who, exists)
+                wtype = "Bug" if story.get("type") == "Bug" else "User Story"
                 created = bridge.api(
                     "POST",
-                    "operator/_apis/wit/workitems/${0}?api-version=7.0".format(wtype.replace(" ", "%20")),
-                    body=ops, content_type="application/json-patch+json",
+                    "{0}/_apis/wit/workitems/${1}?api-version=7.0".format(
+                        _WI_PROJECT, wtype.replace(" ", "%20")
+                    ),
+                    body=ops,
+                    content_type="application/json-patch+json",
                 )
-            except Exception:
-                if parent.isdigit():
-                    created = bridge.api(
-                        "POST",
-                        "operator/_apis/wit/workitems/${0}?api-version=7.0".format(wtype.replace(" ", "%20")),
-                        body=ops[:-1], content_type="application/json-patch+json",
-                    )
-                else:
-                    guard.release(key)
-                    raise
+            finally:
+                try:
+                    bridge.close()
+                except Exception:
+                    pass
             wid = str((created or {}).get("id") or "")
             if not wid:
                 guard.release(key)
                 return {"ok": False, "error": "no_id"}
-            guard.commit(key, int(wid), requester=story.get("requester") or "", title=story.get("title") or "", source="ticket_suggest")
-            return {"ok": True, "work_item_id": wid}
-        finally:
+            created_id = wid
             try:
-                bridge.close()
+                guard.commit(
+                    key,
+                    int(wid),
+                    requester=story.get("requester") or "",
+                    title=story.get("title") or "",
+                    source="ticket_suggest",
+                )
             except Exception:
                 pass
+            return {"ok": True, "work_item_id": wid}
+        except Exception:
+            if not created_id:
+                try:
+                    guard.release(key)
+                except Exception:
+                    pass
+            raise
 
     return decide(item, form, intent, search_fn, create_fn)
 
@@ -1174,6 +1286,33 @@ def self_check() -> None:
     assert thin_reason(mailed, ["They can order parts"]) == ""
     aged = mark({}, "src-old", "idem-old", 100 - (20 * 86400), "email", title=mailed)
     assert allow(aged, "src-later", "idem-later", 100, title=mailed)[0] is True
+    assert _assignee_op("") is None
+    op = _assignee_op("signed-in")
+    assert op and op["path"] == "/fields/System.AssignedTo" and op["value"] == "signed-in"
+    assert _parent_op("abc", "https://board.example/{0}") is None
+    link = _parent_op("100001", "https://board.example/{0}")
+    assert link and link["value"]["url"] == "https://board.example/100001"
+    roots = _code_roots()
+    assert roots[1].endswith("/tools") and roots[0] == roots[1][: -len("/tools")]
+    bug_ops = _create_ops(
+        {"type": "Bug", "title": "Move a unit", "description": "Move the unit",
+         "acceptance": ["The unit is moved"], "parent": "99999999"},
+        "",
+        False,
+    )
+    paths = [row["path"] for row in bug_ops]
+    assert "/fields/System.AssignedTo" not in paths and "/relations/-" not in paths
+    assert "/fields/Microsoft.VSTS.TCM.ReproSteps" in paths
+    linked = _create_ops(
+        {"type": "User Story", "title": "Move a unit", "description": "Move the unit",
+         "acceptance": ["The unit is moved"], "parent": "100001"},
+        "signed-in",
+        True,
+    )
+    assert any(row["path"] == "/fields/System.AssignedTo" for row in linked)
+    assert any(row["path"] == "/relations/-" for row in linked)
+    assert any(row["path"] == "/fields/System.Description" for row in linked)
+
     _self_check_rescan()
 
 
