@@ -1,0 +1,29 @@
+{
+  "swap_target_mb": 2800,
+  "measured_at": "2026-11-05T08:45:00-06:00",
+  "note": "Budgets are footprint MB. First match wins. Zoom 1800 and Outlook 800 are the existing floors and are not tightened. The model rule is not a size cap. Swap target matches the mail-replay line.",
+  "rules": [
+    {"match": "OneDrive", "exempt": true},
+    {"match": "CloudStorage", "exempt": true},
+    {"match": "FileProvider", "exempt": true},
+    {"match": "mlx-qwen-llama-server", "model": true, "mb": 0},
+    {"match": "zoom-edge-cdp-profile-team-chat", "mb": 1800},
+    {"match": "owa-edge-cdp-profile-outlook", "mb": 800},
+    {"match": "edge-cdp-profile-owa-managed", "mb": 700},
+    {"match": "llama-server", "mb": 400},
+    {"match": "corespotlightd", "mb": 400},
+    {"match": "WindowServer", "mb": 800},
+    {"match": "Mail.app", "mb": 900},
+    {"match": "Grok Bot", "mb": 800},
+    {"match": "tailscaled", "mb": 400},
+    {"match": "work_loop.py", "mb": 400},
+    {"match": "ops_draft_immortal.py", "mb": 300},
+    {"match": "governor.py", "mb": 250},
+    {"match": "idle_filler.py", "mb": 250},
+    {"match": "work-brain-query", "mb": 250},
+    {"match": "work-brain-mcp", "mb": 250},
+    {"match": "ai_egress", "mb": 250},
+    {"match": "chatgpt_work_action", "mb": 400},
+    {"match": "Python", "mb": 250}
+  ]
+}
