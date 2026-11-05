@@ -34,6 +34,7 @@ This repo is a fresh write of a local model appliance. Private trees, databases,
 | Zoom and Outlook web session watchdogs, cookie vault, post-launch restore (reference, not installed) | contrib/session_keepers/ |
 | Optional TypeSafe System One (Jev) classifier, fail-open, no key in repo | hailports/jev.py, contrib/jev/ |
 | Unsent draft attachment types, including a presentation | hailports/plugins/mail.py `draft_attach_plan` |
+| Queue hold: age alone is not a signal at zero views and zero likes; evening idle lowers content floors and leaves the voice floor | hailports/queue_hold.py |
 
 ## Services
 
