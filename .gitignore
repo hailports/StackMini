@@ -1,0 +1,14 @@
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+*.gguf
+.local/
+models/
+config.yaml
+.env
+*.pid
+.venv/
+*.egg-info/
+build/
+dist/
