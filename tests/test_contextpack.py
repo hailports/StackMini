@@ -244,3 +244,112 @@ def test_runner_logs_links_and_does_not_send():
     assert result["drafts"][0]["sent"] is False
     assert "history" in result["drafts"][0]["links"]
     assert "parent" in result["drafts"][0]["links"]
+
+
+def test_quoted_history_is_not_the_ask_and_a_miss_keeps_the_best_text():
+    thread = (
+        "Sounds good. I will put the detail together.\n"
+        "From: Old Note\n"
+        "Following up on this?\n"
+        "Is this a setting that you changed?\n"
+    )
+    ask = extract_ask(thread)
+    assert "setting" not in ask.lower()
+    assert "detail" in ask.lower()
+    ok, why = answers_the_ask(thread, "sounds good. the stages listed are what is on file today.")
+    assert ok is True, why
+
+    def complete(messages, max_tokens=80, json_mode=False):
+        if "Grade one draft" in messages[0]["content"]:
+            return {"ok": True, "text": '{"pass": false, "answers_ask": false, "reason": "off_topic"}', "reason": ""}
+        return {"ok": False, "text": "", "reason": "empty"}
+
+    held = apply_check(
+        "Can you approve the discount?",
+        "no discount is written here",
+        "the tags were updated yesterday",
+        complete=complete,
+    )
+    assert held["ok"] is False
+    assert held["text"] == ""
+    assert held["best_text"]
+    problem = "Description:\nPermissions error when trying to edit employee records."
+    assert _latest_is_not_ack(problem)
+
+
+def _latest_is_not_ack(text: str) -> bool:
+    from hailports.contextpack import _latest_is_ack
+    return _latest_is_ack(text) is False
+
+
+def test_off_topic_retries_then_reviews_without_blocking_other_mail():
+    from hailports.providers.base import Reply
+
+    calls = {"n": 0, "fetch": 0}
+
+    class Router:
+        def complete(self, messages, task=None, max_tokens=512):
+            calls["n"] += 1
+            blob = messages[0]["content"]
+            if "Grade one draft" in blob:
+                return Reply('{"pass": false, "answers_ask": false, "reason": "off_topic"}', "l", "m", 1, 1, {})
+            if "Rewrite" in blob:
+                return Reply("hello there friend", "l", "m", 1, 1, {})
+            return Reply("hello there friend [1]", "l", "m", 1, 1, {})
+
+    def fetch():
+        calls["fetch"] += 1
+        return ""
+
+    held = {
+        "message_id": "m-hold",
+        "subject": "note",
+        "from": "pat",
+        "body": "",
+        "ask": "Can you approve the discount?",
+        "sources": ["The discount is not approved."],
+        "check": True,
+        "fetch_body": fetch,
+    }
+    other = {
+        "message_id": "m-other",
+        "subject": "notes",
+        "from": "sam",
+        "body": "hello",
+        "ask": "notes",
+        "sources": ["The notes are on the desk."],
+    }
+    router = Router()
+    first = run_round([held, other], router=router)
+    assert first["drafted"] == 1
+    assert first["drafts"][0]["message_id"] == "m-other"
+    assert first["drafts"][0]["sent"] is False
+    assert first["prior"]["m-hold"]["grade_fails"] == 1
+    assert any(row["skip"] == "hold_wait" for row in first["skipped"])
+    opened = calls["fetch"]
+    used = calls["n"]
+    second = run_round([held, other], router=router, prior=first["prior"])
+    assert calls["fetch"] == opened
+    assert calls["n"] > used
+    assert second["drafted"] == 1
+    assert second["drafts"][0]["sent"] is False
+    prior = dict(second["prior"])
+    prior["m-hold"] = dict(prior["m-hold"])
+    prior["m-hold"]["next_ok"] = 0
+    third = run_round([held], router=router, prior=prior)
+    assert third["prior"]["m-hold"]["grade_fails"] == 2
+    prior = dict(third["prior"])
+    prior["m-hold"] = dict(prior["m-hold"])
+    prior["m-hold"]["next_ok"] = 0
+    fourth = run_round([held], router=router, prior=prior)
+    assert fourth["prior"]["m-hold"]["grade_fails"] == 3
+    assert fourth["prior"]["m-hold"]["settled"] is True
+    assert fourth["drafted"] == 1
+    assert fourth["drafts"][0]["review"] is True
+    assert fourth["drafts"][0]["sent"] is False
+    fifth = run_round([held], router=router, prior=fourth["prior"])
+    assert fifth["drafted"] == 0
+    assert fifth["skipped"][0]["skip"] == "hold_settled"
+    sixth = run_round([held], router=router, prior=fifth["prior"])
+    assert sixth["skipped"] == []
+    assert sixth["drafted"] == 0

@@ -378,11 +378,43 @@ _ASK_STOP = {
 }
 
 
-def extract_ask(text: str) -> str:
-    """The specific question or request in the latest message."""
+_QUOTE_START = re.compile(
+    r"(?m)^\s*(?:From:\s|-----Original Message-----|_{5,}|On .+ wrote:\s*$)"
+)
+_PROMISE = re.compile(r"(?i)\b(i'll|i will|let me|follow up|circle back|tomorrow|next week)\b")
+
+
+def _latest_message(text: str) -> str:
+    """The newest note only. Quoted history is not the ask."""
     raw = (text or "").replace("\r", "")
     parts = re.split(r"\n(?:---+|LATEST(?: MESSAGE)?)\n", raw, flags=re.I)
     blob = parts[-1].strip()
+    chunks = _QUOTE_START.split(blob, maxsplit=1)
+    latest = (chunks[0] if chunks else blob).strip()
+    return latest or blob
+
+
+def _latest_is_ack(text: str) -> bool:
+    """True only when the newest note is agreeing, not asking."""
+    latest = _latest_message(text)
+    if "?" in latest:
+        return False
+    if re.search(
+        r"(?i)\b(please|can you|could you|need you to|let me know|what |why |how |when )\b",
+        latest,
+    ):
+        return False
+    if re.search(r"(?i)\b(error|unable|cannot|can't|issue|failed|bug)\b", latest):
+        return False
+    return bool(re.search(
+        r"(?i)\b(sounds good|thanks|thank you|got it|noted|will do|okay|\bok\b)\b",
+        latest,
+    ))
+
+
+def extract_ask(text: str) -> str:
+    """The specific question or request in the latest message."""
+    blob = _latest_message(text)
     described = re.search(r"(?is)\bDescription:\s*(.*)$", blob)
     if described and len(described.group(1).strip()) >= 20:
         blob = described.group(1).strip()
@@ -467,7 +499,7 @@ def apply_check(ask: str, context: str, draft: str, *, complete) -> dict:
     """Grade once. Retry a bad parse once. Rewrite once. A second miss returns empty text."""
     draft = (draft or "").strip()
     if not draft:
-        return {"ok": False, "text": "", "status": "fail", "reason": "empty", "attempts": 1}
+        return {"ok": False, "text": "", "best_text": "", "status": "fail", "reason": "empty", "attempts": 1}
 
     def grade(text: str) -> dict:
         extracted = extract_ask(ask)
@@ -497,15 +529,24 @@ def apply_check(ask: str, context: str, draft: str, *, complete) -> dict:
         on_topic, why = answers_the_ask(ask, text)
         if not on_topic:
             return {"pass": False, "reason": why}
-        return _parse_grade(got.get("text") or "")
+        parsed = _parse_grade(got.get("text") or "")
+        if parsed.get("reason") == "grade_unparsed" or parsed.get("pass"):
+            return parsed
+        if (
+            _latest_is_ack(ask)
+            and not _PROMISE.search(text or "")
+            and not str(parsed.get("reason") or "").startswith("not_in_context")
+        ):
+            return {"pass": True, "reason": "latest_note"}
+        return parsed
 
     first = grade(draft)
     if first.get("reason") == "preempted":
-        return {"ok": False, "text": "", "status": "fail", "reason": "preempted", "attempts": 1}
+        return {"ok": False, "text": "", "best_text": draft, "status": "fail", "reason": "preempted", "attempts": 1}
     if first.get("reason") == "grade_unparsed":
         first = grade(draft)
         if first.get("reason") == "grade_unparsed":
-            return {"ok": False, "text": "", "status": "fail", "reason": "grade_unparsed", "attempts": 2}
+            return {"ok": False, "text": "", "best_text": draft, "status": "fail", "reason": "grade_unparsed", "attempts": 2}
     if first.get("pass") and not _AI.search(draft):
         return {"ok": True, "text": _lower_voice(draft), "status": "pass", "reason": "", "attempts": 1}
     messages = [
@@ -522,8 +563,16 @@ def apply_check(ask: str, context: str, draft: str, *, complete) -> dict:
     if _AI.search(rewritten) or blocked(rewritten):
         rewritten = ""
     if not rewritten:
-        return {"ok": False, "text": "", "status": "fail", "reason": first.get("reason") or "rewrite_empty", "attempts": 2}
+        return {"ok": False, "text": "", "best_text": draft, "status": "fail", "reason": first.get("reason") or "rewrite_empty", "attempts": 2}
     second = grade(rewritten)
     if second.get("pass") and not _AI.search(rewritten):
         return {"ok": True, "text": _lower_voice(rewritten), "status": "rewrite_pass", "reason": "", "attempts": 2}
-    return {"ok": False, "text": "", "status": "fail", "reason": second.get("reason") or "failed_twice", "attempts": 2}
+    kept = rewritten or draft
+    return {
+        "ok": False,
+        "text": "",
+        "best_text": kept,
+        "status": "fail",
+        "reason": second.get("reason") or "failed_twice",
+        "attempts": 2,
+    }
