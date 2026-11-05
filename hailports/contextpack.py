@@ -285,8 +285,113 @@ def _load(path: Path, limit: int) -> list:
     return rows
 
 
+_NAME_RUN = re.compile(r"\b(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+|[A-Z]{2,}(?:\s+[A-Z]{2,})+)\b")
+_ADDR = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+
+
+def scrub_style(text: str) -> str:
+    """Keep sentence shape. Drop names, addresses, and numbers."""
+    raw = _ADDR.sub("<addr>", text or "")
+    raw = re.sub(r"\d+", "<n>", raw)
+    raw = _NAME_RUN.sub("<name>", raw)
+    raw = re.sub(r"(?:<n>\s*){2,}", "<n> ", raw)
+    raw = re.sub(r"(?:<name>\s*){2,}", "<name> ", raw)
+    raw = re.sub(r"(?:<addr>\s*){2,}", "<addr> ", raw)
+    return re.sub(r"\s+", " ", raw).strip()
+
+
+def _exclude_keys(folder: Path) -> set:
+    path = Path(folder) / "eval_frozen" / "exclude.json"
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return set()
+    banned = set()
+    for raw in list(doc.get("event_ids") or []) + list(doc.get("source_keys") or []) + list(doc.get("keys") or []):
+        banned.add(str(raw))
+    return banned
+
+
+def style_block(folder: Path, k: int = 2) -> str:
+    """Up to two style shots. Raw lessons stay out once style pins exist."""
+    path = Path(folder) / "pinned_fewshots.json"
+    try:
+        rows = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    if not isinstance(rows, list):
+        return ""
+    banned = _exclude_keys(folder)
+    lines = []
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("style_only"):
+            continue
+        key = str(row.get("key") or "")
+        if key and key in banned:
+            continue
+        before = scrub_style(str(row.get("before") or ""))
+        after = scrub_style(str(row.get("after") or ""))
+        if len(before) < 12 or len(after) < 12:
+            continue
+        if re.search(r"\d", before + after) or "@" in (before + after):
+            continue
+        lines.append("before: " + before)
+        lines.append("after: " + after)
+        if len(lines) >= min(max(int(k or 1), 1), 2) * 2:
+            break
+    return "\n".join(lines)
+
+
+def rebuild_style_pins(folder: Path, rows: list) -> dict:
+    """Write at most two style pins. Sensitive and frozen keys are skipped."""
+    folder = Path(folder)
+    banned = _exclude_keys(folder)
+    picked = []
+    skipped = {"sensitive": 0, "frozen": 0, "empty": 0, "dirty": 0}
+    ordered = sorted(
+        rows or [],
+        key=lambda row: (0 if str(row.get("class") or "") == "used_as_is" else 1, -float(row.get("score") or 0)),
+    )
+    seen_surface = set()
+    for row in ordered:
+        if row.get("sensitive") or str(row.get("class") or "") == "skipped_sensitive":
+            skipped["sensitive"] += 1
+            continue
+        key = str(row.get("key") or "")
+        if key and key in banned:
+            skipped["frozen"] += 1
+            continue
+        surface = str(row.get("surface") or "mail")
+        if surface in seen_surface:
+            continue
+        before = scrub_style(str(row.get("before") or row.get("draft") or ""))
+        after = scrub_style(str(row.get("after") or row.get("sent") or ""))
+        if len(before) < 12 or len(after) < 12:
+            skipped["empty"] += 1
+            continue
+        if re.search(r"\d", before + after) or "@" in (before + after):
+            skipped["dirty"] += 1
+            continue
+        picked.append({
+            "style_only": True,
+            "surface": surface,
+            "key": key,
+            "before": before,
+            "after": after,
+        })
+        seen_surface.add(surface)
+        if len(picked) >= 2:
+            break
+    if picked:
+        (folder / "pinned_fewshots.json").write_text(json.dumps(picked, indent=2) + "\n", encoding="utf-8")
+    return {"pins": len(picked), "skipped": skipped}
+
+
 def similar_text(folder: Path, query: str, k: int = 3) -> str:
     folder = Path(folder)
+    styled = style_block(folder, k=min(int(k or 2), 2))
+    if styled:
+        return styled
     q = _tokens(query)
     if not q:
         return ""
@@ -495,6 +600,95 @@ def _parse_grade(text: str) -> dict:
     return {"pass": bit, "reason": _clip(reason, 160)}
 
 
+_DANGLING = {"the", "a", "an", "to", "of", "and", "or", "for", "with", "in", "on", "at", "from", "that", "this"}
+_HEY = re.compile(r"(?i)\b(?:hey|hi|hello|dear)\s+([A-Za-z][a-z']{2,})\b")
+
+
+def _cutoff(draft: str) -> str:
+    text = (draft or "").strip()
+    if not text:
+        return "cutoff"
+    if text.endswith(("...", "…")) or text[-1] in ",:;":
+        return "cutoff"
+    last = re.split(r"\s+", text)[-1].lower().strip(".,;:!?")
+    if last in _DANGLING:
+        return "cutoff"
+    if len(text) > 180 and text[-1] not in ".?!)" and not re.search(r"(?i)\bHOLD\b", text):
+        return "cutoff"
+    return ""
+
+
+def _invented_recipient(ask: str, context: str, draft: str) -> str:
+    blob = "{0}\n{1}".format(ask or "", context or "").lower()
+    for addr in _ADDR.findall(draft or ""):
+        if addr.lower() not in blob:
+            return "invented_recipient"
+    match = _HEY.search(draft or "")
+    if match:
+        name = match.group(1).lower()
+        if name not in {"there", "all", "team"} and name not in blob:
+            return "invented_recipient"
+    return ""
+
+
+def _hold_mismatch(ask: str, context: str, draft: str) -> str:
+    blob = "{0}\n{1}".format(ask or "", context or "")
+    must = bool(re.search(r"(?i)\b(?:reply|answer with|say)\s+HOLD\b", blob))
+    is_hold = bool(re.match(r"(?i)\s*HOLD\b", draft or ""))
+    if must and not is_hold:
+        return "hold_mismatch"
+    if is_hold and _latest_is_ack(ask):
+        return "hold_mismatch"
+    return ""
+
+
+def _missing_facts(ask: str, context: str, draft: str) -> str:
+    missing = unsupported_claims(ask, context, draft)
+    if missing:
+        return "missing_facts: " + ", ".join(missing)
+    return ""
+
+
+def _miss_reason(ask: str, context: str, draft: str) -> str:
+    on_topic, why = answers_the_ask(ask, draft)
+    if not on_topic:
+        return why if str(why).startswith("off_topic") else "off_topic"
+    return _cutoff(draft) or _invented_recipient(ask, context, draft) or _hold_mismatch(ask, context, draft) or _missing_facts(ask, context, draft)
+
+
+def _ref_hash(ref: str) -> str:
+    if not ref:
+        return ""
+    return hashlib.sha1(str(ref).encode("utf-8", "replace")).hexdigest()[:10]
+
+
+def join_checks(folder: Path) -> dict:
+    """Counts only: self-check status joined to a later class. No draft text."""
+    folder = Path(folder)
+    classes = {}
+    outcomes = folder / "draft_outcomes.jsonl"
+    if outcomes.is_file():
+        for row in _load(outcomes, 100000):
+            key = str(row.get("key_hash") or "")
+            if key:
+                classes[key] = str(row.get("class") or "")
+    matched = unmatched = total = 0
+    by = {}
+    for row in _load(folder / "draft_selfcheck.jsonl", 100000):
+        total += 1
+        ref = str(row.get("ref_hash") or "")
+        cls = classes.get(ref) if ref else ""
+        if cls:
+            matched += 1
+            bucket = by.setdefault(str(row.get("status") or ""), {})
+            bucket[cls] = bucket.get(cls, 0) + 1
+        else:
+            unmatched += 1
+    out = {"selfcheck_rows": total, "matched": matched, "unmatched": unmatched, "by_status_class": by}
+    (folder / "draft_selfcheck_join.json").write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8")
+    return out
+
+
 def apply_check(ask: str, context: str, draft: str, *, complete) -> dict:
     """Grade once. Retry a bad parse once. Rewrite once. A second miss returns empty text."""
     draft = (draft or "").strip()
@@ -502,6 +696,9 @@ def apply_check(ask: str, context: str, draft: str, *, complete) -> dict:
         return {"ok": False, "text": "", "best_text": "", "status": "fail", "reason": "empty", "attempts": 1}
 
     def grade(text: str) -> dict:
+        miss = _miss_reason(ask, context, text)
+        if miss:
+            return {"pass": False, "reason": miss}
         extracted = extract_ask(ask)
         messages = [
             {"role": "system", "content": (
@@ -509,9 +706,8 @@ def apply_check(ask: str, context: str, draft: str, *, complete) -> dict:
                 '{"extracted_ask":"the question","answers_ask":true,"pass":true,"reason":"short"}. '
                 "First put the specific question or request from the latest message into extracted_ask. "
                 "answers_ask is true only when the draft directly answers that question. "
-                "A tag change, a date, or a field update is not an answer when the ask asks for something else. "
-                "Pass only when answers_ask is true and every concrete claim is written in the ask or the context, "
-                "the words are plain, and it names no tool, model, or bot. Outside knowledge is a fail."
+                "Use only the ask and the context. Outside knowledge is a fail. "
+                "When pass is false, reason must be one of: off_topic, missing_facts, invented_recipient, hold_mismatch, cutoff."
             )},
             {"role": "user", "content": "EXTRACTED ASK\n{0}\n\nASK\n{1}\n\nCONTEXT\n{2}\n\nDRAFT\n{3}".format(
                 _clip(extracted, 500), _clip(ask, 900), _clip(context, 1800), _clip(text, 900)
@@ -523,12 +719,6 @@ def apply_check(ask: str, context: str, draft: str, *, complete) -> dict:
             got = complete(messages, 80)
         if not got.get("ok"):
             return {"pass": False, "reason": got.get("reason") or "grade_error"}
-        missing = unsupported_claims(ask, context, text)
-        if missing:
-            return {"pass": False, "reason": "not_in_context: " + ", ".join(missing)}
-        on_topic, why = answers_the_ask(ask, text)
-        if not on_topic:
-            return {"pass": False, "reason": why}
         parsed = _parse_grade(got.get("text") or "")
         if parsed.get("reason") == "grade_unparsed" or parsed.get("pass"):
             return parsed

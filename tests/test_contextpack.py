@@ -83,7 +83,7 @@ def test_invented_claim_is_not_staged():
     def complete(messages, max_tokens=80):
         if "Grade one draft" in messages[0]["content"]:
             return {"ok": True, "text": '{"pass": true, "reason": "looks fine"}', "reason": ""}
-        return {"ok": True, "text": "I deployed fourteen lambdas last night.", "reason": ""}
+        return {"ok": True, "text": "they can edit contacts. I deployed fourteen lambdas last night.", "reason": ""}
 
     good = apply_check(
         "can they edit contacts?",
@@ -96,12 +96,12 @@ def test_invented_claim_is_not_staged():
     held = apply_check(
         "can they edit contacts?",
         "the account stays read only",
-        "I deployed fourteen lambdas last night.",
+        "they can edit contacts. I deployed fourteen lambdas last night.",
         complete=complete,
     )
     assert held["ok"] is False
     assert held["text"] == ""
-    assert "not_in_context" in held["reason"]
+    assert "missing_facts" in held["reason"]
     assert held["attempts"] == 2
 
 
@@ -221,7 +221,8 @@ def test_check_flag_holds_a_second_failure():
     reply = respond(router, "edit the contacts?", bundle)
     assert reply.text == ""
     assert reply.raw.get("held") is True
-    assert len(local.calls) == 3
+    # The draft is off topic, so the grade call is skipped. One draft, one rewrite.
+    assert len(local.calls) == 2
 
 
 def test_runner_logs_links_and_does_not_send():
@@ -353,3 +354,96 @@ def test_off_topic_retries_then_reviews_without_blocking_other_mail():
     sixth = run_round([held], router=router, prior=fifth["prior"])
     assert sixth["skipped"] == []
     assert sixth["drafted"] == 0
+
+
+def test_style_shots_strip_names_and_skip_frozen_keys(tmp_path):
+    from hailports.contextpack import rebuild_style_pins, scrub_style, style_block
+
+    assert "<n>" in scrub_style("send 12 items to Jordan Smith")
+    assert "Jordan" not in scrub_style("send 12 items to Jordan Smith")
+    frozen = tmp_path / "eval_frozen"
+    frozen.mkdir()
+    (frozen / "exclude.json").write_text(json.dumps({"keys": ["frozen-key"]}), encoding="utf-8")
+    info = rebuild_style_pins(tmp_path, [
+        {"key": "frozen-key", "class": "rewritten", "surface": "mail", "score": 0.9,
+         "before": "I will send the twelve notes tomorrow.", "after": "The notes went out yesterday."},
+        {"key": "s1", "class": "used_as_is", "surface": "mail", "score": 0.98,
+         "before": "I will send the notes tomorrow morning.", "after": "The notes went out yesterday."},
+        {"key": "s2", "class": "rewritten", "surface": "chat", "score": 0.4,
+         "before": "Can you check the branch contact mapping please.", "after": "The branch contact mapping is in."},
+        {"key": "secret", "class": "skipped_sensitive", "sensitive": True, "surface": "mail", "score": 1,
+         "before": "the password is hunter2 please reset it", "after": "use the other channel instead"},
+    ])
+    assert info["pins"] == 2
+    block = style_block(tmp_path, k=3)
+    assert block.count("before:") == 2
+    assert "frozen-key" not in (tmp_path / "pinned_fewshots.json").read_text(encoding="utf-8")
+    assert "hunter2" not in block
+    assert similar_text(tmp_path, "anything at all", k=3) == block
+
+
+def test_pref_pairs_hold_out_a_fifth_and_training_refuses_that_file(tmp_path):
+    import os
+    import stat
+
+    from hailports.learning import capture_pref_rows, pref_split, refuse_train_path
+
+    rows = []
+    for n in range(10):
+        key = "key-" + str(n)
+        rows.append({
+            "key": key,
+            "class": "rewritten" if pref_split(key) == "train" else "used_as_is",
+            "context": "the notes are on the desk",
+            "draft": "I will look at the notes",
+            "sent": "the notes are filed",
+            "score": 0.2,
+        })
+    rows.append({"key": "nope", "class": "not_used", "context": "x", "draft": "draft text here", "sent": "sent text here", "score": 0})
+    rows.append({"key": "secret", "class": "rewritten", "sensitive": True, "context": "x", "draft": "the password is hunter2 now", "sent": "stop", "score": 0})
+    counts = capture_pref_rows(tmp_path, rows)
+    assert counts["train"] + counts["heldout"] == 10
+    assert counts["heldout"] >= 1
+    train = (tmp_path / "pref_pairs.jsonl").read_text(encoding="utf-8")
+    hold = (tmp_path / "pref_pairs_heldout.jsonl").read_text(encoding="utf-8")
+    assert "password" not in train and "password" not in hold
+    assert stat.S_IMODE((tmp_path / "pref_pairs.jsonl").stat().st_mode) == 0o600
+    assert stat.S_IMODE((tmp_path / "pref_pairs_heldout.jsonl").stat().st_mode) == 0o600
+    try:
+        refuse_train_path(tmp_path / "pref_pairs_heldout.jsonl")
+        raised = False
+    except SystemExit:
+        raised = True
+    assert raised
+    refuse_train_path(tmp_path / "heldout.jsonl")
+    assert os.path.basename("heldout.jsonl") == "heldout.jsonl"
+
+
+def test_join_counts_and_mail_gate_and_model_refuse(tmp_path):
+    from hailports.contextpack import join_checks
+    from hailports.memory import model_command_matches, refuses_model_or_reboot
+    from hailports.nightly import alarm_line, mail_gate
+
+    learn = tmp_path / "learning"
+    learn.mkdir()
+    (learn / "draft_outcomes.jsonl").write_text(json.dumps({"key_hash": "abc123", "class": "not_used"}) + "\n", encoding="utf-8")
+    (learn / "draft_selfcheck.jsonl").write_text(
+        json.dumps({"status": "fail", "ref_hash": "abc123"}) + "\n" + json.dumps({"status": "pass", "ref_hash": ""}) + "\n",
+        encoding="utf-8",
+    )
+    joined = join_checks(learn)
+    assert joined["matched"] == 1 and joined["unmatched"] == 1
+    assert joined["by_status_class"]["fail"]["not_used"] == 1
+    assert mail_gate(3000, False, False) == "swap"
+    assert mail_gate(1000, False, True) == "preempt"
+    assert mail_gate(1000, True, False) == "busy"
+    assert mail_gate(1000, False, False) == ""
+    line = alarm_line("2026-11-05", 0.9855, 1.0, 0, 0, "swap")
+    assert line.startswith("REALEVAL REGRESSION")
+    assert "baseline 0/20" in line
+    assert model_command_matches("llama-server --port 18080")
+    assert model_command_matches("llama-server --port 8080")
+    assert not model_command_matches("llama-server --port 8097")
+    assert refuses_model_or_reboot("killall llama-server --port 18080")
+    assert refuses_model_or_reboot("shutdown -h now")
+    assert not refuses_model_or_reboot("kill 999")
