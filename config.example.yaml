@@ -1,0 +1,87 @@
+# Copy to the config directory the installer prints.
+# API keys and plug tokens do not go in this file.
+# Use HAILPORTS_API_KEY, or the matching name in .env.example, or the OS keychain.
+label: com.hailports.local
+mode: local
+llm:
+  base_url: http://127.0.0.1:18080/v1
+  upstream_url: http://127.0.0.1:18080
+  model: local
+  model_url: ""
+  mmproj_url: ""
+  quant: ""
+webchat:
+  bind: 127.0.0.1
+  port: 8080
+notes:
+  bind: 127.0.0.1
+  port: 8078
+  embed_url: http://127.0.0.1:8097
+  max_age_s: 86400
+web:
+  search_url: ""
+  news_url: ""
+alerts:
+  probe_url: ""
+  private_url: ""
+idle:
+  interval_s: 120
+  # Pull requests clipped into a deep note must use one of these owner/name pairs.
+  # Leave this empty to keep every pull page you already stored.
+  allowed_repos: []
+thread:
+  summary_chars: 2400
+modules:
+  cli: true
+  webchat: true
+  imessage: false
+  bridges: false
+  notes: true
+  draft_runner: false
+  plugins: false
+memory:
+  budget_mb: 0
+runbooks:
+  dir: runbooks
+plugins:
+  crm:
+    base_url: https://crm.example.invalid
+    token: CHANGE_ME
+  tracker:
+    base_url: https://tracker.example.invalid
+    token: CHANGE_ME
+    project: PROJECT
+  mail:
+    base_url: https://mail.example.invalid
+    token: CHANGE_ME
+  meetings:
+    base_url: https://meet.example.invalid
+    token: CHANGE_ME
+  files:
+    base_url: https://files.example.invalid
+    token: CHANGE_ME
+bridges:
+  telegram:
+    token: CHANGE_ME
+    chat_id: CHANGE_ME
+  signal:
+    base_url: http://127.0.0.1:8088
+    account: CHANGE_ME
+  matrix:
+    homeserver: https://matrix.example.invalid
+    token: CHANGE_ME
+    room: CHANGE_ME
+imessage:
+  allowed_handle: CHANGE_ME
+cloud:
+  provider: openai
+  base_url: https://api.openai.com/v1
+  model: gpt-4o-mini
+  key_env: HAILPORTS_API_KEY
+  keychain_service: hailports
+  keychain_account: cloud
+routing:
+  confidence_floor: 0.55
+  complexity_ceiling: 1
+  max_local_output_chars: 900
+  compact_char_budget: 1600

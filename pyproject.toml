@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hailports-appliance"
+version = "0.2.0"
+description = "Local, hybrid, or API model appliance for macOS, Windows, and Linux"
+requires-python = ">=3.10"
+dependencies = ["pillow>=10", "platformdirs>=4", "rich>=13", "questionary>=2"]
+
+[project.optional-dependencies]
+heif = ["pillow-heif>=0.16"]
+dev = ["pytest>=7", "pexpect>=4"]
+
+[project.scripts]
+hailports = "hailports.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["hailports*", "hailports_setup*"]

@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      HAILPORTS_NO_KEYCHAIN: "1"
+      HAILPORTS_PROMPT: plain
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: install
+        run: python -m pip install -e ".[dev]"
+      - name: syntax
+        run: python -m compileall -q hailports hailports_setup setup.py scripts
+      - name: unit tests
+        run: python -m pytest -q
+      - name: dry-run linux
+        run: python setup.py --dry-run --non-interactive --target-os linux --ram-gb 16
+      - name: dry-run macos
+        run: python setup.py --dry-run --non-interactive --target-os darwin --ram-gb 24 --accel metal
+      - name: dry-run windows
+        run: python setup.py --dry-run --non-interactive --target-os windows --ram-gb 16 --accel cpu
+      - name: wizard local
+        run: python -m hailports setup --yes --mode local --allow-missing-model --state-dir "${{ runner.temp }}/hp-local" --web-port 18180 --model-port 18181 --embed-port 18182
+      - name: wizard hybrid
+        run: python -m hailports setup --yes --mode hybrid --skip-network --allow-missing-model --state-dir "${{ runner.temp }}/hp-hybrid" --web-port 18183 --model-port 18184 --embed-port 18185
+      - name: wizard api
+        run: python -m hailports setup --yes --mode api --skip-network --state-dir "${{ runner.temp }}/hp-api" --web-port 18186

@@ -1,0 +1,6 @@
+pillow>=10
+platformdirs>=4
+rich>=13
+questionary>=2
+# HEIC photos are not installed by this file.
+# Use: python -m pip install "hailports-appliance[heif]"
