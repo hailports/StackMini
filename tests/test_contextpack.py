@@ -434,7 +434,8 @@ def test_join_counts_and_mail_gate_and_model_refuse(tmp_path):
     joined = join_checks(learn)
     assert joined["matched"] == 1 and joined["unmatched"] == 1
     assert joined["by_status_class"]["fail"]["not_used"] == 1
-    assert mail_gate(3000, False, False) == "swap"
+    assert mail_gate(5700, False, False) == "swap"
+    assert mail_gate(5600, False, False) == ""
     assert mail_gate(1000, False, True) == "preempt"
     assert mail_gate(1000, True, False) == "busy"
     assert mail_gate(1000, False, False) == ""

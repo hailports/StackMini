@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 MAIL_BASELINE = "0/20"
-SWAP_LINE_MB = 2800
+SWAP_LINE_MB = 5600
 
 
 def mail_gate(swap_mb: float, busy: bool, preempt: bool, line: float = SWAP_LINE_MB) -> str:
