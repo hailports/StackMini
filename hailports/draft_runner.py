@@ -150,6 +150,25 @@ def _remember(prior: dict, mid: str, prev: dict) -> None:
         prior[mid] = prev
 
 
+_HOLD_WAIT_S = (120, 300, 600)
+_HOLD_MAX = 3
+
+
+def _is_grade_hold(reason: str) -> bool:
+    """A grader hold. Scheduling and missing-stamp parks stay on their own path."""
+    text = str(reason or "").lower()
+    return "off_topic" in text or text.startswith("hold:")
+
+
+def _grade_waiting(prev: dict, now_s: float) -> bool:
+    err = str(prev.get("error") or "")
+    if not err.startswith("hold:") or prev.get("settled") or prev.get("discard_parked"):
+        return False
+    if int(prev.get("grade_fails") or 0) >= _HOLD_MAX:
+        return False
+    return float(prev.get("next_ok") or 0) > now_s
+
+
 def _apply_badge(row: dict, book: dict) -> dict | None:
     """Judge a badge only when the row says how the chat was opened."""
     if "unread_before" not in row and "opened_by_runner" not in row:
@@ -232,6 +251,19 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
             _remember(prior, mid, prev)
             if not noted:
                 emit("decision_" + cached, subject, sender)
+            continue
+        now_s = time.time()
+        if str(prev.get("error") or "").startswith("hold:") and prev.get("settled"):
+            if not prev.get("settled_noted"):
+                prev["settled_noted"] = True
+                _remember(prior, mid, prev)
+                emit("hold_settled", subject, sender, str(prev.get("error") or "")[:80])
+            else:
+                _remember(prior, mid, prev)
+            continue
+        if _grade_waiting(prev, now_s):
+            _remember(prior, mid, prev)
+            emit("hold_wait", subject, sender, str(prev.get("error") or "")[:80])
             continue
         fetcher = row.get("fetch_body")
         if callable(fetcher) and not body.strip():
@@ -333,9 +365,40 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
 
             checked = apply_check(ask, "\n".join(sources), text, complete=_one)
             if not checked.get("ok"):
+                reason = str(checked.get("reason") or "hold")
+                if _is_grade_hold(reason):
+                    fails = int(prev.get("grade_fails") or 0) + 1
+                    prev["grade_fails"] = fails
+                    prev["discard_parked"] = False
+                    prev["error"] = (reason if reason.startswith("hold:") else "hold:" + reason)[:160]
+                    best = str(checked.get("best_text") or text or "").strip()
+                    if len(best) > len(str(prev.get("best_text") or "")):
+                        prev["best_text"] = best[:800]
+                    if fails >= _HOLD_MAX:
+                        prev["settled"] = True
+                        prev["review"] = True
+                        staged_text = str(prev.get("best_text") or "").strip()
+                        _remember(prior, mid, prev)
+                        if staged_text:
+                            drafts.append(_with_badge({
+                                "message_id": mid,
+                                "subject": subject,
+                                "from": sender,
+                                "text": staged_text,
+                                "sent": False,
+                                "review": True,
+                                "via": "hold_review",
+                            }, decision))
+                        else:
+                            emit("hold_review", subject, sender, prev["error"][:80])
+                        continue
+                    prev["next_ok"] = time.time() + _HOLD_WAIT_S[min(fails, len(_HOLD_WAIT_S)) - 1]
+                    _remember(prior, mid, prev)
+                    emit("hold_wait", subject, sender, prev["error"][:80])
+                    continue
                 _park(prev, "hold", reopened)
                 _remember(prior, mid, prev)
-                emit("hold", subject, sender, str(checked.get("reason") or "hold")[:80])
+                emit("hold", subject, sender, reason[:80])
                 continue
             text = checked.get("text") or ""
         if row.get("require_pass") and not has_pass(text):
