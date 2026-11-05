@@ -689,13 +689,29 @@ def join_checks(folder: Path) -> dict:
     return out
 
 
-def apply_check(ask: str, context: str, draft: str, *, complete) -> dict:
+def apply_check(ask: str, context: str, draft: str, *, complete, proof=None, work=None) -> dict:
     """Grade once. Retry a bad parse once. Rewrite once. A second miss returns empty text."""
+    from hailports.factclaim import (
+        allowed,
+        completion_claims,
+        demands_false_confirmation,
+        needs_pending,
+        pending_voice,
+        settle,
+    )
+
     draft = (draft or "").strip()
     if not draft:
         return {"ok": False, "text": "", "best_text": "", "status": "fail", "reason": "empty", "attempts": 1}
+    settled = settle(draft, context=context, proof=proof, work=work)
+    if settled["action"] == "replace":
+        return {"ok": True, "text": _lower_voice(settled["text"]), "status": "rewrite_pass", "reason": "prepare_only", "attempts": 1}
+    if settled["action"] == "block":
+        return {"ok": False, "text": "", "best_text": draft, "status": "fail", "reason": "unproven_work", "attempts": 1}
 
     def grade(text: str) -> dict:
+        if not allowed(text, context=context, proof=proof, work=work):
+            return {"pass": False, "reason": "unproven_work"}
         miss = _miss_reason(ask, context, text)
         if miss:
             return {"pass": False, "reason": miss}
@@ -707,7 +723,9 @@ def apply_check(ask: str, context: str, draft: str, *, complete) -> dict:
                 "First put the specific question or request from the latest message into extracted_ask. "
                 "answers_ask is true only when the draft directly answers that question. "
                 "Use only the ask and the context. Outside knowledge is a fail. "
-                "When pass is false, reason must be one of: off_topic, missing_facts, invented_recipient, hold_mismatch, cutoff."
+                "When pass is false, reason must be one of: off_topic, missing_facts, invented_recipient, hold_mismatch, cutoff. "
+                "Do not fail a draft for not claiming that a record was changed. "
+                "A draft that says the change is still pending passes when the context has no verified write."
             )},
             {"role": "user", "content": "EXTRACTED ASK\n{0}\n\nASK\n{1}\n\nCONTEXT\n{2}\n\nDRAFT\n{3}".format(
                 _clip(extracted, 500), _clip(ask, 900), _clip(context, 1800), _clip(text, 900)
@@ -720,6 +738,12 @@ def apply_check(ask: str, context: str, draft: str, *, complete) -> dict:
         if not got.get("ok"):
             return {"pass": False, "reason": got.get("reason") or "grade_error"}
         parsed = _parse_grade(got.get("text") or "")
+        if not parsed.get("pass") and demands_false_confirmation(str(parsed.get("reason") or "")):
+            if not completion_claims(text):
+                return {"pass": True, "reason": "no_false_confirm"}
+            return {"pass": False, "reason": "unproven_work"}
+        if parsed.get("pass") and not allowed(text, context=context, proof=proof, work=work):
+            return {"pass": False, "reason": "unproven_work"}
         if parsed.get("reason") == "grade_unparsed" or parsed.get("pass"):
             return parsed
         if (
@@ -739,6 +763,13 @@ def apply_check(ask: str, context: str, draft: str, *, complete) -> dict:
             return {"ok": False, "text": "", "best_text": draft, "status": "fail", "reason": "grade_unparsed", "attempts": 2}
     if first.get("pass") and not _AI.search(draft):
         return {"ok": True, "text": _lower_voice(draft), "status": "pass", "reason": "", "attempts": 1}
+    why = str(first.get("reason") or "")
+    if why == "unproven_work" or demands_false_confirmation(why):
+        if not completion_claims(draft):
+            return {"ok": True, "text": _lower_voice(draft), "status": "pass", "reason": "no_false_confirm", "attempts": 1}
+        if needs_pending(work):
+            return {"ok": True, "text": _lower_voice(pending_voice(work)), "status": "rewrite_pass", "reason": "prepare_only", "attempts": 1}
+        return {"ok": False, "text": "", "best_text": draft, "status": "fail", "reason": "unproven_work", "attempts": 1}
     messages = [
         {"role": "system", "content": (
             "Rewrite the reply in plain words. Output only the reply. "
@@ -752,6 +783,10 @@ def apply_check(ask: str, context: str, draft: str, *, complete) -> dict:
     rewritten = str((complete(messages, 180) or {}).get("text") or "").strip()
     if _AI.search(rewritten) or blocked(rewritten):
         rewritten = ""
+    if rewritten and not allowed(rewritten, context=context, proof=proof, work=work):
+        if needs_pending(work):
+            return {"ok": True, "text": _lower_voice(pending_voice(work)), "status": "rewrite_pass", "reason": "prepare_only", "attempts": 2}
+        return {"ok": False, "text": "", "best_text": rewritten, "status": "fail", "reason": "unproven_work", "attempts": 2}
     if not rewritten:
         return {"ok": False, "text": "", "best_text": draft, "status": "fail", "reason": first.get("reason") or "rewrite_empty", "attempts": 2}
     second = grade(rewritten)
