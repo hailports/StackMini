@@ -1887,6 +1887,14 @@ _USER_CREATE_RE = re.compile(
 _PERM_RE = re.compile(
     r"(?i)\b(?:assign|add|grant|give)\b.{0,50}\bpermission\s*set\b"
 )
+_EXTRA_ACCESS_RE = re.compile(
+    r"(?i)(?:"
+    r"\breactivat\w*|\bre-activat\w*|"
+    r"\bset\s+isactive\s*=\s*true\b|"
+    r"\bpartner\s*user\b|"
+    r"\b(?:change|switch|move)\s+(?:their|the|user|his|her)?\s*(?:profile|role)\b"
+    r")"
+)
 _QUEUE_RE = re.compile(
     r"(?i)\b(?:add|put)\b.{0,60}\b(?:queue|public\s+group|group)\b"
 )
@@ -2120,6 +2128,26 @@ def _flat_user(row: dict) -> dict:
     }
 
 
+def _load_sdplus():
+    import importlib
+    parent = str(Path(__file__).resolve().parent)
+    if parent not in sys.path:
+        sys.path.insert(0, parent)
+    return importlib.import_module("sdplus_access_gate")
+
+
+def _sd_gate(text: str, org: str, op: str):
+    gate = _load_sdplus()
+    decision = gate.decide(text or "", prod=gate.is_prod_org(org), op=op)
+    if not decision.get("block"):
+        return None, decision
+    return _facts(
+        [decision.get("message") or "Access was not granted.", "Org: %s." % (org or "")],
+        executed=False,
+        org=org,
+    ), decision
+
+
 def _create_user(text: str, picked: dict) -> dict:
     org = picked["org"]
     allow = bool(picked.get("explicit_prod"))
@@ -2138,6 +2166,10 @@ def _create_user(text: str, picked: dict) -> dict:
             ["Nothing was changed. The request is missing %s." % " and ".join(missing), "Org would be %s." % org],
             org=org,
         )
+    blocked, decision = _sd_gate(text, org, "user_create")
+    if blocked:
+        return blocked
+    ticket_id = str((decision or {}).get("ticket_id") or "")
     existing = _user_rows(
         org,
         "Email = '%s' AND FirstName = '%s' AND LastName = '%s'" % (_soql_lit(email), _soql_lit(first), _soql_lit(last)),
@@ -2203,7 +2235,7 @@ def _create_user(text: str, picked: dict) -> dict:
                 "_loaded": True,
             },
             requester="operator",
-            subject="operator user setup",
+            subject="operator user setup" + ((" SD+ " + ticket_id) if ticket_id else ""),
         ) or {}
     except Exception as exc:
         ado = {"ok": False, "error": type(exc).__name__}
@@ -2227,6 +2259,8 @@ def _create_user(text: str, picked: dict) -> dict:
         "Active: %s" % user.get("IsActive"),
         ado_line,
     ]
+    if ticket_id:
+        lines.append("Service Desk Plus ticket: %s." % ticket_id)
     must = [str(user.get("Id") or "")]
     if ado_id:
         must.append(ado_id)
@@ -2372,6 +2406,10 @@ def _run_go() -> dict:
 def _assign_perm(text: str, picked: dict) -> dict:
     org = picked["org"]
     allow = bool(picked.get("explicit_prod"))
+    blocked, decision = _sd_gate(text, org, "permset_assign")
+    if blocked:
+        return blocked
+    ticket_id = str((decision or {}).get("ticket_id") or "")
     name_match = re.search(r"(?i)permission\s*set\s+([A-Za-z0-9_ ]{2,80})", text or "")
     if not name_match:
         return _facts(["Nothing was changed. The permission set name was not in the request.", "Org: %s." % org], org=org)
@@ -2409,12 +2447,15 @@ def _assign_perm(text: str, picked: dict) -> dict:
         "Org: %s." % org,
         "Assigned permission set %s to user id %s." % (ps_name, user["Id"]),
         "Assignment id: %s" % new_id,
-    ], must=[user["Id"], new_id], executed=True, org=org)
+    ] + (["Service Desk Plus ticket: %s." % ticket_id] if ticket_id else []), must=[user["Id"], new_id], executed=True, org=org)
 
 
 def _add_queue(text: str, picked: dict) -> dict:
     org = picked["org"]
     allow = bool(picked.get("explicit_prod"))
+    blocked, _decision = _sd_gate(text, org, "queue_member")
+    if blocked:
+        return blocked
     kind = "Queue" if re.search(r"(?i)\bqueue\b", text or "") else "Regular"
     name_match = re.search(r"(?i)\b(?:queue|group)\s+([A-Za-z0-9_ ]{2,80})", text or "")
     if not name_match:
@@ -2607,6 +2648,8 @@ def chat_act(text: str, history=None) -> dict | None:
     blob = (text or "").strip()
     if len(blob) < 2:
         return None
+    if _load_sdplus().privileged_password_request(blob):
+        return _facts([_load_sdplus().REFUSAL_PASSWORD], executed=False)
     if data_line(blob):
         return _facts(["This request is on the data line. It was not done. Do not quote the sensitive part."])
     if _GO_RE.match(blob):
@@ -2625,6 +2668,16 @@ def chat_act(text: str, history=None) -> dict | None:
         return _assign_perm(blob, picked)
     if _QUEUE_RE.search(blob):
         return _add_queue(blob, picked)
+    if _EXTRA_ACCESS_RE.search(blob) and not _USER_CREATE_RE.search(blob):
+        blocked, decision = _sd_gate(blob, picked["org"], "access_grant")
+        if blocked:
+            return blocked
+        if _load_sdplus().is_prod_org(picked["org"]):
+            return _facts([
+                "Service Desk Plus ticket %s is approved. This chat path does not run that access change." % (decision.get("ticket_id") or ""),
+                "Nothing was changed.",
+                "Org: %s." % picked["org"],
+            ], executed=False, org=picked["org"])
     if _RECORD_RE.search(blob):
         made = _create_record(blob, picked)
         if made:
