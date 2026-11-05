@@ -2,8 +2,9 @@
 """Suggest one tracker item from a real ask, and hold it for a click.
 
 Nothing is created until Approve & Post or Save & Post. A test token cannot
-create. The same source and the same ask are not suggested twice. Mail goes
-only through the caller's sender, which on the mini is the self-note path.
+create. The same source, the same ask, and a similar title already mailed are not
+suggested twice. Mail goes only through the caller's sender, which on the
+mini is the self-note path.
 """
 from __future__ import annotations
 
@@ -127,27 +128,140 @@ def fuzzy_duplicate(title: str, description: str, rows: list, now: float | None 
     return {"duplicate": False, "reason": "clear"}
 
 
+def title_key(title: str) -> str:
+    """Stable id from title keywords. Requester text is not part of it."""
+    raw = "\n".join(keywords(title))
+    return hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:24]
+
+
+def _within_window(entry, now: float) -> bool:
+    if isinstance(entry, dict) and entry.get("at"):
+        try:
+            return now - float(entry["at"]) <= WINDOW_S
+        except (TypeError, ValueError):
+            return True
+    return True
+
+
+_NONE_WORD = re.compile(r"(?i)^(?:none|n/?a|null|empty|tbd)$")
+
+
+def _real_acceptance(acceptance) -> list:
+    if isinstance(acceptance, str):
+        acceptance = [part.strip() for part in acceptance.split(";")]
+    kept = []
+    for item in acceptance or []:
+        text = scrub(str(item))
+        if not text:
+            continue
+        parts = [part for part in re.split(r"[\s,;]+", text) if part]
+        if parts and all(_NONE_WORD.fullmatch(part) for part in parts):
+            continue
+        kept.append(text)
+    return kept
+
+
+def thin_reason(title: str, acceptance=None) -> str:
+    """Blank when the title has 3+ keywords and acceptance is not empty or none."""
+    if len(keywords(title or "")) < 3:
+        return "thin_title"
+    if acceptance is None:
+        return ""
+    if not _real_acceptance(acceptance):
+        return "thin_acceptance"
+    return ""
+
+
+def prior_title_hit(title: str, store: dict, now: float) -> dict:
+    """Fuzzy match against titles already mailed or dismissed. Same overlap rules."""
+    rows = []
+    for row in (store or {}).get("mailed_titles") or []:
+        if not isinstance(row, dict):
+            continue
+        rows.append({
+            "title": row.get("title") or "",
+            "description": " ".join(row.get("title_keys") or []),
+            "ref": row.get("source") or row.get("idem") or "",
+            "ts": row.get("at") or 0,
+        })
+    found = fuzzy_duplicate(title or "", "", rows, now)
+    if found.get("reason") == "thin":
+        return {"duplicate": False, "reason": "thin"}
+    return found
+
+
+def _note_title(store: dict, source: str, idem: str, now: float, how: str, title: str) -> dict:
+    fp = title_key(title)
+    if not fp:
+        return store
+    titles = dict(store.get("title_keys") or {})
+    titles[fp] = {"at": now, "how": how, "idem": idem, "source": source}
+    kept_keys = {}
+    for key, rec in titles.items():
+        if key == fp or _within_window(rec, now):
+            kept_keys[key] = rec
+    store["title_keys"] = kept_keys
+    if how == "dismiss":
+        never = set(store.get("never") or [])
+        never.add(fp)
+        store["never"] = sorted(never)
+    if how in ("email", "dismiss", "sent"):
+        rows = [row for row in (store.get("mailed_titles") or []) if isinstance(row, dict)]
+        rows.append({
+            "at": now,
+            "title_keys": keywords(title),
+            "title": (title or "")[:120],
+            "idem": idem,
+            "source": source,
+        })
+        cutoff = float(now) - WINDOW_S
+        fresh = []
+        for row in rows:
+            try:
+                at = float(row.get("at") or 0)
+            except (TypeError, ValueError):
+                at = 0.0
+            if at and at < cutoff:
+                continue
+            fresh.append(row)
+        store["mailed_titles"] = fresh[-200:]
+    return store
+
+
 def _day(now: float) -> str:
     return time.strftime("%Y%m%d", time.localtime(now))
 
 
-def allow(store: dict, source: str, idem: str, now: float, cap: int = DAILY_CAP) -> tuple:
+def allow(store: dict, source: str, idem: str, now: float, cap: int = DAILY_CAP, title: str = "") -> tuple:
     store = store or {}
     if source and source in (store.get("sources") or {}):
         return False, "source"
     if idem and idem in (store.get("idem") or {}):
         return False, "idem"
-    if source and source in set(store.get("never") or []):
+    never = set(store.get("never") or [])
+    if source and source in never:
         return False, "never"
-    if idem and idem in set(store.get("never") or []):
+    if idem and idem in never:
         return False, "never"
+    fp = title_key(title) if title else ""
+    if fp:
+        if fp in never:
+            return False, "never"
+        rec = (store.get("title_keys") or {}).get(fp)
+        if rec and _within_window(rec, now):
+            return False, "title"
+        if len(keywords(title)) < 3:
+            return False, "thin_title"
+        hit = prior_title_hit(title, store, now)
+        if hit.get("duplicate"):
+            return False, "title_fuzzy"
     sent = int((store.get("days") or {}).get(_day(now)) or 0)
     if sent >= cap:
         return False, "cap"
     return True, "ok"
 
 
-def mark(store: dict, source: str, idem: str, now: float, how: str) -> dict:
+def mark(store: dict, source: str, idem: str, now: float, how: str, title: str = "") -> dict:
     store = dict(store or {})
     store.setdefault("sources", {})[source] = {"at": now, "how": how, "idem": idem}
     if idem:
@@ -164,6 +278,8 @@ def mark(store: dict, source: str, idem: str, now: float, how: str) -> dict:
         key = _day(now)
         days[key] = int(days.get(key) or 0) + 1
         store["days"] = days
+    if title:
+        store = _note_title(store, source, idem, now, how, title)
     return store
 
 
@@ -586,8 +702,16 @@ def scan(home: Path, now: float | None = None) -> dict | None:
         if not story.get("grounded"):
             continue
         idem = idempotency_key(story.get("requester") or who or "", story.get("title") or "")
-        ok, reason = allow(store, sk, idem, now)
+        titled = story.get("title") or ""
+        ok, reason = allow(store, sk, idem, now, title=titled)
         if not ok:
+            if reason in ("title", "title_fuzzy"):
+                store = mark(store, sk, idem, now, "dup", title=titled)
+            elif reason == "thin_title":
+                store = mark(store, sk, idem, now, "thin", title=titled)
+            continue
+        if thin_reason(titled, story.get("acceptance")):
+            store = mark(store, sk, idem, now, "thin", title=titled)
             continue
         dup = fuzzy_duplicate(story["title"], story["description"], catalog, now)
         if dup.get("duplicate"):
@@ -717,12 +841,26 @@ def queue_email(home: Path, pending: dict, story: dict, sender=None) -> dict:
     home = _home(home)
     now = time.time()
     store = load_store(home)
-    ok, reason = allow(store, pending.get("source_key") or "", pending.get("idem_key") or "", now)
+    titled = story.get("title") or ""
+    sk = pending.get("source_key") or ""
+    idem = pending.get("idem_key") or ""
+    ok, reason = allow(store, sk, idem, now, title=titled)
     if not ok:
+        if reason in ("title", "title_fuzzy"):
+            store = mark(store, sk, idem, now, "dup", title=titled)
+        elif reason == "thin_title":
+            store = mark(store, sk, idem, now, "thin", title=titled)
         store["pending"] = None
         save_store(home, store)
         _log(home, "skip {0}".format(reason))
         return {"ok": False, "status": reason}
+    gap = thin_reason(titled, story.get("acceptance"))
+    if gap:
+        store = mark(store, sk, idem, now, "thin", title=titled)
+        store["pending"] = None
+        save_store(home, store)
+        _log(home, "skip {0}".format(gap))
+        return {"ok": False, "status": gap}
     import sys
     cli = str(home / "llm-appliance/cli")
     tools = str(home / "claude-stack/tools")
@@ -774,7 +912,10 @@ def queue_email(home: Path, pending: dict, story: dict, sender=None) -> dict:
         mailed = sender(subject=subject, html_path=html_path)
         emailed = bool((mailed or {}).get("ok"))
         _log(home, "email ok={0} token={1}".format(emailed, token[:8]))
-    store = mark(store, pending.get("source_key") or "", pending.get("idem_key") or "", now, "email" if emailed else "email_fail")
+    store = mark(
+        store, pending.get("source_key") or "", pending.get("idem_key") or "", now,
+        "email" if emailed else "email_fail", title=titled if emailed else "",
+    )
     store["pending"] = None
     store["suggest_at_served"] = int(store.get("suggest_at_served") or 0)
     try:
@@ -792,7 +933,11 @@ def queue_email(home: Path, pending: dict, story: dict, sender=None) -> dict:
 def remember_dismiss(home: Path, item: dict) -> None:
     home = _home(home)
     store = load_store(home)
-    store = mark(store, str(item.get("source_key") or ""), str(item.get("idem_key") or ""), time.time(), "dismiss")
+    story = _story_of(item)
+    store = mark(
+        store, str(item.get("source_key") or ""), str(item.get("idem_key") or ""), time.time(), "dismiss",
+        title=story.get("title") or "",
+    )
     save_store(home, store)
 
 
@@ -1016,6 +1161,71 @@ def self_check() -> None:
     assert "Approve" in mail and "Edit" in mail and "Dismiss" in mail
     cancelled = decide(live, None, "cancel", boom, boom)
     assert cancelled["cancelled"] and calls["n"] == 0
+    mailed = "Dealer login request for parts desk"
+    other_ask = "Warranty table column on the product page"
+    store = mark({}, "src-mailed", "idem-mailed", 100, "email", title=mailed)
+    assert allow(store, "src-new", "idem-new", 110, title=mailed)[1] == "title"
+    close = allow(store, "src-new2", "idem-new2", 110, title="Dealer login request for parts counter")
+    assert close[0] is False and close[1] == "title_fuzzy"
+    assert allow(store, "src-open", "idem-open", 110, title=other_ask)[0] is True
+    assert allow({}, "src-thin", "idem-thin", 110, title="impacted by outage?")[1] == "thin_title"
+    assert thin_reason("impacted by outage?", ["none", "none"]) == "thin_title"
+    assert thin_reason(mailed, ["none none"]) == "thin_acceptance"
+    assert thin_reason(mailed, ["They can order parts"]) == ""
+    aged = mark({}, "src-old", "idem-old", 100 - (20 * 86400), "email", title=mailed)
+    assert allow(aged, "src-later", "idem-later", 100, title=mailed)[0] is True
+    _self_check_rescan()
+
+
+def _self_check_rescan() -> None:
+    """A second scan with a new ref and the same or a similar title does not queue."""
+    import sqlite3
+    import tempfile
+    home = Path(tempfile.mkdtemp())
+    db = home / "claude-stack/data/work_context.db"
+    db.parent.mkdir(parents=True)
+    now = 1_700_000_000.0
+    body = "please add access so the parts desk can log in and order parts"
+    title = "Dealer login request for parts desk"
+    con = sqlite3.connect(db)
+    con.execute(
+        "create table docs (source text, ref text, ts real, title text, body text, url text, participants text)"
+    )
+    con.execute(
+        "insert into docs values (?,?,?,?,?,?,?)",
+        ("email", "msg-1", now, title, body, "https://example.test/1", "Riley North"),
+    )
+    con.commit()
+    con.close()
+    first = scan(home, now)
+    assert first and first["story"]["title"] == title
+    store = load_store(home)
+    store["pending"] = None
+    store = mark(store, first["source_key"], first["idem_key"], now, "email", title=first["story"]["title"])
+    save_store(home, store)
+    con = sqlite3.connect(db)
+    rows = [
+        ("email", "msg-2", now + 30, title, body, "https://example.test/2", "Quinn West"),
+        ("email", "msg-3", now + 40, "Dealer login request for parts counter", body, "https://example.test/3", "Quinn West"),
+        ("email", "msg-thin", now + 50, "impacted by outage?", "the report is broken and not working", "", "Riley North"),
+        (
+            "email", "msg-ok", now + 10,
+            "Warranty table column on the product page",
+            "please fix the warranty table column. it is broken and not working on the product page",
+            "https://example.test/4", "Riley North",
+        ),
+    ]
+    con.executemany("insert into docs values (?,?,?,?,?,?,?)", rows)
+    con.commit()
+    con.close()
+    second = scan(home, now + 60)
+    assert second is not None
+    assert "warranty" in (second.get("story") or {}).get("title", "").lower()
+    assert "dealer" not in (second.get("story") or {}).get("title", "").lower()
+    assert "outage" not in (second.get("story") or {}).get("title", "").lower()
+    saved = load_store(home)
+    hows = {(row or {}).get("how") for row in (saved.get("sources") or {}).values() if isinstance(row, dict)}
+    assert "email" in hows and "dup" in hows and "thin" in hows
 
 
 if __name__ == "__main__":
