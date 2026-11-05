@@ -33,6 +33,7 @@ This repo is a fresh write of a local model appliance. Private trees, databases,
 | Embedding server | hailports_setup/models.py `embed_server_args`, hailports/notes.py |
 | Zoom and Outlook web session watchdogs, cookie vault, post-launch restore (reference, not installed) | contrib/session_keepers/ |
 | Optional TypeSafe System One (Jev) classifier, fail-open, no key in repo | hailports/jev.py, contrib/jev/ |
+| Unsent draft attachment types, including a presentation | hailports/plugins/mail.py `draft_attach_plan` |
 
 ## Services
 

@@ -36,5 +36,6 @@ Each row is a feature from `INVENTORY.md` or from the parity request. Status is 
 | Login-broken alert on a private channel | `hailports/alerts.py` | `tests/test_parity.py::test_login_alert_stays_on_a_private_channel` | pass. Loopback POST plus a local outbox. A public URL is refused. |
 | Three modes and the wizard | `hailports/wizard.py`, `hailports/router.py` | `tests/test_modes.py`, `tests/test_wizard_pexpect.py` | pass, including the interactive pexpect wizard |
 | Optional plugs | `hailports/plugins/` | `tests/test_appliance.py::test_sanitize_and_plugins` | off until the token is in the environment. A placeholder in the config file does not turn a plug on. |
+| Unsent draft attachment types, including a presentation | `hailports/plugins/mail.py` `draft_attach_plan` | `tests/test_draft_attach.py` | pass. A `.pptx` file is staged with the presentation content type. An unknown extension, an empty file, and a file over the size cap are refused. Nothing is sent. |
 
 `handle()` in `hailports/askdo.py` is still the deterministic classifier the older unit test calls. `hailports ask` does not print that text. It reads notes, then prints a model reply with the stats line.
