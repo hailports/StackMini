@@ -6,20 +6,20 @@
   <key>ProgramArguments</key>
   <array>
     <string>/opt/homebrew/bin/python3</string>
-    <string>$HOME/hailports-stack/tools/outlook_session_watchdog.py</string>
+    <string>/home/operator/hailports-stack/tools/outlook_session_watchdog.py</string>
     <string>tick</string>
   </array>
-  <key>WorkingDirectory</key><string>$HOME/hailports-stack</string>
+  <key>WorkingDirectory</key><string>/home/operator/hailports-stack</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
-    <key>PYTHONPATH</key><string>$HOME/hailports-stack</string>
+    <key>PYTHONPATH</key><string>/home/operator/hailports-stack</string>
   </dict>
   <key>StartInterval</key><integer>180</integer>
   <key>RunAtLoad</key><false/>
   <key>Nice</key><integer>5</integer>
   <key>ProcessType</key><string>Background</string>
-  <key>StandardOutPath</key><string>$HOME/Library/Logs/hailports/outlook-session-watchdog.out</string>
-  <key>StandardErrorPath</key><string>$HOME/Library/Logs/hailports/outlook-session-watchdog.err</string>
+  <key>StandardOutPath</key><string>/home/operator/Library/Logs/hailports/outlook-session-watchdog.out</string>
+  <key>StandardErrorPath</key><string>/home/operator/Library/Logs/hailports/outlook-session-watchdog.err</string>
 </dict>
 </plist>
