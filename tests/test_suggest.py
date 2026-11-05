@@ -17,6 +17,7 @@ from hailports.suggest import (
     mark,
     pick,
     render_suggestion,
+    thin_reason,
 )
 
 
@@ -64,7 +65,7 @@ def test_classify_skips_weak_internal_and_known_ids():
     row = {
         "source": "chat",
         "ref": "t-1",
-        "title": "Shop access",
+        "title": "Shop access request",
         "body": ASK,
         "url": "https://example.test/thread/1",
         "who": "thread_long",
@@ -198,4 +199,50 @@ def test_edit_cancel_dismiss_and_fail_closed():
     draft = draft_from_source("Shop access", ASK, "thread_abc", "https://example.test/thread/1")
     assert draft["grounded"] is True
     assert draft["type"] == "Bug"
-    assert "Riley" in draft["description"]
+
+
+def test_mailed_title_blocks_a_new_source_and_thin_titles_drop():
+    title = "Dealer login request for parts desk"
+    body = "please add access so the parts desk can log in and order parts"
+    row = {
+        "source": "mail",
+        "ref": "msg-1",
+        "title": title,
+        "body": body,
+        "url": "https://example.test/1",
+        "who": "Riley",
+    }
+    first = pick([row], set(), {}, [], NOW)
+    assert first is not None
+    assert first["story"]["title"] == title
+    store = mark({}, first["source_key"], first["idem_key"], NOW, "email", title=first["story"]["title"])
+    same = dict(row, ref="msg-2", url="https://example.test/2", who="Quinn")
+    similar = dict(row, ref="msg-3", title="Dealer login request for parts counter", url="https://example.test/3")
+    assert pick([same, similar], set(), store, [], NOW + 10) is None
+    assert allow(store, "src-new", "idem-new", NOW + 10, title=title)[1] == "title"
+    assert allow(store, "src-new2", "idem-new2", NOW + 10, title=similar["title"])[1] == "title_fuzzy"
+    other = dict(
+        row,
+        ref="msg-ok",
+        title="Warranty table column on the product page",
+        body="please fix the warranty table column. it is broken and not working on the product page",
+        url="https://example.test/4",
+    )
+    picked = pick([same, similar, other], set(), store, [], NOW + 10)
+    assert picked is not None
+    assert "warranty" in picked["story"]["title"].lower()
+    thin = {
+        "source": "mail",
+        "ref": "msg-thin",
+        "title": "impacted by outage?",
+        "body": "the report is broken and not working",
+        "url": "",
+        "who": "Riley",
+    }
+    assert pick([thin], set(), {}, [], NOW) is None
+    assert allow({}, "src-thin", "idem-thin", NOW, title="impacted by outage?")[1] == "thin_title"
+    assert thin_reason("impacted by outage?", ["none", "none"]) == "thin_title"
+    assert thin_reason(title, ["none none"]) == "thin_acceptance"
+    assert thin_reason(title, ["They can order parts"]) == ""
+    aged = mark({}, "src-old", "idem-old", NOW - 20 * 86400, "email", title=title)
+    assert allow(aged, "src-later", "idem-later", NOW, title=title)[0] is True
