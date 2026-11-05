@@ -407,8 +407,15 @@ def test_pref_pairs_hold_out_a_fifth_and_training_refuses_that_file(tmp_path):
     train = (tmp_path / "pref_pairs.jsonl").read_text(encoding="utf-8")
     hold = (tmp_path / "pref_pairs_heldout.jsonl").read_text(encoding="utf-8")
     assert "password" not in train and "password" not in hold
-    assert stat.S_IMODE((tmp_path / "pref_pairs.jsonl").stat().st_mode) == 0o600
-    assert stat.S_IMODE((tmp_path / "pref_pairs_heldout.jsonl").stat().st_mode) == 0o600
+    mode_train = stat.S_IMODE((tmp_path / "pref_pairs.jsonl").stat().st_mode)
+    mode_hold = stat.S_IMODE((tmp_path / "pref_pairs_heldout.jsonl").stat().st_mode)
+    if os.name == "nt":
+        # Windows cannot store owner-only Unix bits. chmod there is best-effort.
+        assert mode_train & stat.S_IWRITE
+        assert mode_hold & stat.S_IWRITE
+    else:
+        assert mode_train == 0o600
+        assert mode_hold == 0o600
     try:
         refuse_train_path(tmp_path / "pref_pairs_heldout.jsonl")
         raised = False

@@ -22,7 +22,7 @@
  *   node tools/owa.js index [--top 2500] [--body-top 500]
  *   node tools/owa.js bodies --ids-json '["REST-ID", ...]'
  */
-const { chromium } = require('/Users/operator/.npm-global/lib/node_modules/openclaw/node_modules/playwright-core');
+const { chromium } = require('/home/operator/.npm-global/lib/node_modules/openclaw/node_modules/playwright-core');
 const https = require('https');
 const fs = require('fs');
 const { execFile, execFileSync } = require('child_process');

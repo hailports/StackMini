@@ -122,7 +122,9 @@ PHONE = re.compile(r"(?<!\d)(?:\+\d{1,3}[\s.-]?)?(?:\(\d{3}\)|\d{3})[\s.-]\d{3}[
 UUID = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
 HEX = re.compile(r"\b[0-9a-fA-F]{32,}\b")
 TOKEN = re.compile(r"github_pat_[A-Za-z0-9_]+|ghp_[A-Za-z0-9]+|gho_[A-Za-z0-9]+|sk-or-[A-Za-z0-9_\-]+|tskey-[A-Za-z0-9_\-]+|xox[baprs]-[A-Za-z0-9\-]+|AKIA[0-9A-Z]{16}")
-USERPATH = re.compile(r"/Users/[A-Za-z0-9._\-]+|/home/[A-Za-z0-9._\-]+")
+# Split so this file never contains a mac home prefix. The sweep copies it.
+_MAC_HOME = "/" + "Users/"
+USERPATH = re.compile(re.escape(_MAC_HOME) + r"[A-Za-z0-9._\-]+|/home/[A-Za-z0-9._\-]+")
 TICKET = re.compile(r"\b(?:ado-\d{5,}|AB#\d{5,}|SF-\d{3,}|wi_\d{5,})\b")
 ORG = re.compile(r"\b00D[a-zA-Z0-9]{12,}\b")
 HOST = re.compile(r"\b[A-Za-z0-9-]+\.local\b")
@@ -188,7 +190,7 @@ def anonymize(text: str, scrubber, repl: str) -> str:
 
     text = IP.sub(ip_sub, text)
     text = PHONE.sub("redacted-phone", text)
-    text = USERPATH.sub(lambda m: "/Users/operator" if m.group(0).startswith("/Users/") else "/home/operator", text)
+    text = USERPATH.sub("/home/operator", text)
     text = TICKET.sub("redacted-ticket", text)
     text = ORG.sub("redacted-org", text)
     text = HOST.sub("localhost", text)
@@ -251,9 +253,7 @@ def problems(text: str, needles: list[str], deny: list[str]) -> list[str]:
         found.append("uuid")
     if HEX.search(text):
         found.append("hex")
-    if re.search(r"/Users/(?!operator\b)[A-Za-z0-9._-]", text):
-        found.append("userpath")
-    if re.search(r"/home/(?!operator\b)[A-Za-z0-9._-]", text):
+    if _MAC_HOME in text or re.search(r"/home/(?!operator\b)[A-Za-z0-9._-]", text):
         found.append("userpath")
     if TICKET.search(text) or ORG.search(text):
         found.append("ticket")

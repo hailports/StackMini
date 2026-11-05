@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 
@@ -148,6 +148,13 @@ def _zone_name(phrase: str, word: str) -> str:
     return _ZONES.get(zone_word) or "UTC"
 
 
+def _zone(name: str):
+    """UTC is in the stdlib. Windows runners have no system zone database."""
+    if name == "UTC":
+        return timezone.utc
+    return ZoneInfo(name)
+
+
 def clock_window(phrase: str, now: datetime | None = None) -> tuple[datetime, datetime] | None:
     match = _CLOCK.search(phrase or "")
     if not match:
@@ -162,7 +169,7 @@ def clock_window(phrase: str, now: datetime | None = None) -> tuple[datetime, da
     if hour > 23 or minute > 59:
         return None
     try:
-        tz = ZoneInfo(_zone_name(phrase, match.group(4) or ""))
+        tz = _zone(_zone_name(phrase, match.group(4) or ""))
     except Exception:
         return None
     current = now or datetime.now(tz)
