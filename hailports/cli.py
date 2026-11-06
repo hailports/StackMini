@@ -42,6 +42,7 @@ from hailports.threads import context_messages, maybe_summarize, reset as thread
 from hailports.ticket_guard import acquire, connect as guard_connect, remember
 from hailports.webtools import DataLine, gather_web, refuse_sensitive
 from hailports.wizard import add_setup_args, launch as launch_setup
+from hailports.display.command import add_parser as add_display_parser
 from hailports.notes import add as brain_add
 from hailports.notes import brain_status, connect as brain_connect, hybrid_search, ingest_path, note_meta, search as brain_search, store_vector
 from hailports.worknow import brief as focus_brief
@@ -515,6 +516,45 @@ def time_now() -> float:
     return time.time()
 
 
+def _cmd_notes(cfg: dict, cfg_path: Path, args) -> int:
+    text = list(args.text or [])
+    db = _state_dir(cfg_path) / "brain.sqlite"
+    action = args.action or "status"
+    if action == "ask":
+        from hailports.brain.ask import ask as brain_ask
+        if not text:
+            print("Usage: hailports brain ask QUESTION")
+            return 2
+        con = brain_connect(db)
+        print(json.dumps(brain_ask(
+            con,
+            " ".join(text),
+            k=getattr(args, "k", 8),
+            scope=getattr(args, "scope", "all"),
+            graph=bool(getattr(args, "graph", False)),
+        )))
+        return 0
+    if action == "ingest":
+        if len(text) < 2:
+            print("Usage: hailports brain ingest TITLE BODY")
+            return 2
+        return cmd_brain(cfg, "ingest", text[0], " ".join(text[1:]), "", db)
+    if action == "ingest-path":
+        if not text:
+            print("Usage: hailports brain ingest-path PATH")
+            return 2
+        con = brain_connect(db)
+        ids = ingest_path(con, Path(text[0]))
+        print(json.dumps({"ids": ids}))
+        return 0
+    if action == "search":
+        if not text:
+            print("Usage: hailports brain search QUERY")
+            return 2
+        return cmd_brain(cfg, "search", "", "", " ".join(text), db)
+    return cmd_brain(cfg, "status", "", "", "", db)
+
+
 def cmd_brain(cfg: dict, action: str, title: str, body: str, query: str, db: Path | None = None) -> int:
     con = brain_connect(db or (data_dir() / "brain.sqlite"))
     if action == "ingest":
@@ -615,9 +655,21 @@ def build_parser() -> argparse.ArgumentParser:
     serve_p = sub.add_parser("serve", help="Web chat on the configured port.")
     serve_p.add_argument("--port", type=int, default=None)
 
-    brain_p = sub.add_parser("brain", help="Notes: ingest, search, or status.")
-    brain_p.add_argument("action", choices=["ingest", "ingest-path", "search", "status"])
+    brain_p = sub.add_parser("brain", help="Notes: ingest, search, status, or ask.")
+    brain_p.add_argument("action", choices=["ingest", "ingest-path", "search", "status", "ask"])
     brain_p.add_argument("text", nargs="*")
+    brain_p.add_argument("--k", type=int, default=8)
+    brain_p.add_argument("--scope", default="all")
+    brain_p.add_argument("--graph", action="store_true")
+
+    notes_p = sub.add_parser("notes", help="Same note file as brain: ingest, search, status, or ask.")
+    notes_p.add_argument("action", nargs="?", default="status", choices=["ingest", "ingest-path", "search", "status", "ask"])
+    notes_p.add_argument("text", nargs="*")
+    notes_p.add_argument("--k", type=int, default=8)
+    notes_p.add_argument("--scope", default="all")
+    notes_p.add_argument("--graph", action="store_true")
+
+    add_display_parser(sub)
 
     draft_p = sub.add_parser("drafter", help="Draft from notes you supply.")
     draft_p.add_argument("ask")
@@ -724,27 +776,11 @@ def main(argv: list[str] | None = None) -> int:
         except KeyboardInterrupt:
             return 0
         return 0
-    if args.cmd == "brain":
-        text = args.text or []
-        if args.action == "ingest":
-            if len(text) < 2:
-                print("Usage: hailports brain ingest TITLE BODY")
-                return 2
-            return cmd_brain(cfg, "ingest", text[0], " ".join(text[1:]), "", _state_dir(cfg_path) / "brain.sqlite")
-        if args.action == "ingest-path":
-            if not text:
-                print("Usage: hailports brain ingest-path PATH")
-                return 2
-            con = brain_connect(_state_dir(cfg_path) / "brain.sqlite")
-            ids = ingest_path(con, Path(text[0]))
-            print(json.dumps({"ids": ids}))
-            return 0
-        if args.action == "search":
-            if not text:
-                print("Usage: hailports brain search QUERY")
-                return 2
-            return cmd_brain(cfg, "search", "", "", " ".join(text), _state_dir(cfg_path) / "brain.sqlite")
-        return cmd_brain(cfg, "status", "", "", "", _state_dir(cfg_path) / "brain.sqlite")
+    if args.cmd in ("brain", "notes"):
+        return _cmd_notes(cfg, cfg_path, args)
+    if args.cmd == "display":
+        from hailports.display.command import dispatch as dispatch_display
+        return dispatch_display(args, _state_dir(cfg_path))
     if args.cmd == "drafter":
         sources = []
         for item in args.source:

@@ -18,6 +18,29 @@ notes:
   port: 8078
   embed_url: http://127.0.0.1:8097
   max_age_s: 86400
+brain:
+  bind: 127.0.0.1
+  port: 8079
+  # Empty token: loopback is the access check. Set HAILPORTS_BRAIN_TOKEN to require a bearer token.
+  token_env: HAILPORTS_BRAIN_TOKEN
+  allow_overlay: false
+display:
+  # 0 means "not set". A dummy plug and a built-in panel use their own vendor and product ids.
+  vendor: 0
+  product: 0
+local_bridges:
+  mail:
+    enabled: false
+    base_url: http://127.0.0.1:9222
+  meetings:
+    enabled: false
+    base_url: http://127.0.0.1:9223
+  tracker:
+    enabled: false
+    base_url: http://127.0.0.1:9224
+  cdp:
+    enabled: false
+    base_url: http://127.0.0.1:9222
 web:
   search_url: ""
   news_url: ""

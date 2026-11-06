@@ -18,6 +18,9 @@ This repo is a fresh write of a local model appliance. Private trees, databases,
 | Do not open a duplicate card | hailports/ticket_guard.py, hailports/plugins/tracker.py |
 | Runbook index | hailports/runbooks.py, hailports/learning.py |
 | Notes ingest and hybrid search | hailports/notes.py |
+| Notes ask API, reciprocal-rank search, graph neighbors, data-line filter | hailports/brain/ |
+| Display override, client match, window reflow, phone keyboard inset | hailports/display/ |
+| Loopback session bridges (mail draft, meetings, tracker, browser CDP) | hailports/local_bridges/ |
 | Focus list | hailports/worknow.py |
 | Health check, freshness, and restart | hailports/sentinel.py |
 | Service file hash | hailports/integrity.py |
@@ -61,3 +64,4 @@ Also left out:
 | 18080 | llama.cpp chat and vision |
 | 8097 | Embedding server |
 | 8078 | Notes service bind |
+| 8079 | Notes ask API, loopback unless an overlay bind is turned on |
