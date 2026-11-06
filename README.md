@@ -137,8 +137,10 @@ Ubuntu, Debian, Fedora, and Arch share the detection path. A user systemd unit i
 - `mode` show or switch local, hybrid, or api
 - `chat` a terminal chat. `reset` drops the thread. `--image` attaches a picture
 - `serve` web chat on 127.0.0.1
-- `brain` ingest, ingest-path, search, and status
+- `brain` ingest, ingest-path, search, status, and ask
+- `notes` the same note file: ingest, search, status, and ask
 - `brain-add` and `brain-find` for a note without embeddings
+- `display` setup, status, list, apply, add, watch, restore, and reflow
 - `drafter` a draft from notes you pass in with `--source`
 - `draft` queue one grounded draft
 - `services` install, start, stop, restart, status, and logs, through the service manager only
@@ -167,6 +169,24 @@ python -m hailports setup --dry-run --non-interactive --target-os windows
 ```
 
 `--target-os` simulates another system when you are not on it.
+
+## Display and the phone keyboard
+
+`hailports display` writes a HiDPI override (1x flag 1, 2x flag 9, tail `0x200000`), lists Mac 16:10, 16:9, and 4:3 sizes plus iPad native grids, and matches a viewer to a size. An iPad name selects the 13-inch panel at 1376x1032. An iPhone name selects 768x1024. A Mac name selects 16:10 (1680x1050). Anything else leaves the desktop alone.
+
+Tailscale is optional. Pass a whois result you already have. Otherwise use the hostname, a VNC peer name, reverse DNS, mDNS, Screens, or Luna. The tool does not require the tailscale command.
+
+`hailports display reflow` is the phone keyboard inset. It changes yabai's global bottom padding only when a fresh session file says `mobile_connected=1` and `mobile_profile=iphone`, and the focused display is 768x1024. The window bottom is y=761 and the padding is 202. Missing or stale state does nothing. See `docs/DISPLAY.md`.
+
+Installing an override needs administrator rights once, then a logout or a display unplug/replug. Do not kill the window server. yabai needs its accessibility permission before the padding can change.
+
+## Local bridges
+
+Chat bridges (Telegram, Signal, Matrix) stay stubs. `hailports/local_bridges/` is the loopback session fabric: a mail draft bridge, a meetings bridge, a tracker bridge, and a browser CDP session. Drafts are saved. There is no send path. Unconfigured entries stay off. Health probes, idle recycle, and exact-pid restart are in that package. See `docs/LOCAL_BRIDGES.md`.
+
+## Notes brain
+
+`hailports notes` and `hailports brain` share one note file. `brain ask` searches with BM25 and local vectors, fuses them with reciprocal rank (`via: hybrid`), and can add a 2-hop graph (`via: graph`). The HTTP surface is `GET` or `POST /v1/ask` with `q`, `scope`, `k`, and `graph`. It binds to loopback unless you explicitly allow an overlay address. A token is optional. Questions about passwords, seed phrases, one-time codes, private keys, or legal and finance folders are refused, and chunks on those paths are dropped. See `docs/BRAIN.md`.
 
 ## Session keepers
 
