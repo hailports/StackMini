@@ -6,6 +6,7 @@ import html
 from pathlib import Path
 
 from hailports.osapi import ServiceSpec
+from hailports_setup.weight_preflight import wrap_model_command
 
 
 def render(spec: ServiceSpec, os_name: str) -> str:
@@ -103,7 +104,12 @@ def appliance_specs(label: str, mode: str, work: str, python: str, model_cmd: li
             "llama-server", "-m", "models/model.gguf",
             "--host", "127.0.0.1", "--port", str(model_port),
         ]
-        specs.append(ServiceSpec(label + ".model", model_cmd or default_model, work, "model"))
+        specs.append(ServiceSpec(
+            label + ".model",
+            wrap_model_command(python, model_cmd or default_model),
+            work,
+            "model",
+        ))
         if notes:
             from hailports_setup.models import embed_server_args
             specs.append(ServiceSpec(
