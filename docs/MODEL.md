@@ -125,6 +125,28 @@ Model pick by memory:
 
 Pass `--model tiny|small|balanced|vision` to override.
 
+## Required weight files after a reboot
+
+`llama-server` exits if a file named on the command line is missing. Service
+units use KeepAlive / Restart=on-failure, so a missing vision projector turns
+into a tight crash loop on the next start.
+
+A process that already loaded the projector can keep serving after that file
+is deleted from disk. The next start or reboot is when the gap shows up.
+
+The model service command runs `python -m hailports_setup.weight_preflight`
+first. The wrapper checks `-m`, `--mmproj`, and draft (`-md`) paths. A
+missing file is copied from `weight-backup/` when a same-named spare is
+there. For the published MiniCPM-V 4.7 4x projector it can also fetch the
+URL above (910491648 bytes) by the names `mmproj.gguf` or
+`mmproj-model-f16-4x.gguf`. If a required file is still missing, the wrapper
+waits and logs instead of starting `llama-server`.
+
+Keep a spare copy of every required weight file in `weight-backup/` (or pass
+`--backup-dir` to point at another volume). Point `--backup-dir` at a path
+you control; do not rely on the previous process still having the mapping.
+
+
 ## API mode
 
 `hailports setup` asks for the mode first. API mode does not build llama.cpp and does not download a GGUF. Hybrid mode still uses the local build above for reading, summarizing, retrieval, drafting, and compression, and calls the configured cloud provider only when the routing policy says the job is hard, unsure, or too long.

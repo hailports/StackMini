@@ -13,7 +13,7 @@ ALLOW_HEX = {
     "f174553e1621c6a22a64e7bfcbb58d3a5c49e6fb",
     "d81235049384534c167caea52b85a694f6103d14",
 }
-ALLOW_EMAIL = {"noreply@hailports.com"}
+ALLOW_EMAIL = {"noreply@hailports.com", "hailports@users.noreply.github.com"}
 ALLOW_IP = {"127.0.0.1", "0.0.0.0"}
 
 EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
