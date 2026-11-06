@@ -8,7 +8,7 @@ It can use a local llama.cpp model, a hosted OpenAI-compatible endpoint, or both
 
 ![StackMini demo](docs/stackmini-setup.gif)
 
-Real `hailports setup --dry-run --non-interactive --target-os darwin --arch arm64 --accel metal --ram-gb 24 --skip-network` output, animated for readability. Simulated hardware; no downloads or services installed.
+Illustrative walkthrough of StackMini chat (with image input), notes with embeddings, grounded drafts that cite your notes, runbooks, idle work, a watchdog, the macOS iMessage bridge, and `hailports doctor`. Mockup, not a live capture. It listens on localhost by default and sends no telemetry.
 
 ## Features
 
