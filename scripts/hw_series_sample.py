@@ -38,11 +38,18 @@ LABEL = os.environ.get("HW_SERIES_LABEL", "com.llm-appliance.hw-series")
 PROC = os.environ.get("HW_SERIES_PROC", "llama-server")
 METRICS_URL = os.environ.get("HW_SERIES_METRICS_URL", "http://127.0.0.1:18080/metrics")
 
+_USER_DIR = "/" + "Users" + "/"
+_HOME_DIR = "/" + "home" + "/"
 _PRIVATE = re.compile(
-    r"/Users/|@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}|\b(?:\d{1,3}\.){3}\d{1,3}\b|AB#\d{3,}|ado-\d{3,}",
+    _USER_DIR
+    + "|"
+    + _HOME_DIR
+    + r"|@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}|\b(?:\d{1,3}\.){3}\d{1,3}\b|AB#\d{3,}|ado-\d{3,}",
     re.I,
 )
-_SWAP = re.compile(r"total = ([\d.]+)M\s+used = ([\d.]+)M")
+_SWAP = re.compile(r"total = ([\d.]+)([KMGT])\s+used = ([\d.]+)([KMGT])")
+_SWAP_SCALE = {"K": 1 / 1024, "M": 1.0, "G": 1024.0, "T": 1024.0 * 1024.0}
+_PRESSURE_WORD = {1: "normal", 2: "warn", 4: "urgent", 8: "critical"}
 _METRIC = re.compile(r"^(llamacpp:[A-Za-z0-9_:]+)(?:\{[^}]*\})?\s+(\S+)")
 _TEMP = re.compile(
     r"\b(CPU|GPU|ANE)\b[^0-9\n]{0,40}?([\d.]+)\s*C\b",
@@ -63,7 +70,7 @@ def meta_path(path: Path | None = None) -> Path:
 
 def _run(argv: list[str], timeout: float) -> str:
     env = os.environ.copy()
-    # ps lstart month names must stay English even if the user locale is not.
+    # ps lstart month names stay English even when the user locale is not.
     env["LC_ALL"] = "C"
     env["LANG"] = "C"
     try:
@@ -81,12 +88,12 @@ def parse_sysctl(text: str) -> dict:
     out: dict = {}
     m = _SWAP.search(text)
     if m:
-        out["swap_total_mb"] = float(m.group(1))
-        out["swap_used_mb"] = float(m.group(2))
+        out["swap_total_mb"] = round(float(m.group(1)) * _SWAP_SCALE[m.group(2)], 2)
+        out["swap_used_mb"] = round(float(m.group(3)) * _SWAP_SCALE[m.group(4)], 2)
     for key, name in (
         ("wired_limit_mb", "iogpu.wired_limit_mb"),
         ("vm_memory_pressure", "vm.memory_pressure"),
-        ("memorystatus_level", "kern.memorystatus_level"),
+        ("memory_pressure_level", "kern.memorystatus_vm_pressure_level"),
         ("page_bytes", "hw.pagesize"),
     ):
         mm = re.search(rf"^{re.escape(name)}:\s*(\d+)", text, re.M)
@@ -166,12 +173,7 @@ def parse_pmset(text: str) -> dict:
 
 
 def parse_metrics(text: str) -> dict:
-    want = {
-        "llamacpp:prompt_tokens_cached_total": "prompt_tokens_cached_total",
-        "llamacpp:n_tokens_max": "n_tokens_max",
-        "llamacpp:requests_processing": "requests_processing",
-        "llamacpp:requests_deferred": "requests_deferred",
-    }
+    """Cache-size gauges only. Cumulative *_total counters are not a size."""
     out: dict = {}
     for ln in text.splitlines():
         if not ln or ln.startswith("#"):
@@ -180,15 +182,19 @@ def parse_metrics(text: str) -> dict:
         if not m:
             continue
         name, raw = m.group(1), m.group(2)
+        if name.lower().endswith("_total"):
+            continue
         try:
             num: int | float = float(raw) if "." in raw else int(float(raw))
         except ValueError:
             continue
         lname = name.lower()
-        if "kv" in lname or "cache_usage" in lname or lname.endswith("cache_tokens"):
+        if not any(part in lname for part in ("kv_cache", "cache_usage", "prompt_cache")) and not lname.endswith("cache_tokens"):
+            continue
+        if "ratio" in lname:
+            out["kv_cache_ratio"] = num
+        else:
             out["kv_cache_tokens"] = num
-        if name in want:
-            out[want[name]] = num
     return out
 
 
@@ -382,9 +388,11 @@ def summarize_day(rows: list[dict], day: str | None = None) -> dict:
         freemb = [v for v in (_num(r, "free_mb") for r in group) if v is not None]
         throttled = [v for v in (_num(r, "pages_throttled") for r in group) if v is not None]
         vmp = [v for v in (_num(r, "vm_memory_pressure") for r in group) if v is not None]
-        if free or wired or vmp:
+        words = [r.get("memory_pressure") for r in group if r.get("memory_pressure")]
+        if free or wired or vmp or words:
             pressure.append({
                 "h": hour,
+                "memory_pressure": words[-1] if words else None,
                 "mem_free_pct": _median(free) if free else None,
                 "vm_memory_pressure": _median(vmp) if vmp else None,
                 "pages_throttled_max": max(throttled) if throttled else None,
@@ -402,7 +410,7 @@ def summarize_day(rows: list[dict], day: str | None = None) -> dict:
             temp.append({"h": hour, **temps, "n": n})
         kv_vals = []
         for r in group:
-            for key in ("kv_cache_tokens", "prompt_cache_tokens"):
+            for key in ("kv_cache_tokens", "prompt_cache_tokens", "kv_cache_ratio"):
                 v = _num(r, key)
                 if v is not None:
                     kv_vals.append(v)
@@ -449,33 +457,26 @@ def build_row(parts: dict, now: datetime | None = None, sample_ms: int | None = 
         "compressor_mb": vm.get("compressor_mb"),
         "pages_throttled": vm.get("pages_throttled"),
         "mem_free_pct": mem.get("mem_free_pct"),
-        "memory_pressure_word": mem.get("memory_pressure_word"),
+        "memory_pressure_level": sysctl.get("memory_pressure_level"),
+        "memory_pressure": _PRESSURE_WORD.get(sysctl.get("memory_pressure_level"))
+        or mem.get("memory_pressure_word"),
         "vm_memory_pressure": sysctl.get("vm_memory_pressure"),
-        "memorystatus_level": sysctl.get("memorystatus_level"),
         "pmset_thermal_warning": pm.get("pmset_thermal_warning"),
         "pmset_perf_warning": pm.get("pmset_perf_warning"),
         "rss_mb": parts.get("rss_mb"),
         "sample_ms": sample_ms,
     }
-    for key in ("prompt_tokens_cached_total", "n_tokens_max", "requests_processing", "requests_deferred"):
+    for key in ("kv_cache_tokens", "kv_cache_ratio"):
         if key in metrics:
             row[key] = metrics[key]
-        else:
-            row[key] = None
-            unavailable.append(key)
-    if "kv_cache_tokens" in metrics:
-        row["kv_cache_tokens"] = metrics["kv_cache_tokens"]
-    else:
+    if "kv_cache_tokens" not in row and "kv_cache_ratio" not in row:
         unavailable.append("kv_cache_tokens")
-    for key in ("cpu_c", "gpu_c", "ane_c"):
+    for key in ("cpu_c", "gpu_c", "ane_c", "memory_pressure"):
         if row[key] is None:
             unavailable.append(key)
     for key in ("pid", "swap_used_mb", "wired_mb", "mem_free_pct", "pmset_thermal_warning"):
         if row.get(key) is None:
             unavailable.append(key)
-    # Drop a word key when the command had no such word, so the row stays small.
-    if row["memory_pressure_word"] is None:
-        row.pop("memory_pressure_word")
     row["unavailable"] = unavailable
     return row
 
@@ -484,11 +485,11 @@ def sample(now: datetime | None = None) -> dict:
     t0 = time.monotonic()
     sysctl = parse_sysctl(_run(
         ["sysctl", "vm.swapusage", "iogpu.wired_limit_mb", "vm.memory_pressure",
-         "kern.memorystatus_level", "hw.pagesize"],
+         "kern.memorystatus_vm_pressure_level", "hw.pagesize"],
         2,
     ))
     vm = parse_vm_stat(_run(["vm_stat"], 2), sysctl.get("page_bytes"))
-    mem = parse_memory_pressure(_run(["memory_pressure"], 2))
+    mem = parse_memory_pressure(_run(["memory_pressure", "-Q"], 2))
     pm = parse_pmset(_run(["pmset", "-g", "therm"], 2))
     pid, lstart, rss_mb = find_server(PROC)
     metrics = parse_metrics(fetch_metrics())

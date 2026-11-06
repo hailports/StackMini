@@ -14,7 +14,7 @@ spec.loader.exec_module(hs)
 SYSCTL = """vm.swapusage: total = 3072.00M  used = 1905.75M  free = 1166.25M  (encrypted)
 iogpu.wired_limit_mb: 23040
 vm.memory_pressure: 0
-kern.memorystatus_level: 10
+kern.memorystatus_vm_pressure_level: 1
 hw.pagesize: 16384
 """
 
@@ -49,7 +49,7 @@ def test_sysctl_swap_and_pressure():
     assert got["swap_total_mb"] == 3072.0
     assert got["wired_limit_mb"] == 23040
     assert got["vm_memory_pressure"] == 0
-    assert got["memorystatus_level"] == 10
+    assert got["memory_pressure_level"] == 1
     assert got["page_bytes"] == 16384
 
 
@@ -73,8 +73,8 @@ def test_pmset_none_recorded():
 def test_metrics_have_no_kv_size():
     got = hs.parse_metrics(METRICS)
     assert "kv_cache_tokens" not in got
-    assert got["prompt_tokens_cached_total"] == 307720
-    assert got["n_tokens_max"] == 16384
+    assert "prompt_tokens_cached_total" not in got
+    assert "n_tokens_max" not in got
 
 
 def test_metrics_keep_a_real_kv_gauge():
@@ -98,7 +98,10 @@ def test_row_leaves_temps_null_and_omits_fake_kv():
     assert row["ts"] == "2026-11-06T02:15:00-06:00"
     assert row["cpu_c"] is None and row["gpu_c"] is None and row["ane_c"] is None
     assert "kv_cache_tokens" not in row
+    assert "prompt_tokens_cached_total" not in row
     assert "kv_cache_tokens" in row["unavailable"]
+    assert row["memory_pressure"] == "normal"
+    assert row["memory_pressure_level"] == 1
     assert row["swap_used_mb"] == 1905.75
     assert row["vm_memory_pressure"] == 0
     assert row["pid"] == 30734
