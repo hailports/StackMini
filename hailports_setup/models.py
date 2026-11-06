@@ -16,6 +16,7 @@ VISION_MMPROJ = (
     "https://huggingface.co/openbmb/MiniCPM-V-4.7-35B-A3B-gguf/resolve/main/"
     "mmproj-model-f16-4x.gguf"
 )
+VISION_MMPROJ_BYTES = 910491648
 TINY_URL = "https://huggingface.co/ggml-org/models-moved/resolve/main/tinyllamas/stories260K.gguf"
 SMALL_URL = (
     "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/"
