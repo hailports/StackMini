@@ -4,6 +4,12 @@ Chat, a private note file, and drafts that stick to notes you provide. One comma
 
 It can use a local llama.cpp model, a hosted OpenAI-compatible endpoint, or both.
 
+## Demo
+
+![StackMini demo](docs/stackmini-setup.gif)
+
+Real `hailports setup --dry-run --non-interactive --target-os darwin --arch arm64 --accel metal --ram-gb 24 --skip-network` output, animated for readability. Simulated hardware; no downloads or services installed.
+
 ## Features
 
 - Command line chat against a local OpenAI-compatible server
