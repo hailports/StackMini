@@ -980,6 +980,18 @@ def _lower_voice(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _shape_voice(text: str, ask: str, surface: str) -> str:
+    """Strip dashes, promises, and stiff capitals. Fail open to the old lowercasing."""
+    try:
+        import voice_score
+        shaped = voice_score.shape_reply(text or "", ask or "", surface or "")
+    except Exception:
+        shaped = ""
+    if shaped and len(shaped.split()) >= 3:
+        return _lower_voice(shaped)
+    return _lower_voice(text)
+
+
 _DANGLING = {
     "the", "a", "an", "to", "of", "and", "or", "for", "with", "in", "on", "at", "from", "that", "this",
 }
@@ -1173,13 +1185,13 @@ def apply_check(ask: str, context: str, draft: str, *, surface: str = "", comple
             return {"ok": False, "text": "", "best_text": draft, "status": "fail", "reason": "grade_unparsed", "attempts": 2}
     if first.get("pass") and not _AI.search(draft):
         _log_check(surface, "pass", first.get("reason") or "pass", 1, home, ref)
-        return {"ok": True, "text": _lower_voice(draft), "status": "pass", "reason": "", "attempts": 1}
+        return {"ok": True, "text": _shape_voice(draft, ask, surface), "status": "pass", "reason": "", "attempts": 1}
     _log_check(surface, "fail", first.get("reason") or "fail", 1, home, ref)
     _why = str(first.get("reason") or "")
     if _why == "unproven_work" or _fc.demands_false_confirmation(_why):
         if not _fc.completion_claims(draft):
             _log_check(surface, "pass", "no_false_confirm", 1, home, ref)
-            return {"ok": True, "text": _lower_voice(draft), "status": "pass", "reason": "no_false_confirm", "attempts": 1}
+            return {"ok": True, "text": _shape_voice(draft, ask, surface), "status": "pass", "reason": "no_false_confirm", "attempts": 1}
         if _fc.needs_pending(work):
             _log_check(surface, "pass", "prepare_only", 1, home, ref)
             return {"ok": True, "text": _lower_voice(_fc.pending_voice(work)), "status": "rewrite_pass", "reason": "prepare_only", "attempts": 1}
@@ -1199,7 +1211,7 @@ def apply_check(ask: str, context: str, draft: str, *, surface: str = "", comple
     second = _grade(complete, ask, context, rewritten, proof=proof, work=work)
     if second.get("pass") and not _AI.search(rewritten):
         _log_check(surface, "pass", "rewrite", 2, home, ref)
-        return {"ok": True, "text": _lower_voice(rewritten), "status": "rewrite_pass", "reason": "", "attempts": 2}
+        return {"ok": True, "text": _shape_voice(rewritten, ask, surface), "status": "rewrite_pass", "reason": "", "attempts": 2}
     reason = second.get("reason") or "failed_twice"
     _log_check(surface, "fail", reason, 2, home, ref)
     return {"ok": False, "text": "", "best_text": rewritten or draft, "status": "fail", "reason": reason, "attempts": 2}

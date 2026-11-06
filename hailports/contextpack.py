@@ -458,6 +458,18 @@ def unsupported_claims(ask: str, context: str, draft: str) -> list:
     return missing[:6]
 
 
+def _shape_voice(text: str, ask: str) -> str:
+    """Strip dashes, promises, and stiff capitals. Fail open to the old lowercasing."""
+    try:
+        from hailports.voice_score import shape_reply
+        shaped = shape_reply(text or "", ask or "", "outlook")
+    except Exception:
+        shaped = ""
+    if shaped and len(shaped.split()) >= 3:
+        return _lower_voice(shaped)
+    return _lower_voice(text)
+
+
 def _lower_voice(text: str) -> str:
     raw = (text or "").strip()
     if not raw or raw.startswith("I ") or raw.startswith("I'"):
@@ -762,11 +774,11 @@ def apply_check(ask: str, context: str, draft: str, *, complete, proof=None, wor
         if first.get("reason") == "grade_unparsed":
             return {"ok": False, "text": "", "best_text": draft, "status": "fail", "reason": "grade_unparsed", "attempts": 2}
     if first.get("pass") and not _AI.search(draft):
-        return {"ok": True, "text": _lower_voice(draft), "status": "pass", "reason": "", "attempts": 1}
+        return {"ok": True, "text": _shape_voice(draft, ask), "status": "pass", "reason": "", "attempts": 1}
     why = str(first.get("reason") or "")
     if why == "unproven_work" or demands_false_confirmation(why):
         if not completion_claims(draft):
-            return {"ok": True, "text": _lower_voice(draft), "status": "pass", "reason": "no_false_confirm", "attempts": 1}
+            return {"ok": True, "text": _shape_voice(draft, ask), "status": "pass", "reason": "no_false_confirm", "attempts": 1}
         if needs_pending(work):
             return {"ok": True, "text": _lower_voice(pending_voice(work)), "status": "rewrite_pass", "reason": "prepare_only", "attempts": 1}
         return {"ok": False, "text": "", "best_text": draft, "status": "fail", "reason": "unproven_work", "attempts": 1}
@@ -791,7 +803,7 @@ def apply_check(ask: str, context: str, draft: str, *, complete, proof=None, wor
         return {"ok": False, "text": "", "best_text": draft, "status": "fail", "reason": first.get("reason") or "rewrite_empty", "attempts": 2}
     second = grade(rewritten)
     if second.get("pass") and not _AI.search(rewritten):
-        return {"ok": True, "text": _lower_voice(rewritten), "status": "rewrite_pass", "reason": "", "attempts": 2}
+        return {"ok": True, "text": _shape_voice(rewritten, ask), "status": "rewrite_pass", "reason": "", "attempts": 2}
     kept = rewritten or draft
     return {
         "ok": False,
