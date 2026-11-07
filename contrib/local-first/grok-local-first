@@ -1,0 +1,6 @@
+#!/bin/sh
+# Put this ahead of the real grok binary on PATH.
+# LOCAL_FIRST_PY is hailports/local_first.py. GROK_REAL_BIN is the real binary.
+# No timeout is added. A finished local answer exits here. Escalation execs the real binary.
+PY="${LOCAL_FIRST_PY:?set LOCAL_FIRST_PY}"
+exec python3 "$PY" --grok-intercept "$@"
