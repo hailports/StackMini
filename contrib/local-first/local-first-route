@@ -1,0 +1,6 @@
+#!/bin/sh
+# Bot door. Exit 0 means the local model finished. Exit 10 means escalate.
+# --execute-escalate is the only switch that may start the paid CLI, and only
+# after the local result says need_premium. --dry-run never starts it.
+PY="${LOCAL_FIRST_PY:?set LOCAL_FIRST_PY}"
+exec python3 "$PY" "$@"
