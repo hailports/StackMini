@@ -13,6 +13,7 @@ Illustrative walkthrough of StackMini chat (with image input), notes with embedd
 ## Features
 
 - Command line chat against a local OpenAI-compatible server
+- Local-first route. A summary, search, triage, or log read finishes on the local model. A production change, a team-facing note, hard code, or an unsure reply escalates with a short brief. A paid CLI starts only if you pass `--execute-escalate` and the local result says to escalate. See `hailports/local_first.py`.
 - Web chat that lets an interactive turn go ahead of a batch turn
 - Optional iMessage poll on macOS
 - Telegram, Signal, and Matrix bridge stubs (off until you set a token)
