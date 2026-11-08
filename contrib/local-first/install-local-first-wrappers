@@ -1,0 +1,203 @@
+#!/bin/sh
+# local-first-wrapper-v1 installer
+# Put claude, codex, cursor-agent, and grok on PATH in front of the real binaries.
+# Does not wrap `code` or `cursor` (those open the editor).
+# Wraps `agent` only when that file is the Cursor agent launcher, not some other tool.
+# Safe to run again on macOS and Linux. Prints names only.
+set -eu
+
+DRY=0
+if [ "${1:-}" = "--dry-run" ]; then
+  DRY=1
+fi
+
+SOURCE=$0
+while [ -L "$SOURCE" ]; do
+  DIR=$(CDPATH= cd -- "$(dirname "$SOURCE")" && pwd)
+  LINK=$(readlink "$SOURCE" || true)
+  [ -n "$LINK" ] || break
+  case "$LINK" in
+    /*) SOURCE=$LINK ;;
+    *) SOURCE=$DIR/$LINK ;;
+  esac
+done
+BIN_DIR=$(CDPATH= cd -- "$(dirname "$SOURCE")" && pwd)
+ROOT=$(CDPATH= cd -- "$BIN_DIR/.." && pwd)
+if [ -d "$ROOT/contrib/local-first" ] && [ ! -f "$ROOT/core/local_first_router.py" ]; then
+  WRAP_DIR="$ROOT/contrib/local-first"
+else
+  WRAP_DIR="$BIN_DIR"
+fi
+
+HOME_BIN=${HOME}/.local/bin
+REAL_DIR=${HOME}/.local/share/local-first/real
+OVERLAY=${HOME}/.config/local-first/paid_bins.json
+mkdir -p "$HOME_BIN" "$REAL_DIR" "$(dirname "$OVERLAY")"
+
+is_wrapper() {
+  [ -e "$1" ] || return 1
+  if [ -L "$1" ]; then
+    target=$(readlink "$1" || true)
+    case "$target" in
+      *local-first*) return 0 ;;
+    esac
+  fi
+  head -c 400 "$1" 2>/dev/null | grep -q "local-first-wrapper-v1"
+}
+
+newest_file() {
+  dir=$1
+  [ -d "$dir" ] || return 1
+  find "$dir" -maxdepth 1 -type f 2>/dev/null | sort -V | while read -r cand; do
+    if [ -x "$cand" ]; then
+      printf '%s\n' "$cand"
+    fi
+  done | tail -n 1
+}
+
+path_real() {
+  name=$1
+  old_ifs=$IFS
+  IFS=:
+  for dir in $PATH; do
+    [ -n "$dir" ] || continue
+    cand=$dir/$name
+    if [ -x "$cand" ] && ! is_wrapper "$cand"; then
+      IFS=$old_ifs
+      printf '%s\n' "$cand"
+      return 0
+    fi
+  done
+  IFS=$old_ifs
+  return 1
+}
+
+find_real() {
+  name=$1
+  found=$(path_real "$name" || true)
+  if [ -n "$found" ]; then
+    printf '%s\n' "$found"
+    return 0
+  fi
+  case "$name" in
+    grok)
+      if [ -x "$HOME/.grok/bin/grok" ] && ! is_wrapper "$HOME/.grok/bin/grok"; then
+        printf '%s\n' "$HOME/.grok/bin/grok"
+        return 0
+      fi
+      ;;
+    claude)
+      hit=$(newest_file "$HOME/.local/share/claude/versions" || true)
+      if [ -n "$hit" ]; then
+        printf '%s\n' "$hit"
+        return 0
+      fi
+      ;;
+    cursor-agent)
+      base=$HOME/.local/share/cursor-agent/versions
+      if [ -d "$base" ]; then
+        hit=$(find "$base" -mindepth 2 -maxdepth 2 -type f -name cursor-agent 2>/dev/null | sort -V | while read -r cand; do
+          if [ -x "$cand" ]; then
+            printf '%s\n' "$cand"
+          fi
+        done | tail -n 1 || true)
+        if [ -n "$hit" ]; then
+          printf '%s\n' "$hit"
+          return 0
+        fi
+      fi
+      ;;
+  esac
+  return 1
+}
+
+record_bin() {
+  key=$1
+  path=$2
+  python3 - "$key" "$path" "$OVERLAY" "$ROOT/data/runtime/local_first_router.json" << 'PY'
+import json, sys
+from pathlib import Path
+key, path, overlay, private = sys.argv[1:]
+home = Path(overlay)
+home.parent.mkdir(parents=True, exist_ok=True)
+data = {}
+if home.is_file():
+    try:
+        loaded = json.loads(home.read_text())
+        if isinstance(loaded, dict):
+            data = loaded
+    except (OSError, json.JSONDecodeError):
+        data = {}
+bins = data.get("paid_bins") if isinstance(data.get("paid_bins"), dict) else {}
+bins.setdefault(key, path)
+data["paid_bins"] = bins
+home.write_text(json.dumps(data, indent=2) + "\n")
+priv = Path(private)
+if priv.is_file():
+    try:
+        body = json.loads(priv.read_text())
+    except (OSError, json.JSONDecodeError):
+        body = None
+    if isinstance(body, dict):
+        pb = body.get("paid_bins") if isinstance(body.get("paid_bins"), dict) else {}
+        pb.setdefault(key, path)
+        body["paid_bins"] = pb
+        priv.write_text(json.dumps(body, indent=2) + "\n")
+PY
+}
+
+link_one() {
+  name=$1
+  script=$2
+  real=$3
+  dest=$HOME_BIN/$name
+  wrapper=$WRAP_DIR/$script
+  if [ ! -f "$wrapper" ]; then
+    echo "skip $name (wrapper script missing)"
+    return 0
+  fi
+  if [ -e "$dest" ] && [ ! -L "$dest" ] && ! is_wrapper "$dest"; then
+    if [ "$DRY" -eq 0 ]; then
+      mv "$dest" "$REAL_DIR/$name"
+    fi
+    real=$REAL_DIR/$name
+    echo "moved existing $name aside"
+  fi
+  if [ "$DRY" -eq 1 ]; then
+    echo "would link $name"
+    return 0
+  fi
+  ln -sfn "$wrapper" "$dest"
+  record_bin "$name" "$real"
+  echo "linked $name"
+}
+
+for spec in "grok grok-local-first" "claude claude-local-first" "codex codex-local-first" "cursor-agent cursor-agent-local-first"; do
+  name=${spec%% *}
+  script=${spec#* }
+  if real=$(find_real "$name"); then
+    link_one "$name" "$script" "$real"
+  else
+    echo "skip $name (real binary not found)"
+  fi
+done
+
+agent_path=$(command -v agent || true)
+if [ -n "$agent_path" ] && [ -x "$agent_path" ]; then
+  grok_real=$(find_real grok || true)
+  same=0
+  if [ -n "$grok_real" ] && [ "$(stat -c %d:%i "$agent_path" 2>/dev/null || stat -f %d:%i "$agent_path")" = "$(stat -c %d:%i "$grok_real" 2>/dev/null || stat -f %d:%i "$grok_real")" ]; then
+    same=1
+  fi
+  if [ "$same" -eq 1 ]; then
+    echo "skip agent (it is the grok binary)"
+  elif echo "$agent_path" | grep -q cursor-agent || grep -q CURSOR_INVOKED_AS "$agent_path" 2>/dev/null; then
+    link_one agent cursor-agent-local-first "$agent_path"
+  else
+    echo "skip agent (not the cursor agent launcher)"
+  fi
+else
+  echo "skip agent (not on PATH)"
+fi
+
+echo "editor note: code and cursor are not wrapped"

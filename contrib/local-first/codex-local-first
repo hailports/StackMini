@@ -1,0 +1,30 @@
+#!/bin/sh
+# local-first-wrapper-v1 codex
+# Local model first. A finished local answer does not exec the paid CLI.
+# No timeout is added here. Interactive launches with no prompt pass through.
+set -eu
+SOURCE=$0
+while [ -L "$SOURCE" ]; do
+  DIR=$(CDPATH= cd -- "$(dirname "$SOURCE")" && pwd)
+  LINK=$(readlink "$SOURCE" || true)
+  [ -n "$LINK" ] || break
+  case "$LINK" in
+    /*) SOURCE=$LINK ;;
+    *) SOURCE=$DIR/$LINK ;;
+  esac
+done
+DIR=$(CDPATH= cd -- "$(dirname "$SOURCE")" && pwd)
+PY=""
+d=$DIR
+i=0
+while [ "$i" -lt 4 ]; do
+  if [ -f "$d/core/local_first_router.py" ]; then PY="$d/core/local_first_router.py"; break; fi
+  if [ -f "$d/hailports/local_first.py" ]; then PY="$d/hailports/local_first.py"; break; fi
+  d=$(CDPATH= cd -- "$d/.." && pwd)
+  i=$((i + 1))
+done
+if [ -z "$PY" ]; then
+  echo "local-first router missing" >&2
+  exit 127
+fi
+exec python3 "$PY" --intercept codex "$@"
