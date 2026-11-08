@@ -252,14 +252,30 @@ def paid_prompt(result: dict, task: str) -> str:
 def load_config() -> dict:
     env = os.environ.get("LOCAL_FIRST_CONFIG", "").strip()
     path = Path(env) if env else Path(__file__).resolve().parents[1] / "data" / "runtime" / "local_first_router.json"
+    data: dict = {}
     if path.is_file():
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return data
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data = loaded
         except (OSError, json.JSONDecodeError):
-            pass
-    return {"transport": "http", "http_url": os.environ.get("LOCAL_FIRST_URL", "http://127.0.0.1:8080/v1/chat/completions")}
+            data = {}
+    if not data:
+        data = {"transport": "http", "http_url": os.environ.get("LOCAL_FIRST_URL", "http://127.0.0.1:8080/v1/chat/completions")}
+    overlay = Path.home() / ".config" / "local-first" / "paid_bins.json"
+    if overlay.is_file():
+        try:
+            extra = json.loads(overlay.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            extra = None
+        if isinstance(extra, dict):
+            bins = dict(data.get("paid_bins") or {})
+            incoming = extra.get("paid_bins") if isinstance(extra.get("paid_bins"), dict) else extra
+            if isinstance(incoming, dict):
+                for key, value in incoming.items():
+                    bins.setdefault(str(key), value)
+            data["paid_bins"] = bins
+    return data
 
 
 def _sha(text: str) -> str:
@@ -451,7 +467,7 @@ def route_task(task: str, *, caller: str = "cli", fetch=None, config: dict | Non
     elif fetch is None and cfg.get("prep_url"):
         evidence = fetch_prep(cfg, task)
     prompt = local_user_delta(task, stakes, evidence)
-    priority = 0 if caller in {"grok", "cli", "cursor"} else 2
+    priority = 0 if caller in {"grok", "cli", "cursor", "claude", "codex", "cursor-agent", "agent"} else 2
     if fetch is None:
         local = fetch_local(cfg, prompt, priority=priority)
     else:
@@ -574,57 +590,508 @@ def _read_prompt(prompt: str, kind: str) -> str:
     return prompt
 
 
-def real_grok_bin(cfg: dict | None = None) -> str:
-    env = os.environ.get("GROK_REAL_BIN", "").strip()
-    if env:
+# Flag sets are the non-interactive shapes each CLI actually documents.
+# claude: 2.1.283 --help. codex: `exec` / `e` / `review` (binary not on this host).
+# cursor-agent: option strings in the 2026.10.19 launcher, not a live process.
+_CLAUDE_VALUE = {
+    "--agent", "--agents", "--append-system-prompt", "--append-system-prompt-file",
+    "--append-subagent-system-prompt", "--append-subagent-system-prompt-file",
+    "--autocompact", "--client-data-url", "--debug-file", "--effort", "--environment",
+    "--fallback-model", "--input-format", "--json-schema", "--max-budget-usd",
+    "--model", "-n", "--name", "--output-format", "--permission-mode",
+    "--permission-prompts", "--permission-prompt-tool",
+    "--remote-control-session-name-prefix", "--session-id", "--setting-sources",
+    "--settings", "--system-prompt", "--system-prompt-file", "--system-prompt-snapshot",
+}
+_CLAUDE_COMMANDS = {
+    "agents", "attach", "auth", "auto-mode", "doctor", "gateway", "import", "install",
+    "logs", "mcp", "plugin", "plugins", "project", "respawn", "rm", "setup-token",
+    "stop", "kill", "ultrareview", "update", "upgrade",
+}
+_CODEX_VALUE = {
+    "-m", "--model", "-s", "--sandbox", "-C", "--cd", "-i", "--image",
+    "--output-schema", "-o", "--output-last-message", "--color",
+    "-a", "--ask-for-approval", "-c", "--config", "--profile",
+}
+_CODEX_HEADLESS = {"exec", "e", "review"}
+_CURSOR_VALUE = {
+    "--output-format", "--model", "--mode", "--workspace", "--add-dir", "--plugin-dir",
+    "--api-key", "--auth-token", "--sandbox", "--background-shell-timeout", "--image",
+    "--system-prompt", "--conversation-history-file", "--new-session-id",
+    "--dev-raw-model-slug", "--allowed-tools", "--exclude-tools", "--data-dir",
+    "--computer-use-coords", "--http-version", "--repo-endpoint", "--repo-http-version",
+}
+_CURSOR_COMMANDS = {
+    "about", "acp", "automations", "bedrock", "clear", "cloud", "configure", "controller",
+    "create-chat", "debug", "dev", "dev-login", "disable", "enable", "env", "generate-rule",
+    "get-channel", "info", "install-shell-integration", "kill", "list", "local-worker",
+    "login", "logout", "ls", "marketplace", "mcp", "models", "persist", "ping", "plugin",
+    "record", "repo", "reset", "resume", "run", "runs", "sandbox", "score-recent-commits",
+    "self-test", "sleep", "start", "status", "team", "test", "uninstall-shell-integration",
+    "update", "upgrade", "use-team-role", "worker", "worker-server",
+}
+_BIN_SPECS = {
+    "grok": {"env": "GROK_REAL_BIN", "argv0": "grok", "fallback": True},
+    "claude": {"env": "CLAUDE_REAL_BIN", "argv0": "claude"},
+    "codex": {"env": "CODEX_REAL_BIN", "argv0": "codex"},
+    "cursor-agent": {"env": "CURSOR_AGENT_REAL_BIN", "argv0": "cursor-agent"},
+}
+_WRAPPER_NAMES = {
+    "grok-local-first", "claude-local-first", "codex-local-first",
+    "cursor-agent-local-first", "local-first-route", "local-first-openai-door",
+    "local_first_router.py", "local_first.py",
+}
+def _no_prompt() -> dict:
+    return {"kind": "none", "text": "", "slot": -1, "extra_slots": []}
+
+
+def _caller_key(caller: str) -> str:
+    name = (caller or "").strip().lower()
+    if name in {"cursor", "agent"}:
+        return "cursor-agent"
+    return name
+
+
+def _scan_args(argv: list[str], value_flags: set[str]) -> tuple[set[str], list[tuple[int, str]]]:
+    flags: set[str] = set()
+    positionals: list[tuple[int, str]] = []
+    i = 0
+    while i < len(argv):
+        token = argv[i]
+        if token == "--":
+            positionals.extend((i + 1 + n, item) for n, item in enumerate(argv[i + 1 :]))
+            break
+        if token.startswith("-") and token != "-":
+            name = token.split("=", 1)[0]
+            flags.add(name)
+            if "=" in token:
+                i += 1
+                continue
+            if name in value_flags and i + 1 < len(argv):
+                i += 2
+                continue
+            i += 1
+            continue
+        positionals.append((i, token))
+        i += 1
+    return flags, positionals
+
+
+def _inline_prompt(items: list[tuple[int, str]]) -> dict:
+    if not items:
+        return {"kind": "stdin", "text": "", "slot": -1, "extra_slots": []}
+    text = " ".join(token for _, token in items)
+    return {
+        "kind": "inline",
+        "text": text,
+        "slot": items[0][0],
+        "extra_slots": [index for index, _ in items[1:]],
+    }
+
+
+def extract_prompt(caller: str, argv: list[str], *, stdout_is_tty: bool = True) -> dict:
+    """Pull a non-interactive prompt. kind none means leave the real CLI alone."""
+    key = _caller_key(caller)
+    if key == "grok":
+        text, kind, idx = _extract_prompt(argv)
+        if kind == "none":
+            return _no_prompt()
+        return {"kind": kind, "text": text, "slot": idx, "extra_slots": []}
+    if key == "claude":
+        flags, positionals = _scan_args(argv, _CLAUDE_VALUE)
+        if positionals and positionals[0][1] in _CLAUDE_COMMANDS and "-p" not in flags and "--print" not in flags:
+            return _no_prompt()
+        print_mode = "-p" in flags or "--print" in flags
+        if not print_mode and stdout_is_tty:
+            return _no_prompt()
+        if not print_mode and not positionals:
+            return _no_prompt()
+        return _inline_prompt(positionals)
+    if key == "codex":
+        flags, positionals = _scan_args(argv, _CODEX_VALUE)
+        head = next((n for n, (_, token) in enumerate(positionals) if token in _CODEX_HEADLESS), None)
+        if head is None:
+            return _no_prompt()
+        word = positionals[head][1]
+        rest = positionals[head + 1 :]
+        if word == "review" and not rest:
+            return _no_prompt()
+        if len(rest) == 1 and rest[0][1] == "-":
+            return {"kind": "stdin", "text": "", "slot": -1, "extra_slots": []}
+        return _inline_prompt(rest)
+    if key == "cursor-agent":
+        if argv and argv[0] in _CURSOR_COMMANDS:
+            return _no_prompt()
+        flags, positionals = _scan_args(argv, _CURSOR_VALUE)
+        prompts = [(index, token) for index, token in positionals if not (index == 0 and token == "agent")]
+        print_mode = "-p" in flags or "--print" in flags
+        if not print_mode and (stdout_is_tty or not prompts):
+            return _no_prompt()
+        return _inline_prompt(prompts)
+    return _no_prompt()
+
+
+def _flag_value(argv: list[str], names: set[str]) -> str:
+    for index, token in enumerate(argv):
+        for name in names:
+            if token == name and index + 1 < len(argv):
+                return argv[index + 1]
+            if token.startswith(name + "="):
+                return token.split("=", 1)[1]
+    return ""
+
+
+def wants_structured_output(caller: str, argv: list[str]) -> bool:
+    """A JSON event stream cannot be replaced with a plain local answer."""
+    key = _caller_key(caller)
+    if key == "claude":
+        fmt = _flag_value(argv, {"--output-format"}).lower()
+        incoming = _flag_value(argv, {"--input-format"}).lower()
+        return fmt in {"json", "stream-json"} or incoming == "stream-json" or "--json-schema" in argv or any(
+            token.startswith("--json-schema=") for token in argv
+        )
+    if key == "codex":
+        return "--json" in argv or "--output-schema" in argv or any(token.startswith("--output-schema=") for token in argv)
+    if key == "cursor-agent":
+        fmt = _flag_value(argv, {"--output-format"}).lower()
+        return fmt in {"json", "stream-json"}
+    return False
+
+
+def _is_wrapper(path: str | Path) -> bool:
+    candidate = Path(path)
+    try:
+        if not candidate.exists():
+            return False
+        resolved = candidate.resolve()
+    except OSError:
+        return False
+    if resolved.name in _WRAPPER_NAMES or resolved == Path(__file__).resolve():
+        return True
+    try:
+        with candidate.open("rb") as handle:
+            blob = handle.read(400)
+    except OSError:
+        return False
+    return b"local-first-wrapper-v1" in blob
+
+
+def _usable_real(path: str) -> bool:
+    text = (path or "").strip()
+    if not text or _is_wrapper(text):
+        return False
+    return True
+
+
+def _path_after_wrapper(argv0: str) -> str:
+    dirs = [item for item in os.environ.get("PATH", "").split(os.pathsep) if item]
+    wrapped: list[int] = []
+    found: list[tuple[int, str]] = []
+    for index, directory in enumerate(dirs):
+        candidate = Path(directory) / argv0
+        if not candidate.is_file() or not os.access(candidate, os.X_OK):
+            continue
+        if _is_wrapper(candidate):
+            wrapped.append(index)
+            continue
+        found.append((index, str(candidate)))
+    if not found:
+        return ""
+    if wrapped:
+        last = max(wrapped)
+        for index, path in found:
+            if index > last:
+                return path
+    return found[0][1]
+
+
+def resolve_real_bin(caller: str, cfg: dict | None = None) -> str:
+    """Env, then paid_bins, then the next PATH entry that is not this wrapper."""
+    key = _caller_key(caller)
+    spec = _BIN_SPECS.get(key)
+    if spec is None:
+        return ""
+    env = os.environ.get(spec["env"], "").strip()
+    if env and _usable_real(env):
         return env
     cfg = cfg if cfg is not None else load_config()
-    configured = str(cfg.get("paid_bin") or "").strip()
-    if configured:
+    bins = cfg.get("paid_bins") if isinstance(cfg.get("paid_bins"), dict) else {}
+    configured = str((bins or {}).get(key) or "").strip()
+    if not configured and key == "grok":
+        configured = str(cfg.get("paid_bin") or "").strip()
+    if configured and _usable_real(configured):
         return configured
-    return str(Path.home() / ".grok" / "bin" / "grok")
+    found = _path_after_wrapper(spec["argv0"])
+    if found:
+        return found
+    if spec.get("fallback"):
+        home_bin = str(Path.home() / ".grok" / "bin" / "grok")
+        if _usable_real(home_bin):
+            return home_bin
+    return ""
+
+
+def real_grok_bin(cfg: dict | None = None) -> str:
+    return resolve_real_bin("grok", cfg)
+
+
+def _rewrite_prompt(argv: list[str], extracted: dict, text: str) -> list[str]:
+    new = list(argv)
+    extras = [slot for slot in extracted.get("extra_slots") or [] if isinstance(slot, int)]
+    for slot in sorted(extras, reverse=True):
+        if 0 <= slot < len(new):
+            del new[slot]
+    slot = extracted.get("slot", -1)
+    if isinstance(slot, int) and slot >= 0:
+        slot -= sum(1 for item in extras if item < slot)
+        if 0 <= slot < len(new):
+            new[slot] = text
+            return new
+    new.append(text)
+    return new
+
+
+def _materialize_prompt(extracted: dict, stdin_text: str | None) -> str:
+    kind = extracted.get("kind")
+    if kind == "file":
+        return _read_prompt(str(extracted.get("text") or ""), "file")
+    if kind == "stdin":
+        if stdin_text is not None:
+            return stdin_text
+        if sys.stdin.isatty():
+            return ""
+        return sys.stdin.read()
+    return str(extracted.get("text") or "")
+
+
+def prepare_intercept(
+    caller: str,
+    argv: list[str],
+    *,
+    fetch=None,
+    config: dict | None = None,
+    stdin_text: str | None = None,
+    stdout_is_tty: bool | None = None,
+) -> dict:
+    """Decide local, escalate, or passthrough. Does not exec."""
+    tty = sys.stdout.isatty() if stdout_is_tty is None else stdout_is_tty
+    base = {"action": "passthrough", "argv": list(argv), "answer": "", "result": {}, "set_done": False}
+    if any(token in {"-h", "--help", "--version"} for token in argv):
+        return base
+    if router_disabled():
+        return base
+    extracted = extract_prompt(caller, argv, stdout_is_tty=tty)
+    if extracted["kind"] == "none":
+        return base
+    if wants_structured_output(caller, argv):
+        return base
+    task = _materialize_prompt(extracted, stdin_text)
+    if not task.strip():
+        return base
+    if task.startswith("[LOCAL-FIRST BRIEF v1]"):
+        base["set_done"] = True
+        return base
+    result = route_task(task, caller=_caller_key(caller), fetch=fetch, config=config, execute_paid=None)
+    if _caller_key(caller) == "grok":
+        action, new_argv = plan_grok(argv, result)
+    elif result.get("decision") == "complete_local" and str(result.get("answer") or "").strip():
+        action, new_argv = "local", []
+    else:
+        action, new_argv = "escalate", _rewrite_prompt(argv, extracted, paid_prompt(result, task))
+    return {
+        "action": action,
+        "argv": new_argv,
+        "answer": str(result.get("answer") or ""),
+        "result": result,
+        "set_done": action == "escalate",
+    }
+
+
+def run_intercept(
+    caller: str,
+    argv: list[str],
+    *,
+    fetch=None,
+    config: dict | None = None,
+    stdin_text: str | None = None,
+    stdout_is_tty: bool | None = None,
+) -> int:
+    try:
+        decision = prepare_intercept(
+            caller, argv, fetch=fetch, config=config, stdin_text=stdin_text, stdout_is_tty=stdout_is_tty,
+        )
+    except Exception:
+        decision = {"action": "passthrough", "argv": list(argv), "answer": "", "result": {}, "set_done": False}
+    if decision.get("action") == "local":
+        sys.stdout.write((decision.get("answer") or "").rstrip() + "\n")
+        backend = (decision.get("result") or {}).get("backend")
+        sys.stderr.write(f"[local-first] decision=complete_local paid_invoked=false backend={backend}\n")
+        sys.stdout.flush()
+        sys.stderr.flush()
+        return 0
+    bin_path = resolve_real_bin(caller, config)
+    if not bin_path:
+        sys.stderr.write("[local-first] real binary not found\n")
+        return 127
+    if decision.get("set_done"):
+        os.environ["LOCAL_FIRST_DONE"] = "1"
+    result = decision.get("result") or {}
+    if decision.get("action") == "escalate":
+        sys.stderr.write(
+            f"[local-first] decision=need_premium paid_invoked=true backend={result.get('backend')} why={result.get('why')}\n"
+        )
+    sys.stdout.flush()
+    sys.stderr.flush()
+    forwarded = decision.get("argv")
+    if not isinstance(forwarded, list):
+        forwarded = list(argv)
+    os.execv(bin_path, [bin_path, *forwarded])
+    return 127
 
 
 def run_grok_intercept(argv: list[str]) -> int:
-    if any(a in {"-h", "--help", "--version"} for a in argv):
-        os.execv(real_grok_bin(), [real_grok_bin(), *argv])
-    if router_disabled():
-        bin_path = real_grok_bin()
-        os.execv(bin_path, [bin_path, *argv])
-    prompt, kind, _idx = _extract_prompt(argv)
-    if kind == "none":
-        bin_path = real_grok_bin()
-        os.execv(bin_path, [bin_path, *argv])
-    task = _read_prompt(prompt, kind)
-    if not task.strip():
-        bin_path = real_grok_bin()
-        os.execv(bin_path, [bin_path, *argv])
-    # A prompt that is already an escalation brief must not loop.
-    if task.startswith("[LOCAL-FIRST BRIEF v1]"):
-        os.environ["LOCAL_FIRST_DONE"] = "1"
-        bin_path = real_grok_bin()
-        os.execv(bin_path, [bin_path, *argv])
-    result = route_task(task, caller="grok", execute_paid=None)
-    action, new_argv = plan_grok(argv, result)
-    if action == "local":
-        sys.stdout.write((result.get("answer") or "").rstrip() + "\n")
-        sys.stderr.write(
-            f"[local-first] decision=complete_local paid_invoked=false backend={result.get('backend')}\n"
+    return run_intercept("grok", argv)
+
+
+def _content_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and item.get("text"):
+                parts.append(str(item.get("text")))
+        return "\n".join(parts)
+    return ""
+
+
+def openai_completion(payload: dict, *, fetch=None, config: dict | None = None) -> tuple[int, dict, str, bool]:
+    """One chat completion. The door never starts a paid IDE model."""
+    messages = payload.get("messages") if isinstance(payload, dict) else None
+    task = "\n".join(
+        _content_text(msg.get("content"))
+        for msg in (messages or [])
+        if isinstance(msg, dict) and msg.get("role") == "user"
+    ).strip()
+    if not task:
+        task = "Summarize the request."
+    try:
+        result = route_task(task, caller="openai-door", fetch=fetch, config=config, execute_paid=None)
+    except Exception:
+        result = {
+            "decision": "need_premium",
+            "answer": "",
+            "brief": build_brief("unsure", "router_error", "Local route failed."),
+            "backend": "unavailable",
+            "why": "router_error",
+        }
+    local = result.get("decision") == "complete_local" and str(result.get("answer") or "").strip()
+    if local:
+        content = str(result.get("answer") or "").rstrip()
+    else:
+        content = (
+            str(result.get("brief") or "").rstrip()
+            + "\n\nThis endpoint cannot start the paid editor model. "
+            + "Switch the model picker to a paid model and use the brief above.\n"
         )
+    body = {
+        "id": "local-first",
+        "object": "chat.completion",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+    }
+    return 200, {"X-Local-First-Decision": "complete_local" if local else "need_premium"}, json.dumps(body), bool(payload.get("stream"))
+
+
+def serve_openai(argv: list[str]) -> int:
+    host = "127.0.0.1"
+    port = 8791
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if token == "--host" and index + 1 < len(argv):
+            host = argv[index + 1]
+            index += 2
+            continue
+        if token == "--port" and index + 1 < len(argv):
+            port = int(argv[index + 1])
+            index += 2
+            continue
+        index += 1
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        sys.stderr.write("local-first door refuses a non-loopback bind\n")
+        return 2
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, fmt: str, *args) -> None:
+            return
+
+        def _send(self, status: int, headers: dict, data: bytes, content_type: str) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(data)))
+            for key, value in headers.items():
+                self.send_header(key, value)
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path.split("?", 1)[0] != "/v1/models":
+                self._send(404, {}, b"{}", "application/json")
+                return
+            body = json.dumps({"object": "list", "data": [{"id": "local-first", "object": "model"}]}).encode()
+            self._send(200, {}, body, "application/json")
+
+        def do_POST(self) -> None:  # noqa: N802
+            if self.path.split("?", 1)[0] != "/v1/chat/completions":
+                self._send(404, {}, b"{}", "application/json")
+                return
+            length = int(self.headers.get("Content-Length") or "0")
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send(400, {}, b"{}", "application/json")
+                return
+            status, headers, text, stream = openai_completion(payload)
+            if stream:
+                chunk = json.dumps({
+                    "id": "local-first",
+                    "object": "chat.completion.chunk",
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": json.loads(text)["choices"][0]["message"]["content"]},
+                        "finish_reason": "stop",
+                    }],
+                })
+                data = ("data: " + chunk + "\n\ndata: [DONE]\n\n").encode()
+                self._send(status, headers, data, "text/event-stream")
+                return
+            self._send(status, headers, text.encode(), "application/json")
+
+    try:
+        server = ThreadingHTTPServer((host if host != "localhost" else "127.0.0.1", port), Handler)
+    except OSError as exc:
+        sys.stderr.write(f"local-first door failed: {exc}\n")
+        return 1
+    sys.stderr.write(f"[local-first] openai door on http://127.0.0.1:{port}/v1\n")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
         return 0
-    if action == "passthrough":
-        new_argv = list(argv)
-    os.environ["LOCAL_FIRST_DONE"] = "1"
-    bin_path = real_grok_bin()
-    sys.stderr.write(
-        f"[local-first] decision=need_premium paid_invoked=true backend={result.get('backend')} why={result.get('why')}\n"
-    )
-    os.execv(bin_path, [bin_path, *new_argv])
-    return 127
+    return 0
 
 
 def _selftest() -> int:
     cases = []
+    saved_router = os.environ.get("LOCAL_FIRST_ROUTER")
+    saved_done = os.environ.get("LOCAL_FIRST_DONE")
+    saved_record = os.environ.get("LOCAL_FIRST_RECORD")
+    os.environ.pop("LOCAL_FIRST_ROUTER", None)
+    os.environ.pop("LOCAL_FIRST_DONE", None)
+    os.environ["LOCAL_FIRST_RECORD"] = "0"
 
     def check(name: str, ok: bool) -> None:
         cases.append((name, ok))
@@ -661,6 +1128,46 @@ def _selftest() -> int:
             os.environ.pop("LOCAL_FIRST_ROUTER", None)
         else:
             os.environ["LOCAL_FIRST_ROUTER"] = off
+    claude_prompt = ["-p", "--model", "opus", "--output-format", "text", "Summarize this log in one sentence"]
+    check("claude print prompt", extract_prompt("claude", claude_prompt)["text"] == "Summarize this log in one sentence")
+    check("claude tui passthrough", extract_prompt("claude", ["Summarize this log"], stdout_is_tty=True)["kind"] == "none")
+    check("claude command passthrough", extract_prompt("claude", ["doctor"])["kind"] == "none")
+    codex_prompt = ["exec", "--sandbox", "read-only", "Summarize this log in one sentence"]
+    check("codex exec prompt", extract_prompt("codex", codex_prompt)["text"] == "Summarize this log in one sentence")
+    check("codex tui passthrough", extract_prompt("codex", ["Summarize this log"])["kind"] == "none")
+    cursor_prompt = ["--print", "--force", "--trust", "--output-format", "text", "--model", "paid", "--workspace", "/tmp/ws", "Summarize this log in one sentence"]
+    check("cursor print prompt", extract_prompt("cursor-agent", cursor_prompt)["text"] == "Summarize this log in one sentence")
+    check("cursor tui passthrough", extract_prompt("cursor-agent", ["Summarize this log"], stdout_is_tty=True)["kind"] == "none")
+    check("cursor login passthrough", extract_prompt("cursor-agent", ["login"])["kind"] == "none")
+    fake_low = {"ok": True, "text": '{"decision":"complete_local","confidence":0.9,"why":"short","answer":"The router started and wrote a one-line summary."}', "backend": "fake"}
+    fake_high = {"ok": True, "text": '{"decision":"complete_local","confidence":0.99,"why":"done","answer":"Shipped the production deploy already and mailed the team."}', "backend": "fake"}
+    cfg = {"transport": "inject", "extra_high_substrings": []}
+    local_plan = prepare_intercept("claude", ["-p", "Summarize this log in one sentence please"], fetch=lambda _p: fake_low, config=cfg, stdout_is_tty=True)
+    check("claude local does not escalate", local_plan["action"] == "local")
+    high_plan = prepare_intercept("codex", ["exec", "implement the function and deploy it to production"], fetch=lambda _p: fake_high, config=cfg, stdout_is_tty=True)
+    check("codex high never local", high_plan["action"] == "escalate" and "[LOCAL-FIRST BRIEF v1]" in " ".join(high_plan["argv"]))
+    cursor_high = prepare_intercept("cursor-agent", ["--print", "implement the function and deploy it to production"], fetch=lambda _p: fake_high, config=cfg, stdout_is_tty=True)
+    check("cursor high never local", cursor_high["action"] == "escalate")
+    called = {"n": 0}
+
+    def boom(_prompt):
+        called["n"] += 1
+        return fake_low
+
+    structured = prepare_intercept("claude", ["-p", "--output-format", "json", "Summarize this log"], fetch=boom, config=cfg, stdout_is_tty=True)
+    check("json mode passthrough", structured["action"] == "passthrough" and called["n"] == 0)
+    if saved_router is None:
+        os.environ.pop("LOCAL_FIRST_ROUTER", None)
+    else:
+        os.environ["LOCAL_FIRST_ROUTER"] = saved_router
+    if saved_done is None:
+        os.environ.pop("LOCAL_FIRST_DONE", None)
+    else:
+        os.environ["LOCAL_FIRST_DONE"] = saved_done
+    if saved_record is None:
+        os.environ.pop("LOCAL_FIRST_RECORD", None)
+    else:
+        os.environ["LOCAL_FIRST_RECORD"] = saved_record
     failed = [name for name, ok in cases if not ok]
     return 1 if failed else 0
 
@@ -669,6 +1176,10 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "--grok-intercept":
         return run_grok_intercept(argv[1:])
+    if argv and argv[0] == "--intercept" and len(argv) > 1:
+        return run_intercept(argv[1], argv[2:])
+    if argv and argv[0] == "--openai-serve":
+        return serve_openai(argv[1:])
     if argv and argv[0] == "--selftest":
         return _selftest()
     execute = False

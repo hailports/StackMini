@@ -1,0 +1,19 @@
+[
+  {
+    "name": "Local first",
+    "vendor": "customendpoint",
+    "apiKey": "local",
+    "apiType": "chat-completions",
+    "models": [
+      {
+        "id": "local-first",
+        "name": "local-first",
+        "url": "http://127.0.0.1:8791/v1/chat/completions",
+        "toolCalling": false,
+        "vision": false,
+        "maxInputTokens": 8000,
+        "maxOutputTokens": 2000
+      }
+    ]
+  }
+]

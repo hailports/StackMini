@@ -31,7 +31,7 @@ This repo is a fresh write of a local model appliance. Private trees, databases,
 | Open-card lap, one changed card, next step held for a go | hailports/openloop.py |
 | Suggested card held until Approve and Post, Edit, or Dismiss | hailports/suggest.py, hailports/ticket_guard.py |
 | Precomputed packet for a paid call | hailports/precompute.py, hailports/router.py |
-| Local-first route: short work stays local, hard work gets a brief | hailports/local_first.py, contrib/local-first/ |
+| Local-first route: short work stays local, hard work gets a brief | hailports/local_first.py, contrib/local-first/ (grok, claude, codex, cursor-agent) |
 | Login-broken alert | hailports/alerts.py |
 | Vision input | hailports/images.py, hailports_setup, docs/MODEL.md |
 | Embedding server | hailports_setup/models.py `embed_server_args`, hailports/notes.py |
