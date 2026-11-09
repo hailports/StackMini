@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import urllib.request
 from pathlib import Path
 
 import pytest
+
+NOT_ON_WINDOWS = pytest.mark.skipif(sys.platform == "win32", reason="macOS-only reflow needs fcntl")
 
 from hailports.brain.ask import ask
 from hailports.brain.client import curl_command, socks_if_present
@@ -136,6 +139,7 @@ def test_reflow_math_and_unknown_state_is_a_noop(tmp_path: Path):
     assert dry["would"] == "noop"
 
 
+@NOT_ON_WINDOWS
 def test_reflow_arms_only_for_a_portrait_phone(tmp_path: Path):
     class Box:
         def __init__(self):
