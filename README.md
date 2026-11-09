@@ -61,7 +61,7 @@ flowchart LR
   brain[Notes] --> router
 ```
 
-Web chat listens on 127.0.0.1 port 8080 and talks to llama-server on port 18080. Notes default to port 8078. Embeddings, if you run them, default to port 8097. Change the ports in the config file.
+Web chat listens on 127.0.0.1 port 8080 and talks to llama-server on port 18080 (no API key, so never publish either port through a tunnel without an access policy). Notes default to port 8078. Embeddings, if you run them, default to port 8097. Change the ports in the config file.
 
 ## Requirements
 
@@ -208,3 +208,7 @@ Chat bridges (Telegram, Signal, Matrix) stay stubs. `hailports/local_bridges/` i
 - Contributing: `CONTRIBUTING.md`
 - Security: `SECURITY.md`
 - Sponsor link: `.github/FUNDING.yml` is a placeholder until a real URL exists
+
+## Reference deployment status
+
+`docs/REFERENCE_STATUS.md` records what an audit of the reference deployment found working, degraded, broken, or not built. It is a dated snapshot, not a health guarantee.

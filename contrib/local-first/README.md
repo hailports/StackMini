@@ -18,6 +18,10 @@ Override a real binary with `GROK_REAL_BIN`, `CLAUDE_REAL_BIN`, `CODEX_REAL_BIN`
 
 `LOCAL_FIRST_ROUTER=0` skips the door. A prompt that is already a local-first brief is passed through.
 
+`LOCAL_FIRST_DONE=1` also skips the door. Set it in the environment of any lane that must never use local compute. On the reference deployment, social and content lanes call `claude -p` by name. After the wrappers went onto PATH, those prompts were routed to the local model, against that deployment's rule. The fix is one line in the lane's shared CLI environment helper (`env["LOCAL_FIRST_DONE"] = "1"`). Check every caller that runs these binaries by name before you install the wrappers.
+
+The HTTP fallback (`http_url`, `prep_url` in the router config) must carry the same auth the model door expects. When it does not, every HTTP try fails with 401 and the receipt says `local_unavailable`. That looks like a down model, but it is an auth gap.
+
 Interactive sessions with no print / exec prompt are passed through. `claude -p`, `codex exec`, and `cursor-agent --print` are intercepted. JSON output modes are passed through so a script still sees the CLI's own event stream.
 
 ## Editor chat

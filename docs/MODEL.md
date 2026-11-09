@@ -8,6 +8,19 @@ Apple M4, 10 cores (4 performance, 6 efficiency), 24 GB unified memory. No seria
 
 ## Chat model
 
+As of the 2026-11-09 audit the reference machine serves the IQ3_XS file below. The `mix_q3gud_im` file is kept beside it as the fallback, and the installer still picks `mix_q3gud_im` for 20 GB+ machines (that default is unchanged).
+
+| Piece | Running on the reference machine |
+| --- | --- |
+| File on disk | `m.gguf`, 14483689408 bytes |
+| Sidecar name | MiniCPM-V-4.7-35B-A3B (IQ3_XS) |
+| Quant | IQ3_XS |
+| Fallback beside it | `m.gguf.mix_q3gud_im`, 15503944896 bytes |
+| Measured decode | about 53.7 tokens/s average over about 2.88M generated tokens, read from the server's `/metrics` counters (not a bench). Prompt about 382 tokens/s. Draft acceptance about 87%. |
+| Expected sustained decode | about 40 tokens/s or better |
+
+The table below is the published `mix_q3gud_im` build the installer downloads.
+
 | Piece | Value |
 | --- | --- |
 | Family | MiniCPM-V 4.7 35B-A3B (about 3B active, vision and text) |
