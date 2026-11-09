@@ -2,6 +2,10 @@
 """Policy tests for the local-first router. No network and no paid CLI."""
 import os
 import sys
+
+import pytest
+
+NOT_ON_WINDOWS = pytest.mark.skipif(sys.platform == "win32", reason="POSIX exec and /tmp sentinel paths")
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -132,6 +136,7 @@ def test_prompt_extraction_matches_real_flags():
     assert r.extract_prompt("grok", ["--prompt-file", "note.md"])["kind"] == "file"
 
 
+@NOT_ON_WINDOWS
 def test_complete_local_does_not_exec_paid_bins(tmp_path=None):
     paid = Path("/tmp/local-first-paid-should-not-run")
     paid.write_text("#!/bin/sh\necho EXEC\nexit 99\n")
@@ -164,6 +169,7 @@ def test_complete_local_does_not_exec_paid_bins(tmp_path=None):
     assert calls == []
 
 
+@NOT_ON_WINDOWS
 def test_high_stakes_escalates_without_complete_local():
     paid = Path("/tmp/local-first-paid-sentinel")
     paid.write_text("#!/bin/sh\necho EXEC\n")
@@ -202,6 +208,7 @@ def test_high_stakes_escalates_without_complete_local():
         paid.unlink(missing_ok=True)
 
 
+@NOT_ON_WINDOWS
 def test_interactive_and_router_off_passthrough():
     paid = Path("/tmp/local-first-paid-pass")
     paid.write_text("#!/bin/sh\nexit 0\n")
@@ -251,6 +258,7 @@ def test_interactive_and_router_off_passthrough():
         paid.unlink(missing_ok=True)
 
 
+@NOT_ON_WINDOWS
 def test_fail_open_execs_real_bin():
     paid = Path("/tmp/local-first-paid-failopen")
     paid.write_text("#!/bin/sh\nexit 0\n")
