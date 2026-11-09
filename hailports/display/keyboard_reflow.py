@@ -44,7 +44,10 @@ session file is fresh.
 from __future__ import annotations
 
 import argparse
-import fcntl
+try:
+    import fcntl
+except ImportError:  # Windows has no fcntl; the reflow is a macOS feature.
+    fcntl = None
 import json
 import math
 import os
@@ -462,6 +465,9 @@ class Controller:
             base["reason"] = "cannot create state directory"
             return base
         try:
+            if fcntl is None:
+                base["noop"] = "unsupported-os"
+                return base
             with lock_path.open("a+") as lock:
                 try:
                     fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
