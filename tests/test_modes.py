@@ -386,6 +386,7 @@ def test_keychain_value_is_not_written(tmp_path, monkeypatch):
         KEY,
         "19180",
         "cli,webchat",
+        "skip",
         "yes",
     ])
     wiz = Wizard(args, io, secrets=secrets)
