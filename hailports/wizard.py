@@ -6,6 +6,7 @@ Safe to run again. Progress is saved without API keys. --yes answers with defaul
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import sys
 import urllib.request
@@ -16,8 +17,18 @@ from hailports.doctor import failed, format_report, run_doctor
 from hailports.llm import health as local_health
 from hailports.paths import config_dir
 from hailports.promptui import PlainIO, YesIO
-from hailports.providers.factory import DEFAULTS, build_router
+from hailports.providers.factory import DEFAULTS, build_cloud, build_router
 from hailports.secrets_store import EnvAndKeychain
+from hailports_setup.connect_assist import (
+    apply_connection,
+    assist_bridges,
+    describe,
+    detect_native,
+    fallback_plan,
+    parse_kinds,
+    parse_ports,
+    permission_lines,
+)
 from hailports_setup.detect import probe
 from hailports_setup.installer import default_config, parse_modules
 from hailports_setup.models import pick_binary, pick_model
@@ -82,6 +93,9 @@ def add_setup_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--download", action="store_true", help="Download the llama.cpp build and the model.")
     parser.add_argument("--apply-install", action="store_true", help="Allow setup to run a package manager after you agree.")
     parser.add_argument("--binary", choices=["prebuilt", "source"], default="prebuilt")
+    parser.add_argument("--connect", choices=["native", "bridges", "skip"], default="", help="Native apps, loopback bridges, or neither.")
+    parser.add_argument("--bridge-kinds", default="", help="Comma-separated bridges: mail, meetings, tracker, cdp.")
+    parser.add_argument("--bridge-ports", default="", help="Ports for mail, meetings, tracker, and cdp.")
 
 
 def package_command(os_name: str, distro: str, package: str) -> list[str]:
@@ -124,6 +138,8 @@ def _presets(args, automatic: bool) -> dict:
             presets["cloud_model"] = args.cloud_model
         if args.model and args.model != "auto":
             presets["local_model"] = args.model
+        if args.connect:
+            presets["connect"] = args.connect
         return presets
     return {
         "mode": args.mode or "local",
@@ -138,6 +154,7 @@ def _presets(args, automatic: bool) -> dict:
         "model_port": str(args.model_port),
         "embed_port": str(args.embed_port),
         "modules": args.modules,
+        "connect": args.connect or "skip",
         "install_cmake": "no",
         "retry": "no",
         "resume": "no",
@@ -208,7 +225,7 @@ class Wizard:
             steps += ["provider", "base_url", "cloud_model", "key"]
         if mode in ("local", "hybrid"):
             steps += ["hardware", "local_model", "binary"]
-        steps += ["ports", "modules", "prereqs", "validate", "write", "summary"]
+        steps += ["ports", "modules", "connect", "prereqs", "validate", "write", "summary"]
         return steps
 
     def _remember(self, key: str, value: str) -> str:
@@ -484,6 +501,140 @@ class Wizard:
         self._remember("modules", picked)
         return "ok"
 
+    def _step_connect(self) -> str:
+        cached = self._already("connect")
+        if cached is not None:
+            return "ok"
+        automatic = bool(self.args.yes or self.args.non_interactive)
+        default = self.args.connect or ("skip" if automatic else "native")
+        picked = self.io.choose(
+            "connect",
+            "How should email, notes, and chats connect?",
+            "Native records the apps installed on this computer. Bridges stay on this computer, and the draft comes from your own model subscription. Skip leaves both off. Setup does not read mail, notes, or chats.",
+            [
+                ("native", "Mail, notes, and chats through the apps installed here."),
+                ("bridges", "Loopback bridges. Your subscription drafts the config."),
+                ("skip", "Leave email, notes, and chats unconnected."),
+            ],
+            default,
+        )
+        if picked == "back":
+            return "back"
+        if picked == "skip":
+            self._remember("connect", "skip")
+            self._log("connect skip")
+            return "ok"
+        if picked == "native":
+            return self._connect_native()
+        if picked == "bridges":
+            return self._connect_bridges()
+        self._remember("connect", "skip")
+        return "ok"
+
+    def _connect_native(self) -> str:
+        hw = self.hw or probe(self.args.target_os, self.args.arch, self.args.accel, self.args.ram_gb, self.args.vram_gb)
+        self.hw = hw
+        found = detect_native(hw.os_name)
+        for surface in ("email", "notes", "chats"):
+            item = found.get(surface) or {}
+            if item.get("enabled"):
+                self.io.say(surface + ": " + str(item.get("app")) + " at " + str(item.get("path")))
+            else:
+                self.io.say(surface + ": " + str(item.get("reason") or "not found"))
+        for line in permission_lines(hw.os_name, found):
+            self.io.say(line)
+        self._remember("connect", "native")
+        self._remember("native_json", json.dumps(found))
+        self._log("connect native")
+        return "ok"
+
+    def _connect_bridges(self) -> str:
+        kinds_raw = self.io.ask(
+            "bridge_kinds",
+            "Which local bridges should turn on?",
+            "Comma-separated: mail, meetings, tracker, cdp. back returns to the previous step.",
+            self.args.bridge_kinds or "mail,meetings",
+        )
+        if kinds_raw == "back":
+            return "back"
+        if kinds_raw == "skip":
+            self._remember("connect", "skip")
+            self._log("connect skip")
+            return "ok"
+        try:
+            enabled = parse_kinds(kinds_raw)
+        except ValueError as exc:
+            raise StepFailed(str(exc), "Use mail, meetings, tracker, or cdp.") from exc
+        if not enabled:
+            raise StepFailed("No bridge name was recognized.", "Use mail, meetings, tracker, or cdp.")
+        ports_raw = self.io.ask(
+            "bridge_ports",
+            "Ports for mail, meetings, tracker, and cdp",
+            "Four numbers, or one number used for all four. Each URL stays on 127.0.0.1.",
+            self.args.bridge_ports or "9222,9223,9224,9222",
+        )
+        if ports_raw == "back":
+            return "back"
+        if ports_raw == "skip":
+            self._remember("connect", "skip")
+            return "ok"
+        try:
+            ports = parse_ports(ports_raw)
+        except ValueError as exc:
+            raise StepFailed(str(exc), "Use ports from 1 to 65535, for example 9222,9223,9224,9222.") from exc
+        ready = self._bridge_subscription()
+        if ready in ("back", "skip"):
+            if ready == "skip":
+                self._remember("connect", "skip")
+            return ready
+        hw = self.hw or probe(self.args.target_os, self.args.arch, self.args.accel, self.args.ram_gb, self.args.vram_gb)
+        self.hw = hw
+        if self.args.skip_network:
+            plan = fallback_plan(hw.os_name, enabled, ports, "skipped")
+            self.io.say("Subscription assist skipped. Wrote the ports from this step.")
+        else:
+            key = self.secrets.get(self._cfg()) or ""
+            if not key:
+                raise StepFailed(
+                    "Bridge setup uses your own model subscription, and no key is set.",
+                    "Export HAILPORTS_API_KEY from that subscription, or go back and choose native.",
+                )
+            cloud = build_cloud(self._cfg(), key)
+            provider = str((self._cfg().get("cloud") or {}).get("provider") or "the configured provider")
+            self.io.say("Asking " + provider + " to draft the bridge config. Mail, notes, and chats are not sent.")
+            plan = assist_bridges(cloud, os_name=hw.os_name, enabled=enabled, ports=ports, secret=key)
+            if plan.get("source") == "subscription":
+                self.io.say("Bridge config came from your subscription.")
+            else:
+                self.io.say("The subscription reply was not used. Wrote the ports from this step.")
+        for line in plan.get("steps") or []:
+            self.io.say(line)
+        self._remember("connect", "bridges")
+        self._remember("bridge_kinds", ",".join(enabled))
+        self._remember("bridge_plan_json", json.dumps({"bridges": plan["bridges"], "source": plan.get("source") or "defaults"}))
+        self._log("connect bridges " + str(plan.get("source") or "defaults"))
+        return "ok"
+
+    def _bridge_subscription(self) -> str:
+        """Make sure a provider the user named is in the answers. Local mode has not asked yet."""
+        if "provider" not in self.answers:
+            result = self._step_provider()
+            if result in ("back", "skip"):
+                return result
+        if "base_url" not in self.answers:
+            result = self._step_base_url()
+            if result in ("back", "skip"):
+                return result
+        if "cloud_model" not in self.answers:
+            result = self._step_cloud_model()
+            if result in ("back", "skip"):
+                return result
+        if "key_source" not in self.answers:
+            result = self._step_key()
+            if result in ("back", "skip"):
+                return result
+        return "ok"
+
     def _step_prereqs(self) -> str:
         mode = self.answers.get("mode") or "local"
         problems = []
@@ -555,6 +706,7 @@ class Wizard:
         checks = run_doctor(cfg, self.secrets, live=not self.args.skip_network)
         self.io.say("Health summary")
         self.io.say(format_report(checks))
+        self.io.say(describe(cfg))
         self.io.say("Next commands:")
         self.io.say("  hailports doctor")
         self.io.say("  hailports chat")
@@ -623,6 +775,9 @@ class Wizard:
             "max_local_output_chars": 900,
             "compact_char_budget": 1600,
         }
+        hw = self.hw or probe(self.args.target_os, self.args.arch, self.args.accel, self.args.ram_gb, self.args.vram_gb)
+        self.hw = hw
+        apply_connection(cfg, self.answers, hw.os_name)
         return cfg
 
     def _write_units(self, cfg: dict) -> None:

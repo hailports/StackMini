@@ -96,6 +96,8 @@ hailports setup
 
 Setup is a guided terminal wizard. It explains each step, accepts `back` and `skip`, and can be run again. `--yes` accepts the defaults without questions. When a step fails, it says what went wrong, how to fix it, and offers a retry. After a model or an API key is in place, `hailports ask "why did the build fail"` answers from the setup log.
 
+The wizard then connects email, notes, and chats, or leaves them off. Native records the apps installed on this computer: Mail, Notes, and Messages on macOS, Outlook and OneNote on Windows. Linux has no native app in this step. Setup does not open those apps and does not read them. The other choice is the loopback bridges. That call uses the provider and key you configured, sends only the system name and the ports, and keeps a reply only when every URL stays on this computer. `--connect native`, `--connect bridges`, or `--connect skip` picks the path. `--yes` leaves the connection off unless you pass `--connect`.
+
 ```sh
 hailports doctor
 hailports chat
