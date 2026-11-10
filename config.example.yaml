@@ -41,6 +41,9 @@ local_bridges:
   cdp:
     enabled: false
     base_url: http://127.0.0.1:9222
+integrations:
+  # off, native, or bridges. hailports setup writes this.
+  kind: off
 web:
   search_url: ""
   news_url: ""

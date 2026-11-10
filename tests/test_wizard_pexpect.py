@@ -63,6 +63,8 @@ def test_interactive_wizard(tmp_path):
     child.sendline(str(web))
     child.expect("step modules")
     child.sendline("cli,webchat")
+    child.expect("step connect")
+    child.sendline("skip")
     child.expect("step write_ok")
     child.sendline("y")
     child.expect("Setup finished.")

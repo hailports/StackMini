@@ -50,6 +50,13 @@ def default_config(hw, model, modules: dict[str, bool], label: str, mode: str = 
             "matrix": {"homeserver": "https://matrix.example.invalid", "token": "CHANGE_ME", "room": "CHANGE_ME"},
         },
         "imessage": {"allowed_handle": "CHANGE_ME"},
+        "integrations": {"kind": "off"},
+        "local_bridges": {
+            "mail": {"enabled": False, "base_url": "http://127.0.0.1:9222"},
+            "meetings": {"enabled": False, "base_url": "http://127.0.0.1:9223"},
+            "tracker": {"enabled": False, "base_url": "http://127.0.0.1:9224"},
+            "cdp": {"enabled": False, "base_url": "http://127.0.0.1:9222"},
+        },
         "accel": hw.accel,
         "os": hw.os_name,
         "cloud": {
@@ -123,6 +130,7 @@ def _print_plan(plan: dict) -> None:
         print(f"llama_binary: {binary.url}")
         print("source_build: cmake -B build " + " ".join(binary.source_flags))
     print("modules: " + ",".join(k for k, v in plan["config"]["modules"].items() if v))
+    print("connections: " + str((plan["config"].get("integrations") or {}).get("kind") or "off"))
     for spec in plan["specs"]:
         print(f"service: {spec.label} kind: {spec.kind}")
         hint = install_hint(hw.os_name, spec.label, Path(spec.label))

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from hailports.config import is_placeholder
 from hailports.providers.factory import build_router
 from hailports.secrets_store import EnvAndKeychain
+from hailports_setup.connect_assist import connection_status
 
 _SECRET_KEYS = {"token", "api_key", "apikey", "secret", "password", "key"}
 _SKIP_KEYS = {"key_env", "keychain_service", "keychain_account", "allowed_handle"}
@@ -106,6 +107,8 @@ def run_doctor(cfg: dict, secrets=None, router=None, live: bool = True) -> list[
     port = int(web.get("port") or 8080)
     free = port_open(host, port)
     checks.append(Check("web-port", True, f"{host}:{port} " + ("free" if free else "already in use")))
+    ok, detail = connection_status(cfg)
+    checks.append(Check("connections", ok, detail))
     return checks
 
 
