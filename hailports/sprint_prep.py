@@ -1144,6 +1144,20 @@ def main(argv=None) -> int:
         status, result.get("item_count"), row.get("llm_calls"), row.get("prompt_tokens"),
         row.get("completion_tokens"), row.get("grok_bot_tokens_avoided"), row.get("wall_s"),
     ))
+    # Current iteration, open items for the owner only. Over 25 sends nothing.
+    if status == "ok" and os.environ.get("SELFNOTE_AFTER", "1") != "0":
+        try:
+            try:
+                from note_scope import gate_latest
+            except ImportError:
+                from hailports.note_scope import gate_latest
+            gated = gate_latest(stack, args.iteration)
+            log_line(out / "run.log", "selfnote keep=%s abort=%s" % (
+                gated.get("would_send"), gated.get("aborted") or ""))
+            if gated.get("aborted") == "cap":
+                log_line(out / "run.log", "selfnote abort cap; no notes")
+        except Exception as exc:
+            log_line(out / "run.log", "selfnote_error " + type(exc).__name__)
     return 0 if status in {"ok", "off", "model_down", "iteration_unset"} else 1
 
 

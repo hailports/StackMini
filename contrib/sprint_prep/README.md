@@ -36,4 +36,4 @@ An unfinished day file (status still running) is resumed. Cards that already hav
 
 ## Notes
 
-A later note step may mail one note per card. It mails a card only when System.AssignedTo is the configured owner, or when blocking_who names that owner. The next-step sentence does not count. If that step would send more than 25 notes, it sends none.
+A later note step may mail one note per card. It mails a card only when it is in the current iteration, System.AssignedTo is the configured owner or blocking_who names that owner, and the state is still open. Testing, resolved, closed, done, and removed are not open. The next-step sentence does not count. If that step would send more than 25 notes, it sends none.
