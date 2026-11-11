@@ -37,4 +37,21 @@ from hailports.jev import classify, noul, choice, score
 answers = classify(state, questions, caller="example")  # None on error
 ```
 
-Logs go to `~/.local/state/jev/jev.jsonl` (question ids, ok/ms/err only).
+Logs go to `~/.local/state/jev/jev.jsonl` (question ids, ok/ms/err, caller, host). The state text and the key are not logged. Secrets in the state (passwords, tokens, one-time codes) are masked before the request. State is clipped to 4000 characters.
+
+Treat only confident scores as decisive (`noul` >= 0.9 or <= 0.1). A mid score, a timeout, or `null` leaves the caller's existing behavior. Never block a task on this call.
+
+`hailports.jev_gates` is the decision layer: local-answer quality, a pre-route check, a done-check, a risk check before a mutation, whether a pack answers a question, a draft gate, and noise triage. Draft staging fails closed only on a confident fail. Everything else fails open.
+
+## Social queue gates
+
+`hailports.socials_jev` is an optional fail-open check before a social draft is queued. Callers use a `socials-*` caller field. One miss does not block the existing path.
+
+- `draft_quality` (`socials-draft`) — specific and finished, not a stub
+- `voice_ok` (`socials-voice`) — plain human speech, no AI tells
+- `hook_ok` (`socials-hook`) — a concrete first line
+- `unsafe` (`socials-risk`) — harassment, a pile-on, a money promise, or a private-system leak
+- `near_duplicate` (`socials-dedupe`) — the same claim as a recent line
+- `before_queue` (`socials-queue`) — those checks together. A post can fail the hook. A reply or comment does not. A short react is risk only
+
+Confident scores only (`noul` >= 0.9 or <= 0.1). `hold()` is the production entry and loads recent lines when the caller does not pass any. `JEV_DISABLE=1` turns the calls off. Secrets are masked. Legal, finance, and credential text is not sent.

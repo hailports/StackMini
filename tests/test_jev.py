@@ -54,6 +54,33 @@ def test_noul_and_choice_helpers():
     assert sc == 2 and sc_conf == 0.5
 
 
+def test_mask_state_redacts_secrets():
+    masked = jev.mask_state("password=demo-not-real and token=abc")
+    assert "demo-not-real" not in masked
+    assert "[redacted]" in masked
+
+
+def test_gates_fail_open_and_confident(monkeypatch):
+    monkeypatch.setenv("JEV_DISABLE", "1")
+    from hailports import jev_gates as gates
+    assert gates.score_local("Summarize this log", "a finished line") is None
+    monkeypatch.delenv("JEV_DISABLE", raising=False)
+
+    def fake_low(_state, _questions, caller, timeout=4.0):
+        return {"quality": {"noul": 0.05}, "complete": {"noul": 0.95}}
+
+    def fake_commit(_state, _questions, caller, timeout=4.0):
+        return {"commits": {"noul": 0.95}}
+
+    monkeypatch.setattr(gates, "_ask", fake_low)
+    assert gates.score_local("Summarize this log", "unrelated paragraph") == "escalate"
+    monkeypatch.setattr(gates, "_ask", fake_commit)
+    ok, reason, _scores = gates.draft_gate("Please send the notes.", "I will deliver the report by Friday.")
+    assert ok is False and reason == "jev_commits"
+    monkeypatch.setattr(gates, "_ask", lambda *_a, **_k: None)
+    assert gates.risk_gate("delete the table") is None
+
+
 def test_cli_fail_open_on_garbage(capsys):
     rc = jev.main(["--state", "x"])  # no questions
     assert rc == 0

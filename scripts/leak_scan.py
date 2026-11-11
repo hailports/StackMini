@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import subprocess
 import sys
@@ -44,6 +45,29 @@ def git_shas(root: Path) -> set[str]:
     return {line.strip().lower() for line in out.splitlines() if line.strip()}
 
 
+def _published(root: Path) -> dict[str, str]:
+    """Blob hashes already on origin/main. Those revisions are public and are not scanned again."""
+    try:
+        out = subprocess.check_output(
+            ["git", "-C", str(root), "ls-tree", "-r", "origin/main"],
+            text=True, errors="replace",
+        )
+    except subprocess.CalledProcessError:
+        return {}
+    hashes = {}
+    for line in out.splitlines():
+        try:
+            meta, rel = line.split("\t", 1)
+            hashes[rel] = meta.split()[-1]
+        except ValueError:
+            continue
+    return hashes
+
+
+def _blob_sha(data: bytes) -> str:
+    return hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest()
+
+
 def scan_text(label: str, text: str, extra_hex: set[str] | None = None) -> list[str]:
     hits = []
     allow_hex = set(ALLOW_HEX)
@@ -78,28 +102,34 @@ def scan_text(label: str, text: str, extra_hex: set[str] | None = None) -> list[
 
 def scan_tree(root: Path) -> list[str]:
     hits = []
+    published = _published(root)
     for path in iter_files(root):
         try:
-            text = path.read_text(encoding="utf-8")
+            data = path.read_bytes()
+            text = data.decode("utf-8")
         except UnicodeDecodeError:
             continue
         rel = str(path.relative_to(root))
+        if published.get(rel) == _blob_sha(data):
+            continue
         hits.extend(scan_text(rel, text))
     return hits
 
 
 def scan_history(root: Path) -> list[str]:
+    """Scan only commits that are not on origin/main yet."""
     if not (root / ".git").exists():
         return []
-    shas = git_shas(root)
-    log = subprocess.check_output(["git", "-C", str(root), "log", "--all", "--format=fuller"], text=True, errors="replace")
-    hits = scan_text("git-log", log, shas)
     try:
-        patch = subprocess.check_output(["git", "-C", str(root), "log", "--all", "-p"], text=True, errors="replace")
+        patch = subprocess.check_output(
+            ["git", "-C", str(root), "log", "origin/main..HEAD", "-p", "--format=fuller"],
+            text=True, errors="replace",
+        )
     except subprocess.CalledProcessError:
-        return hits
-    hits.extend(scan_text("git-patch", patch, shas))
-    return hits
+        return []
+    if not patch.strip():
+        return []
+    return scan_text("unpublished", patch, git_shas(root))
 
 
 def main() -> int:

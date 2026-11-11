@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import socket
 import sys
 import time
 import urllib.request
@@ -25,7 +27,18 @@ from pathlib import Path
 LOG = Path(os.environ.get("JEV_LOG", str(Path.home() / ".local" / "state" / "jev" / "jev.jsonl")))
 BASE = os.environ.get("TYPESAFE_BASE_URL", "https://api.typesafe.ai").rstrip("/")
 MODEL = os.environ.get("TYPESAFE_DEFAULT_MODEL", "jev-latest")
-MAX_STATE = 12000
+MAX_STATE = 4000
+HOST = socket.gethostname().split(".")[0]
+_SECRET = re.compile(
+    r"\b(password|passwd|passcode|api[_-]?key|token|secret|bearer)\b\s*[:=]\s*\S+"
+    r"|\b(otp|2fa|verification code)\b\s*[:=]?\s*\d{4,8}"
+    r"|\b(?:sk-|ghp_|github_pat_|xox[baprs]-|AKIA)[A-Za-z0-9_\-]{6,}",
+    re.I,
+)
+
+
+def mask_state(text: str) -> str:
+    return _SECRET.sub("[redacted]", text or "")
 
 
 def _key_files():
@@ -68,9 +81,12 @@ def classify(state, questions: dict, timeout: float = 8.0, caller: str = "", mod
         return None
     key = _key()
     if not key:
-        _log({"ts": time.time(), "caller": caller, "ok": False, "err": "no_key"})
+        _log({"ts": time.time(), "host": HOST, "caller": caller, "ok": False, "err": "no_key"})
         return None
-    if isinstance(state, str) and len(state) > MAX_STATE:
+    if not isinstance(state, str):
+        state = str(state)
+    state = mask_state(state)
+    if len(state) > MAX_STATE:
         state = state[:MAX_STATE]
     body = json.dumps({"model": model or MODEL, "state": state, "questions": questions}).encode()
     req = urllib.request.Request(
@@ -78,7 +94,7 @@ def classify(state, questions: dict, timeout: float = 8.0, caller: str = "", mod
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
                  "Accept": "application/json", "User-Agent": "hailports-jev/1"})
     t0 = time.time()
-    rec = {"ts": t0, "caller": caller, "q": sorted(questions)}
+    rec = {"ts": t0, "host": HOST, "caller": caller, "q": sorted(questions)}
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             data = json.loads(r.read().decode("utf-8") or "{}")

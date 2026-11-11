@@ -457,6 +457,76 @@ def _record(cfg: dict, result: dict, task: str) -> None:
         pass
 
 
+def _jev_after_local(task: str, local_text: str, result: dict, caller: str) -> dict:
+    """High-confidence score can stop on a good local answer or escalate a bad one.
+
+    High stakes stay on the existing path. Any classifier failure leaves result unchanged.
+    """
+    try:
+        if os.environ.get("JEV_DISABLE", "") == "1":
+            return result
+        if result.get("stakes") != "low":
+            return result
+        if not (local_text or "").strip():
+            return result
+        core = str(Path(__file__).resolve().parent)
+        if core not in sys.path:
+            sys.path.insert(0, core)
+        from jev_gates import score_local
+        action = score_local(task, local_text, caller="local-first:" + caller)
+    except Exception:
+        return result
+    if action == "stop":
+        answer = str(result.get("answer") or "").strip()
+        if not answer:
+            obj = parse_model_json(local_text)
+            if obj:
+                answer = str(obj.get("answer") or "").strip()
+        if not answer:
+            answer = (local_text or "").strip()
+        if len(answer) < 1:
+            return result
+        if any(phrase in answer.lower() for phrase in _UNSURE) and len(answer) < 40:
+            return result
+        result["decision"] = "complete_local"
+        result["answer"] = answer
+        result["why"] = "jev_high_confidence"
+        result["confidence"] = max(float(result.get("confidence") or 0), 0.9)
+    elif action == "escalate":
+        result["decision"] = "need_premium"
+        result["answer"] = ""
+        result["why"] = "jev_low_confidence"
+        result["confidence"] = min(float(result.get("confidence") or 1), 0.1)
+        result["brief"] = build_brief(str(result.get("stakes") or "low"), "jev_low_confidence", local_text)
+    return result
+
+
+def _jev_pre_route(task: str, caller: str) -> str | None:
+    try:
+        if os.environ.get("JEV_DISABLE", "") == "1":
+            return None
+        core = str(Path(__file__).resolve().parent)
+        if core not in sys.path:
+            sys.path.insert(0, core)
+        from jev_gates import pre_route
+        return pre_route(task, caller="cli-pre:" + caller)
+    except Exception:
+        return None
+
+
+def _jev_done(task: str, answer: str, caller: str) -> bool | None:
+    try:
+        if os.environ.get("JEV_DISABLE", "") == "1":
+            return None
+        core = str(Path(__file__).resolve().parent)
+        if core not in sys.path:
+            sys.path.insert(0, core)
+        from jev_gates import done_check
+        return done_check(task, answer, caller="cli-post:" + caller)
+    except Exception:
+        return None
+
+
 def route_task(task: str, *, caller: str = "cli", fetch=None, config: dict | None = None, execute_paid=None) -> dict:
     cfg = config if config is not None else load_config()
     extra = [str(x) for x in (cfg.get("extra_high_substrings") or [])]
@@ -481,9 +551,11 @@ def route_task(task: str, *, caller: str = "cli", fetch=None, config: dict | Non
         result["brief"] = build_brief(result["stakes"], "local_unavailable", evidence or "Local model did not answer.")
         result["usage"] = {}
     else:
-        result = policy_decision(task, str(local.get("text") or ""), extra_high=extra, backend=backend)
+        local_text = str(local.get("text") or "")
+        result = policy_decision(task, local_text, extra_high=extra, backend=backend)
         result["usage"] = local.get("usage") or {}
         result["elapsed_s"] = local.get("elapsed_s")
+        result = _jev_after_local(task, local_text, result, caller)
     result["caller"] = caller
     result["paid_invoked"] = False
     if execute_paid is not None and result["decision"] == "need_premium" and os.environ.get("LOCAL_FIRST_DRY") != "1":
@@ -891,12 +963,23 @@ def prepare_intercept(
     if task.startswith("[LOCAL-FIRST BRIEF v1]"):
         base["set_done"] = True
         return base
-    result = route_task(task, caller=_caller_key(caller), fetch=fetch, config=config, execute_paid=None)
+    if _jev_pre_route(task, _caller_key(caller)) == "escalate":
+        result = policy_decision(task, "", backend="jev_pre")
+        result["decision"] = "need_premium"
+        result["answer"] = ""
+        result["why"] = "jev_route_escalate"
+        result["brief"] = build_brief(str(result.get("stakes") or "low"), "jev_route_escalate", "Routing asked for a stronger model.")
+        result["caller"] = _caller_key(caller)
+        result["paid_invoked"] = False
+    else:
+        result = route_task(task, caller=_caller_key(caller), fetch=fetch, config=config, execute_paid=None)
     if _caller_key(caller) == "grok":
         action, new_argv = plan_grok(argv, result)
     elif result.get("decision") == "complete_local" and str(result.get("answer") or "").strip():
         action, new_argv = "local", []
     else:
+        action, new_argv = "escalate", _rewrite_prompt(argv, extracted, paid_prompt(result, task))
+    if action == "local" and _jev_done(task, str(result.get("answer") or ""), _caller_key(caller)) is False:
         action, new_argv = "escalate", _rewrite_prompt(argv, extracted, paid_prompt(result, task))
     return {
         "action": action,
@@ -1089,9 +1172,11 @@ def _selftest() -> int:
     saved_router = os.environ.get("LOCAL_FIRST_ROUTER")
     saved_done = os.environ.get("LOCAL_FIRST_DONE")
     saved_record = os.environ.get("LOCAL_FIRST_RECORD")
+    saved_jev = os.environ.get("JEV_DISABLE")
     os.environ.pop("LOCAL_FIRST_ROUTER", None)
     os.environ.pop("LOCAL_FIRST_DONE", None)
     os.environ["LOCAL_FIRST_RECORD"] = "0"
+    os.environ["JEV_DISABLE"] = "1"
 
     def check(name: str, ok: bool) -> None:
         cases.append((name, ok))
@@ -1168,6 +1253,10 @@ def _selftest() -> int:
         os.environ.pop("LOCAL_FIRST_RECORD", None)
     else:
         os.environ["LOCAL_FIRST_RECORD"] = saved_record
+    if saved_jev is None:
+        os.environ.pop("JEV_DISABLE", None)
+    else:
+        os.environ["JEV_DISABLE"] = saved_jev
     failed = [name for name, ok in cases if not ok]
     return 1 if failed else 0
 
