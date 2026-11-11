@@ -201,6 +201,41 @@ def _with_badge(item: dict, decision: dict | None) -> dict:
     return item
 
 
+
+def _reply_thread_block(row: dict, text: str = "") -> str:
+    """Outlook and Zoom replies need an exact id and the operator as the person asked."""
+    channel = str((row or {}).get("draft_channel") or (row or {}).get("channel") or "")
+    if channel not in {"outlook", "zoom"}:
+        return ""
+    from hailports.draft_thread_gate import reply_draft_gate
+
+    decision = reply_draft_gate(
+        {
+            "draft_channel": channel,
+            "message_id": (row or {}).get("message_id") or (row or {}).get("source_message_id") or "",
+            "conversation_id": (row or {}).get("conversation_id") or "",
+            "title": str((row or {}).get("subject") or (row or {}).get("title") or ""),
+            "why": str((row or {}).get("ask") or (row or {}).get("why") or ""),
+            "notes": str((row or {}).get("notes") or ""),
+            "to": (row or {}).get("to") or "",
+            "cc": (row or {}).get("cc") or "",
+            "from": (row or {}).get("from") or (row or {}).get("sender") or "",
+            "participants": (row or {}).get("participants") or "",
+        },
+        draft=text or "",
+        source={
+            "from": (row or {}).get("from") or (row or {}).get("sender") or "",
+            "to": (row or {}).get("to") or "",
+            "cc": (row or {}).get("cc") or "",
+            "participants": (row or {}).get("participants") or "",
+        },
+        operator=str((row or {}).get("operator") or "Pat"),
+    )
+    if decision.get("ok"):
+        return ""
+    return str(decision.get("disposition") or "")
+
+
 def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | None = None, cleaner=None, now=None, badges: dict | None = None) -> dict:
     """One pass over the inbox. Nothing in this pass is sent.
 
@@ -234,6 +269,10 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
             seen.add(mid)
         if row.get("may_open") is False and not body.strip():
             emit("no_open passive_empty", subject, sender, read_code(row.get("read_error") or "history_empty"))
+            continue
+        blocked = _reply_thread_block(row)
+        if blocked:
+            emit(blocked, subject, sender)
             continue
         newest_for_hold = newest_unquoted(body)
         held_secret = secret_hold(newest_for_hold)
@@ -294,6 +333,10 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
             prev["discard_parked"] = False
             prev["error"] = ""
             _remember(prior, mid, prev)
+            blocked = _reply_thread_block(row, reply)
+            if blocked:
+                emit(blocked, subject, sender)
+                continue
             drafts.append(_with_badge({
                 "message_id": mid,
                 "subject": subject,
@@ -380,6 +423,10 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
                         staged_text = str(prev.get("best_text") or "").strip()
                         _remember(prior, mid, prev)
                         if staged_text:
+                            blocked = _reply_thread_block(row, staged_text)
+                            if blocked:
+                                emit(blocked, subject, sender)
+                                continue
                             drafts.append(_with_badge({
                                 "message_id": mid,
                                 "subject": subject,
@@ -418,6 +465,10 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
         }
         if link_kinds:
             staged["links"] = link_kinds
+        blocked = _reply_thread_block(row, staged.get("text") or "")
+        if blocked:
+            emit(blocked, subject, sender)
+            continue
         drafts.append(_with_badge(staged, decision))
     return {"drafted": len(drafts), "drafts": drafts, "skipped": skipped, "log": lines, "prior": prior, "badges": book}
 
