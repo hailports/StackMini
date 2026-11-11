@@ -266,3 +266,63 @@ def test_receipt_rebind_path_cannot_mutate_the_browser_process():
     )
 
     assert all(token not in RECEIPT_BLOCK for token in forbidden)
+
+
+OBSCURA = "/opt/homebrew/bin/obscura"
+OBSCURA_PROFILE = "/var/bridge-test/obscura-profile"
+
+
+def _obscura_script(fixture: str) -> str:
+    return f"""
+set -u
+HOME={shlex.quote(HOME)}
+PERSISTENT=1
+BROWSER_LABEL={shlex.quote(LABEL)}
+BROWSER={shlex.quote(OBSCURA)}
+PROFILE={shlex.quote(OBSCURA_PROFILE)}
+PORT={shlex.quote(PORT)}
+URL={shlex.quote(URL)}
+{LAUNCHD_BLOCK}
+exact_bridge_pid() {{ printf '%s\\n' 932; }}
+launchd_job_print() {{ cat <<'LAUNCHD'
+{fixture}
+LAUNCHD
+}}
+launchd_owned_bridge_pid
+"""
+
+
+def _obscura_fixture(**overrides: str) -> str:
+    fields = {
+        "program": OBSCURA,
+        "browser_arg": OBSCURA,
+        "headless_arg": "serve",
+        "profile_arg": OBSCURA_PROFILE,
+        "port_arg": PORT,
+        "url_arg": "--stealth",
+    }
+    fields.update(overrides)
+    return _launchd_fixture(**fields)
+
+
+def test_obscura_launchd_owned_bridge_is_accepted_after_reboot():
+    result = _run(_obscura_script(_obscura_fixture()))
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "932"
+
+
+def test_obscura_partial_proof_is_rejected():
+    cases = [
+        {"profile_arg": "/var/bridge-test/other-profile"},
+        {"port_arg": "18813"},
+        {"url_arg": "--no-stealth"},
+        {"headless_arg": "run"},
+        {"browser_arg": "/tmp/obscura"},
+        {"pid": "933"},
+        {"program": "/opt/homebrew/bin/edge"},
+    ]
+    for overrides in cases:
+        result = _run(_obscura_script(_obscura_fixture(**overrides)))
+        assert result.returncode != 0, overrides
+        assert result.stdout == ""

@@ -82,6 +82,24 @@ launchd_owned_bridge_pid() {
     return 0
   fi
 
+  # Obscura serve is a different exact tuple, and only when this bridge's
+  # BROWSER is that binary. It does not relax the browser checks above.
+  # Required whole arguments: the binary, serve, this profile, this port, --stealth.
+  case "$BROWSER" in
+    */obscura)
+      if [ "$program" = "$BROWSER" ] \
+        && launchd_has_argument "$output" "$BROWSER" \
+        && launchd_has_argument "$output" "serve" \
+        && launchd_has_argument "$output" "$PROFILE" \
+        && launchd_has_argument "$output" "$PORT" \
+        && launchd_has_argument "$output" "--stealth"; then
+        printf '%s\n' "$exact"
+        return 0
+      fi
+      return 1
+      ;;
+  esac
+
   # A bash keepalive execs the browser. launchd keeps printing program=/bin/bash
   # and the script path, while the job pid is the browser. Adopt only when the
   # live argv is this exact headless profile, port, and url. Any other bash job
