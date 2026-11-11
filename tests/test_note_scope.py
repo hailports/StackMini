@@ -48,6 +48,31 @@ def test_cap_aborts_with_no_sends():
     assert ns.cap_abort(26) is True
 
 
+def test_open_current_sprint_only():
+    owned = _card(assignee=OWNER, iteration="Sprint A")
+    assert ns.in_scope(owned, OWNER, current_iteration="Sprint A")
+    assert ns.scope_reason(_card(assignee=OWNER, state="Testing"), OWNER) == "not_open"
+    assert ns.scope_reason(_card(assignee=OWNER, state="Resolved"), OWNER) == "not_open"
+    assert ns.scope_reason(_card(assignee=OWNER, state="Done"), OWNER) == "not_open"
+    assert ns.scope_reason(_card(assignee=OWNER, type="Feature", state="Resolved"), OWNER) == "not_open"
+    assert ns.scope_reason(_card(assignee=OWNER, type="Feature", state="Active"), OWNER) == ""
+    assert ns.scope_reason(_card(assignee=OWNER, type="Task", state="Closed"), OWNER) == "not_open"
+    assert ns.scope_reason(
+        _card(assignee=OWNER, iteration="Sprint B"),
+        OWNER,
+        current_iteration="Sprint A",
+    ) == "not_current_sprint"
+    # A card with no iteration of its own inherits the file sprint.
+    picked = ns.select_notes(
+        [_card(assignee=OWNER, state="New")],
+        OWNER,
+        current_iteration="Sprint A",
+        file_iteration="Sprint A",
+    )
+    assert len(picked["send"]) == 1
+    assert picked["aborted"] == ""
+
+
 def test_already_sent_is_not_sent_again():
     cards = [_card(id="100010", assignee=OWNER)]
     picked = ns.select_notes(cards, OWNER, already_sent={"100010"})
