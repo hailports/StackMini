@@ -119,6 +119,8 @@ def one_batch(src: str) -> int:
     blob = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
     last = blob.splitlines()[-1] if blob else f"exit {proc.returncode}"
     log(f"batch {src} exit={proc.returncode} {last[:240]}")
+    if "already running" in blob:
+        return -2
     if proc.returncode != 0:
         return -1
     marker = "docs_embedded"
