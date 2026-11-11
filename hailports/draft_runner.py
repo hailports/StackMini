@@ -375,6 +375,10 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
                 subject = str(prepared.get("subject") or subject)
             if not sender:
                 sender = str(prepared.get("app") or sender)
+            note = str(row.get("context") or "").strip()
+            if note:
+                from hailports.paiste import runner_context
+                prepared["messages"] = runner_context(prepared.get("messages") or [], note)
         link_kinds: list[str] = []
         if row.get("pages"):
             from hailports.contextpack import pack_pages

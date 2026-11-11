@@ -829,6 +829,7 @@ class Wizard:
         self.io.say("  hailports chat")
         self.io.say("  hailports serve")
         self.io.say("  hailports mode")
+        self.io.say("  hailports paiste setup")
         self._log("summary done")
         mode = self.answers.get("mode")
         hard = []
@@ -895,6 +896,14 @@ class Wizard:
         hw = self.hw or probe(self.args.target_os, self.args.arch, self.args.accel, self.args.ram_gb, self.args.vram_gb)
         self.hw = hw
         apply_connection(cfg, self.answers, hw.os_name)
+        raw = str(self.answers.get("paiste_json") or "")
+        if raw:
+            try:
+                paiste = json.loads(raw)
+            except json.JSONDecodeError:
+                paiste = None
+            if isinstance(paiste, dict):
+                cfg["paiste"] = paiste
         return cfg
 
     def _write_units(self, cfg: dict) -> None:
