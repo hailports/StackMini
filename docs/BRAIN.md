@@ -19,7 +19,9 @@ GET /v1/ask?q=...&scope=all&k=8&graph=0
 POST /v1/ask    {"q","scope","k","graph"}
 ```
 
-Scopes ship as `notes`, `web`, and `all`. A config map can replace them. `graph=1` adds up to two neighbors from a 2-hop walk of `brain_edge` (`via: graph`). The other hits are `via: hybrid`.
+Scopes ship as `notes`, `web`, `email`, `calendar`, `chats`, and `all`. A config map can replace them. `all` includes notes, files, web pages, mail, calendar events, chats, and contacts. `graph=1` adds up to two neighbors from a 2-hop walk of `brain_edge` (`via: graph`). The other hits are `via: hybrid`.
+
+Connected mail, calendar, notes, and chats are indexed by `hailports integrations sync`. See `docs/INTEGRATIONS.md`.
 
 Hybrid search runs a BM25 query and, when you pass a query vector, a cosine ranking. Reciprocal rank fusion (k=60) merges the lists so a row that ranks well in either list can surface, and a row in both lists ranks higher.
 

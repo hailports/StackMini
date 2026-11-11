@@ -93,7 +93,11 @@ def add_setup_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--download", action="store_true", help="Download the llama.cpp build and the model.")
     parser.add_argument("--apply-install", action="store_true", help="Allow setup to run a package manager after you agree.")
     parser.add_argument("--binary", choices=["prebuilt", "source"], default="prebuilt")
-    parser.add_argument("--connect", choices=["native", "bridges", "skip"], default="", help="Native apps, loopback bridges, or neither.")
+    parser.add_argument("--connect", default="", help="approved, bridges, native, skip, or per surface such as notes=approved,email=skip.")
+    parser.add_argument("--approve", default="", help="Providers, such as email=gmail,calendar=gcal,notes=files.")
+    parser.add_argument("--notes-dir", default="", help="Markdown folder for the files provider.")
+    parser.add_argument("--window-days", type=int, default=30, help="Days of mail, calendar, and chats to read. Notes are read in full.")
+    parser.add_argument("--pull", action="store_true", help="After connect, ingest and prove search. --yes does not pull unless this is set.")
     parser.add_argument("--bridge-kinds", default="", help="Comma-separated bridges: mail, meetings, tracker, cdp.")
     parser.add_argument("--bridge-ports", default="", help="Ports for mail, meetings, tracker, and cdp.")
 
@@ -507,14 +511,17 @@ class Wizard:
             return "ok"
         automatic = bool(self.args.yes or self.args.non_interactive)
         default = self.args.connect or ("skip" if automatic else "native")
+        if self.args.connect and "=" in str(self.args.connect):
+            return self._connect_mapped(str(self.args.connect))
         picked = self.io.choose(
             "connect",
-            "How should email, notes, and chats connect?",
-            "Native records the apps installed on this computer. Bridges stay on this computer, and the draft comes from your own model subscription. Skip leaves both off. Setup does not read mail, notes, or chats.",
+            "How should email, calendar, notes, and chats connect?",
+            "Approved uses an official API or a local folder with your own keys. Native records the apps installed here. Bridges stay on this computer, and your own model drafts the adapter. Skip leaves them off. --yes stays off unless you pass --connect.",
             [
-                ("native", "Mail, notes, and chats through the apps installed here."),
-                ("bridges", "Loopback bridges. Your subscription drafts the config."),
-                ("skip", "Leave email, notes, and chats unconnected."),
+                ("approved", "Official APIs or a local notes folder. Your own client id and keys."),
+                ("native", "Mail, calendar, notes, and chats through the apps installed here."),
+                ("bridges", "Loopback bridges. Your subscription drafts the adapter."),
+                ("skip", "Leave email, calendar, notes, and chats unconnected."),
             ],
             default,
         )
@@ -528,6 +535,8 @@ class Wizard:
             return self._connect_native()
         if picked == "bridges":
             return self._connect_bridges()
+        if picked == "approved":
+            return self._connect_approved()
         self._remember("connect", "skip")
         return "ok"
 
@@ -535,7 +544,7 @@ class Wizard:
         hw = self.hw or probe(self.args.target_os, self.args.arch, self.args.accel, self.args.ram_gb, self.args.vram_gb)
         self.hw = hw
         found = detect_native(hw.os_name)
-        for surface in ("email", "notes", "chats"):
+        for surface in ("email", "calendar", "notes", "chats"):
             item = found.get(surface) or {}
             if item.get("enabled"):
                 self.io.say(surface + ": " + str(item.get("app")) + " at " + str(item.get("path")))
@@ -545,7 +554,9 @@ class Wizard:
             self.io.say(line)
         self._remember("connect", "native")
         self._remember("native_json", json.dumps(found))
+        self._remember("window_days", str(self.args.window_days or 30))
         self._log("connect native")
+        self._maybe_pull()
         return "ok"
 
     def _connect_bridges(self) -> str:
@@ -609,11 +620,84 @@ class Wizard:
                 self.io.say("The subscription reply was not used. Wrote the ports from this step.")
         for line in plan.get("steps") or []:
             self.io.say(line)
+        from hailports.integrations.adapter import adapters_from_plan, save_adapters
+        save_adapters(self.state / "adapters", adapters_from_plan(plan, enabled, ports))
         self._remember("connect", "bridges")
         self._remember("bridge_kinds", ",".join(enabled))
-        self._remember("bridge_plan_json", json.dumps({"bridges": plan["bridges"], "source": plan.get("source") or "defaults"}))
+        self._remember("window_days", str(self.args.window_days or 30))
+        self._remember("bridge_plan_json", json.dumps({"bridges": plan["bridges"], "source": plan.get("source") or "defaults", "adapters": plan.get("adapters") or {}}))
         self._log("connect bridges " + str(plan.get("source") or "defaults"))
+        self._maybe_pull()
         return "ok"
+
+    def _connect_approved(self) -> str:
+        if self.args.approve:
+            self._check_approve(self.args.approve)
+            self._remember("approve", self.args.approve)
+        self._remember_common()
+        self._remember("connect", "approved")
+        self._log("connect approved")
+        self._maybe_pull()
+        return "ok"
+
+    def _connect_mapped(self, text: str) -> str:
+        from hailports_setup.connect_assist import parse_connect_spec
+        try:
+            spec = parse_connect_spec(text)
+        except ValueError as exc:
+            raise StepFailed(str(exc), "Use approved, bridges, native, skip, or notes=approved,email=skip.") from exc
+        if self.args.approve:
+            self._check_approve(self.args.approve)
+            self._remember("approve", self.args.approve)
+        self._remember_common()
+        if any(via == "native" for via in spec["surfaces"].values()):
+            hw = self.hw or probe(self.args.target_os, self.args.arch, self.args.accel, self.args.ram_gb, self.args.vram_gb)
+            self.hw = hw
+            self._remember("native_json", json.dumps(detect_native(hw.os_name)))
+        self._remember("connect", text)
+        self._log("connect mapped")
+        self._maybe_pull()
+        return "ok"
+
+    def _check_approve(self, text: str) -> None:
+        from hailports_setup.connect_assist import parse_approve
+        try:
+            parse_approve(text)
+        except ValueError as exc:
+            raise StepFailed(str(exc), "Use a provider such as notes=files, email=gmail, or calendar=gcal.") from exc
+
+    def _remember_common(self) -> None:
+        if self.args.notes_dir:
+            self._remember("notes_dir", self.args.notes_dir)
+        self._remember("window_days", str(self.args.window_days or 30))
+
+    def _maybe_pull(self) -> None:
+        automatic = bool(self.args.yes or self.args.non_interactive)
+        if automatic and not getattr(self.args, "pull", False):
+            self.io.say("Ingest stays off until you run hailports integrations sync.")
+            return
+        if not automatic and not getattr(self.args, "pull", False):
+            if not self.io.confirm(
+                "pull_now",
+                "Pull a recent window and prove search can see it?",
+                "This reads what you just connected. You can do it later with hailports integrations sync.",
+                True,
+            ):
+                self.io.say("Ingest skipped.")
+                return
+        self._pull_now()
+
+    def _pull_now(self) -> None:
+        from hailports.integrations.sync import sync_configured
+        proofs = sync_configured(self._cfg(), self.state)
+        if not proofs:
+            self.io.say("Nothing was ready to ingest.")
+            self._log("proof none")
+            return
+        for proof in proofs:
+            line = "proof " + str(proof.get("surface") or "") + " " + ("pass" if proof.get("ok") else "fail")
+            self.io.say(line)
+            self._log(line)
 
     def _bridge_subscription(self) -> str:
         """Make sure a provider the user named is in the answers. Local mode has not asked yet."""
@@ -703,7 +787,7 @@ class Wizard:
 
     def _step_summary(self) -> str:
         cfg = self._cfg()
-        checks = run_doctor(cfg, self.secrets, live=not self.args.skip_network)
+        checks = run_doctor(cfg, self.secrets, live=not self.args.skip_network, root=self.state)
         self.io.say("Health summary")
         self.io.say(format_report(checks))
         self.io.say(describe(cfg))

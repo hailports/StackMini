@@ -96,7 +96,9 @@ hailports setup
 
 Setup is a guided terminal wizard. It explains each step, accepts `back` and `skip`, and can be run again. `--yes` accepts the defaults without questions. When a step fails, it says what went wrong, how to fix it, and offers a retry. After a model or an API key is in place, `hailports ask "why did the build fail"` answers from the setup log.
 
-The wizard then connects email, notes, and chats, or leaves them off. Native records the apps installed on this computer: Mail, Notes, and Messages on macOS, Outlook and OneNote on Windows. Linux has no native app in this step. Setup does not open those apps and does not read them. The other choice is the loopback bridges. That call uses the provider and key you configured, sends only the system name and the ports, and keeps a reply only when every URL stays on this computer. `--connect native`, `--connect bridges`, or `--connect skip` picks the path. `--yes` leaves the connection off unless you pass `--connect`.
+The wizard then connects email, calendar, notes, and chats, or leaves them off. `--connect` takes `approved`, `native`, `bridges`, or `skip`, or one path per surface (`notes=approved,email=skip`). `--yes` leaves every surface off unless you pass `--connect`.
+
+`approved` uses an official API or a notes folder, with your own client id and app password. Nothing in this repo is a shared key. `native` records Mail, Calendar, Notes, and Messages on macOS, and Outlook and OneNote on Windows. On macOS, `hailports integrations sync` reads those apps through AppleScript. `bridges` asks the model you already configured to draft a loopback adapter and saves it under `adapters/` for you to review. `--pull` ingests after setup and prints pass or fail for a brain search. Without `--pull`, run `hailports integrations sync` when you want the data. See `docs/INTEGRATIONS.md`.
 
 ```sh
 hailports doctor
@@ -142,7 +144,8 @@ Ubuntu, Debian, Fedora, and Arch share the detection path. A user systemd unit i
 `hailports --help` lists them. Each command has its own `--help`.
 
 - `setup` guided install
-- `doctor` test the current mode
+- `integrations` connect, sync, prove, status, or disconnect email, calendar, notes, and chats
+- `doctor` test the current mode, including each integration
 - `mode` show or switch local, hybrid, or api
 - `chat` a terminal chat. `reset` drops the thread. `--image` attaches a picture
 - `serve` web chat on 127.0.0.1

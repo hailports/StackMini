@@ -43,6 +43,8 @@ from hailports.ticket_guard import acquire, connect as guard_connect, remember
 from hailports.webtools import DataLine, gather_web, refuse_sensitive
 from hailports.wizard import add_setup_args, launch as launch_setup
 from hailports.display.command import add_parser as add_display_parser
+from hailports.integrations.command import add_parser as add_integrations_parser
+from hailports.integrations.command import dispatch as dispatch_integrations
 from hailports.notes import add as brain_add
 from hailports.notes import brain_status, connect as brain_connect, hybrid_search, ingest_path, note_meta, search as brain_search, store_vector
 from hailports.worknow import brief as focus_brief
@@ -160,7 +162,7 @@ def _model_ready(cfg: dict) -> bool:
 def cmd_doctor(cfg: dict, cfg_path: Path) -> int:
     secret = EnvAndKeychain().get(cfg) if str(cfg.get("mode") or "local") in ("api", "hybrid") else ""
     text = cfg_path.read_text(encoding="utf-8") if cfg_path.exists() else ""
-    checks = run_doctor(cfg)
+    checks = run_doctor(cfg, root=cfg_path.parent)
     print(format_report(checks))
     if file_contains_secret(text, secret):
         print("needs attention config-file the API key is written in the config file")
@@ -670,6 +672,7 @@ def build_parser() -> argparse.ArgumentParser:
     notes_p.add_argument("--graph", action="store_true")
 
     add_display_parser(sub)
+    add_integrations_parser(sub)
 
     draft_p = sub.add_parser("drafter", help="Draft from notes you supply.")
     draft_p.add_argument("ask")
@@ -778,6 +781,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd in ("brain", "notes"):
         return _cmd_notes(cfg, cfg_path, args)
+    if args.cmd == "integrations":
+        return dispatch_integrations(args, cfg, cfg_path, _state_dir(cfg_path))
     if args.cmd == "display":
         from hailports.display.command import dispatch as dispatch_display
         return dispatch_display(args, _state_dir(cfg_path))

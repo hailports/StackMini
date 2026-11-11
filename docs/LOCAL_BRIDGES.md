@@ -17,7 +17,7 @@
 
 `hailports setup` asks for native apps or these bridges. Native records Mail, Notes, and Messages on macOS, and Outlook and OneNote on Windows, when the app is installed. It does not open them. Linux has no native app in that step.
 
-The bridge choice calls the provider and key already configured. The prompt is the operating system, the bridge names, and the ports. Mail, notes, and chats are not sent. A URL that is not loopback or an overlay address is dropped. `--connect skip` leaves both paths off. `--yes` skips this unless `--connect` is set.
+The bridge choice calls the provider and key already configured. The prompt is the operating system, the bridge names, and the ports. Mail, calendar, notes, and chats are not sent. A URL that is not loopback or an overlay address is dropped. The cleaned steps are saved under `adapters/` as one reviewable JSON file per surface. `--connect skip` leaves the paths off. `--yes` skips this unless `--connect` is set. See `docs/INTEGRATIONS.md`.
 
 ## What a tick does
 

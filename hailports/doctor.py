@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from hailports.config import is_placeholder
 from hailports.providers.factory import build_router
 from hailports.secrets_store import EnvAndKeychain
+from hailports.integrations.health import integration_checks
 from hailports_setup.connect_assist import connection_status
 
 _SECRET_KEYS = {"token", "api_key", "apikey", "secret", "password", "key"}
@@ -61,7 +62,7 @@ def port_open(host: str, port: int) -> bool:
         sock.close()
 
 
-def run_doctor(cfg: dict, secrets=None, router=None, live: bool = True) -> list[Check]:
+def run_doctor(cfg: dict, secrets=None, router=None, live: bool = True, root=None) -> list[Check]:
     secrets = secrets or EnvAndKeychain()
     mode = str(cfg.get("mode") or "local").strip().lower()
     checks = [Check("mode", mode in ("local", "hybrid", "api"), mode or "missing")]
@@ -109,6 +110,8 @@ def run_doctor(cfg: dict, secrets=None, router=None, live: bool = True) -> list[
     checks.append(Check("web-port", True, f"{host}:{port} " + ("free" if free else "already in use")))
     ok, detail = connection_status(cfg)
     checks.append(Check("connections", ok, detail))
+    for name, healthy, detail in integration_checks(cfg, root):
+        checks.append(Check(name, healthy, detail))
     return checks
 
 

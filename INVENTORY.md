@@ -21,7 +21,7 @@ This repo is a fresh write of a local model appliance. Private trees, databases,
 | Notes ask API, reciprocal-rank search, graph neighbors, data-line filter | hailports/brain/ |
 | Display override, client match, window reflow, phone keyboard inset | hailports/display/ |
 | Loopback session bridges (mail draft, meetings, tracker, browser CDP) | hailports/local_bridges/ |
-| Setup records native mail, notes, and chats, or drafts loopback bridges with the user's subscription | hailports/wizard.py, hailports_setup/connect_assist.py |
+| Setup connects email, calendar, notes, and chats by an approved API, a native app, or a loopback adapter | hailports/wizard.py, hailports/integrations/, hailports_setup/connect_assist.py |
 | Focus list | hailports/worknow.py |
 | Health check, freshness, and restart | hailports/sentinel.py |
 | Service file hash | hailports/integrity.py |

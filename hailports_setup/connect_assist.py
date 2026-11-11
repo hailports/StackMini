@@ -1,8 +1,8 @@
-"""Setup choice for native apps, or loopback bridges drafted by the user's subscription.
+"""Setup choice for approved APIs, native apps, or loopback bridges.
 
 The subscription call gets the operating system, the bridge names, and the ports.
-It does not get mail, notes, chats, or the API key. A URL that is not loopback
-or an overlay address is not kept.
+It does not get mail, calendar, notes, chats, or the API key. A URL that is not
+loopback or an overlay address is not kept. Tokens are not written here.
 """
 
 from __future__ import annotations
@@ -14,7 +14,16 @@ from pathlib import Path
 
 from hailports.local_bridges.fabric import KINDS, _host_ok, enabled_specs
 
-SURFACES = ("email", "notes", "chats")
+SURFACES = ("email", "calendar", "notes", "chats")
+PATHS = ("approved", "bridges", "native", "skip")
+SURFACE_KIND = {"email": "mail", "calendar": "meetings", "notes": "tracker", "chats": "cdp"}
+KIND_SURFACE = {"mail": "email", "meetings": "calendar", "tracker": "notes", "cdp": "chats"}
+APPROVED = {
+    "email": {"gmail", "graph", "imap", "apple-mail"},
+    "calendar": {"gcal", "graph", "caldav", "apple-calendar"},
+    "notes": {"files", "graph", "carddav", "apple-notes"},
+    "chats": {"apple-messages"},
+}
 DEFAULT_PORTS = {"mail": 9222, "meetings": 9223, "tracker": 9224, "cdp": 9222}
 _URL = re.compile(r"https?://[^\s]+")
 
@@ -98,16 +107,19 @@ def app_candidates(os_name: str) -> dict[str, list[tuple[str, str]]]:
     if os_name == "darwin":
         return {
             "email": [("Mail", "/System/Applications/Mail.app"), ("Mail", "/Applications/Mail.app")],
+            "calendar": [("Calendar", "/System/Applications/Calendar.app"), ("Calendar", "/Applications/Calendar.app")],
             "notes": [("Notes", "/System/Applications/Notes.app"), ("Notes", "/Applications/Notes.app")],
             "chats": [("Messages", "/System/Applications/Messages.app"), ("Messages", "/Applications/Messages.app")],
         }
     if os_name == "windows":
+        outlook = _office("OUTLOOK.EXE", "Outlook")
         return {
-            "email": _office("OUTLOOK.EXE", "Outlook"),
+            "email": outlook,
+            "calendar": list(outlook),
             "notes": _office("ONENOTE.EXE", "OneNote"),
             "chats": [],
         }
-    return {"email": [], "notes": [], "chats": []}
+    return {"email": [], "calendar": [], "notes": [], "chats": []}
 
 
 def detect_native(os_name: str, exists=None) -> dict:
@@ -136,6 +148,8 @@ def _missing_reason(os_name: str, surface: str) -> str:
         return "no native " + surface + " app is wired on Linux"
     if os_name == "windows" and surface == "chats":
         return "no native chat app is wired on Windows"
+    if os_name == "windows" and surface == "calendar":
+        return "Outlook was not found on disk"
     if os_name == "windows":
         return "Outlook or OneNote was not found on disk"
     return "the app was not found in the usual folder"
@@ -156,8 +170,8 @@ def permission_lines(os_name: str, found: dict) -> list[str]:
     if os_name == "windows" and not (found.get("chats") or {}).get("enabled"):
         lines.append("No native chat app is wired on Windows. Bridges can cover chat.")
     if not enabled:
-        lines.append("No native mail, notes, or chat app was found. Choose bridges to connect those on this computer.")
-    lines.append("Setup does not open the apps and does not read mail, notes, or chats.")
+        lines.append("No native mail, calendar, notes, or chat app was found. Choose bridges or an approved API to connect those on this computer.")
+    lines.append("Setup records the apps it found and does not open them. hailports integrations sync reads a recent window.")
     return lines
 
 
@@ -214,11 +228,42 @@ def builtin_bridge_steps(enabled) -> list[str]:
     return lines[:6]
 
 
+def normalize_adapter(raw, surface: str, port: int) -> dict:
+    item = raw if isinstance(raw, dict) else {}
+    url = str(item.get("base_url") or "").strip()
+    if not _url_ok(url):
+        url = f"http://127.0.0.1:{int(port)}"
+    export_path = str(item.get("export_path") or "/export").strip()
+    if not export_path.startswith("/") or ".." in export_path or "://" in export_path:
+        export_path = "/export"
+    kind = SURFACE_KIND.get(surface) or "mail"
+    steps = clean_steps(item.get("steps")) or builtin_bridge_steps([kind])
+    return {
+        "surface": surface,
+        "base_url": url,
+        "export_path": export_path,
+        "steps": steps,
+        "source": str(item.get("source") or "defaults"),
+    }
+
+
+def build_adapter_prompt(os_name: str, surface: str, port: int) -> str:
+    return "\n".join([
+        "Reply with one JSON object and no other text.",
+        '{"adapter": {"base_url": "http://127.0.0.1:%d", "export_path": "/export", "steps": ["short line"]}}' % int(port),
+        "Surface: " + surface,
+        "Operating system: " + os_name,
+        "base_url must use 127.0.0.1 or localhost.",
+        "steps is at most 4 short lines about that loopback URL.",
+        "Do not include keys, tokens, mailbox text, notes, or chat text.",
+    ])
+
+
 def build_prompt(os_name: str, enabled: list[str], ports: dict[str, int]) -> str:
     port_text = ", ".join(f"{name}={int(ports[name])}" for name in KINDS)
     return "\n".join([
         "Reply with one JSON object and no other text.",
-        'Shape: {"bridges": {"mail": {"enabled": false, "base_url": "http://127.0.0.1:9222"}}, "steps": ["short line"]}',
+        'Shape: {"bridges": {"mail": {"enabled": false, "base_url": "http://127.0.0.1:9222"}}, "adapters": {"email": {"base_url": "http://127.0.0.1:9222", "export_path": "/export", "steps": ["short line"]}}, "steps": ["short line"]}',
         "Include mail, meetings, tracker, and cdp.",
         "Enabled kinds: " + ", ".join(enabled),
         "Ports: " + port_text,
@@ -248,15 +293,31 @@ def parse_bridge_reply(text: str, enabled: list[str], ports: dict[str, int]) -> 
             return None
         bridges[name] = {"enabled": name in wanted, "base_url": url}
     steps = clean_steps(doc.get("steps")) or builtin_bridge_steps(enabled)
-    return {"bridges": bridges, "steps": steps, "source": "subscription"}
+    raw_adapters = doc.get("adapters") if isinstance(doc.get("adapters"), dict) else {}
+    adapters = {}
+    for kind in wanted:
+        surface = KIND_SURFACE.get(kind)
+        if not surface:
+            continue
+        port = int(ports.get(kind) or DEFAULT_PORTS[kind])
+        adapters[surface] = normalize_adapter(raw_adapters.get(surface), surface, port)
+        adapters[surface]["source"] = "subscription"
+    return {"bridges": bridges, "steps": steps, "source": "subscription", "adapters": adapters}
 
 
 def fallback_plan(os_name: str, enabled: list[str], ports: dict[str, int], source: str) -> dict:
     del os_name
+    adapters = {}
+    for kind in enabled:
+        surface = KIND_SURFACE.get(kind)
+        if not surface:
+            continue
+        adapters[surface] = normalize_adapter({}, surface, int(ports.get(kind) or DEFAULT_PORTS[kind]))
     return {
         "bridges": default_bridges(enabled, ports),
         "steps": builtin_bridge_steps(enabled),
         "source": source,
+        "adapters": adapters,
     }
 
 
@@ -292,56 +353,236 @@ def _json_dict(raw) -> dict | None:
     return loaded if isinstance(loaded, dict) else None
 
 
+def parse_connect_spec(text: str) -> dict:
+    raw = str(text or "").strip().lower()
+    if raw in ("", "off"):
+        return {"mode": "all", "via": "skip", "surfaces": {name: "skip" for name in SURFACES}}
+    if raw in PATHS:
+        return {"mode": "all", "via": raw, "surfaces": {name: raw for name in SURFACES}}
+    surfaces: dict[str, str] = {}
+    for part in raw.replace(" ", ",").split(","):
+        if not part.strip():
+            continue
+        if "=" not in part:
+            raise ValueError("use approved, bridges, native, skip, or email=approved")
+        name, via = part.split("=", 1)
+        name = name.strip()
+        via = via.strip()
+        if name not in SURFACES:
+            raise ValueError("unknown surface " + name)
+        if via not in PATHS:
+            raise ValueError("unknown path " + via)
+        surfaces[name] = via
+    if not surfaces:
+        raise ValueError("name a surface")
+    for name in SURFACES:
+        surfaces.setdefault(name, "skip")
+    unique = set(surfaces.values())
+    if len(unique) == 1:
+        return {"mode": "all", "via": unique.pop(), "surfaces": surfaces}
+    return {"mode": "per", "via": "mixed", "surfaces": surfaces}
+
+
+def parse_approve(text: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for part in str(text or "").replace(" ", ",").split(","):
+        if not part.strip():
+            continue
+        if "=" not in part:
+            raise ValueError("provider must look like notes=files")
+        name, provider = part.split("=", 1)
+        name = name.strip().lower()
+        provider = provider.strip().lower()
+        if name not in SURFACES:
+            raise ValueError("unknown surface " + name)
+        if provider not in APPROVED[name]:
+            raise ValueError("unknown provider " + provider)
+        out[name] = provider
+    return out
+
+
+def kind_for(block: dict) -> str:
+    vias = []
+    for surface in SURFACES:
+        item = block.get(surface) if isinstance(block.get(surface), dict) else {}
+        vias.append(str(item.get("via") or "skip"))
+    unique = set(vias)
+    if not unique or unique == {"skip"}:
+        return "off"
+    if len(unique) == 1:
+        return unique.pop()
+    return "mixed"
+
+
+def _window(answers: dict | None) -> int:
+    try:
+        value = int((answers or {}).get("window_days") or 30)
+    except (TypeError, ValueError):
+        value = 30
+    return value if value > 0 else 30
+
+
+def _blank(via: str = "skip", provider: str = "", path: str = "", app: str = "", enabled: bool = False) -> dict:
+    return {"enabled": bool(enabled), "via": via, "provider": provider, "app": app, "path": path}
+
+
+def _native_provider(surface: str, os_name: str) -> str:
+    if os_name == "darwin":
+        return {
+            "email": "apple-mail",
+            "calendar": "apple-calendar",
+            "notes": "apple-notes",
+            "chats": "apple-messages",
+        }.get(surface, "")
+    if os_name == "windows" and surface in ("email", "calendar"):
+        return "outlook"
+    if os_name == "windows" and surface == "notes":
+        return "onenote"
+    return ""
+
+
+def _clean_bridges(bridges: dict) -> dict:
+    cleaned = {}
+    for name in KINDS:
+        item = bridges.get(name) if isinstance(bridges.get(name), dict) else {}
+        url = str(item.get("base_url") or "").strip()
+        if not _url_ok(url):
+            url = f"http://127.0.0.1:{DEFAULT_PORTS[name]}"
+        cleaned[name] = {"enabled": bool(item.get("enabled")) and _url_ok(url), "base_url": url}
+    return cleaned
+
+
 def apply_connection(cfg: dict, answers: dict, os_name: str) -> None:
-    kind = str((answers or {}).get("connect") or "skip")
-    if kind == "native":
-        native = _json_dict((answers or {}).get("native_json")) or detect_native(os_name)
-        block = {"kind": "native"}
-        for surface in SURFACES:
-            item = native.get(surface) if isinstance(native.get(surface), dict) else {}
-            block[surface] = {
-                "enabled": bool(item.get("enabled")),
-                "app": str(item.get("app") or ""),
-                "path": str(item.get("path") or ""),
-            }
-        cfg["integrations"] = block
+    spec = parse_connect_spec(str((answers or {}).get("connect") or "skip"))
+    if spec["mode"] == "all" and spec["via"] == "native":
+        _apply_native(cfg, answers, os_name)
+        return
+    if spec["mode"] == "all" and spec["via"] == "bridges":
+        _apply_bridges(cfg, answers)
+        return
+    if spec["mode"] == "all" and spec["via"] == "skip":
+        cfg["integrations"] = {"kind": "off", "window_days": _window(answers), "mask": []}
         cfg["local_bridges"] = default_bridges([])
-        if os_name == "darwin" and block["chats"]["enabled"]:
-            cfg.setdefault("modules", {})
-            cfg["modules"]["imessage"] = True
         return
-    if kind == "bridges":
-        plan = _json_dict((answers or {}).get("bridge_plan_json")) or {}
-        bridges = plan.get("bridges") if isinstance(plan.get("bridges"), dict) else None
-        if not isinstance(bridges, dict):
-            bridges = default_bridges(parse_kinds(str((answers or {}).get("bridge_kinds") or "")))
-        cleaned = {}
-        for name in KINDS:
-            item = bridges.get(name) if isinstance(bridges.get(name), dict) else {}
-            url = str(item.get("base_url") or "").strip()
-            if not _url_ok(url):
-                url = f"http://127.0.0.1:{DEFAULT_PORTS[name]}"
-            cleaned[name] = {"enabled": bool(item.get("enabled")) and _url_ok(url), "base_url": url}
-        cfg["integrations"] = {"kind": "bridges", "assist": str(plan.get("source") or "defaults")}
-        cfg["local_bridges"] = cleaned
-        return
-    cfg["integrations"] = {"kind": "off"}
+    _apply_mapped(cfg, answers, os_name, spec)
+
+
+def _apply_native(cfg: dict, answers: dict, os_name: str) -> None:
+    native = _json_dict((answers or {}).get("native_json")) or detect_native(os_name)
+    block = {"kind": "native", "window_days": _window(answers), "mask": []}
+    for surface in SURFACES:
+        item = native.get(surface) if isinstance(native.get(surface), dict) else {}
+        enabled = bool(item.get("enabled"))
+        block[surface] = _blank(
+            "native",
+            _native_provider(surface, os_name) if enabled else "",
+            str(item.get("path") or ""),
+            str(item.get("app") or ""),
+            enabled,
+        )
+    cfg["integrations"] = block
     cfg["local_bridges"] = default_bridges([])
+    if os_name == "darwin" and block["chats"]["enabled"]:
+        cfg.setdefault("modules", {})
+        cfg["modules"]["imessage"] = True
+
+
+def _apply_bridges(cfg: dict, answers: dict) -> None:
+    plan = _json_dict((answers or {}).get("bridge_plan_json")) or {}
+    bridges = plan.get("bridges") if isinstance(plan.get("bridges"), dict) else None
+    if not isinstance(bridges, dict):
+        bridges = default_bridges(parse_kinds(str((answers or {}).get("bridge_kinds") or "")))
+    cfg["integrations"] = {
+        "kind": "bridges",
+        "assist": str(plan.get("source") or "defaults"),
+        "window_days": _window(answers),
+        "mask": [],
+    }
+    cfg["local_bridges"] = _clean_bridges(bridges)
+
+
+def _apply_mapped(cfg: dict, answers: dict, os_name: str, spec: dict) -> None:
+    native = _json_dict((answers or {}).get("native_json")) or {}
+    if any(via == "native" for via in spec["surfaces"].values()) and not native:
+        native = detect_native(os_name)
+    try:
+        approve = parse_approve(str((answers or {}).get("approve") or ""))
+    except ValueError:
+        approve = {}
+    notes_dir = str((answers or {}).get("notes_dir") or "")
+    bridge_surfaces = [name for name, via in spec["surfaces"].items() if via == "bridges"]
+    plan = _json_dict((answers or {}).get("bridge_plan_json")) or {}
+    bridges = plan.get("bridges") if isinstance(plan.get("bridges"), dict) else None
+    if not isinstance(bridges, dict):
+        bridges = default_bridges([SURFACE_KIND[name] for name in bridge_surfaces])
+    cleaned = _clean_bridges(bridges)
+    for name in KINDS:
+        surface = KIND_SURFACE[name]
+        if surface not in bridge_surfaces:
+            cleaned[name]["enabled"] = False
+    block: dict = {"window_days": _window(answers), "mask": []}
+    needs_token = {"gmail", "gcal", "graph", "imap", "caldav", "carddav"}
+    for surface, via in spec["surfaces"].items():
+        if via == "native":
+            item = native.get(surface) if isinstance(native.get(surface), dict) else {}
+            enabled = bool(item.get("enabled"))
+            block[surface] = _blank(
+                "native",
+                _native_provider(surface, os_name) if enabled else "",
+                str(item.get("path") or ""),
+                str(item.get("app") or ""),
+                enabled,
+            )
+            continue
+        if via == "approved":
+            provider = approve.get(surface) or ""
+            path = notes_dir if provider == "files" and surface == "notes" else ""
+            enabled = False
+            if provider == "files":
+                enabled = bool(path) and Path(path).is_dir()
+            elif provider in ("apple-mail", "apple-notes", "apple-calendar", "apple-messages") and os_name == "darwin":
+                enabled = True
+            elif provider and provider not in needs_token:
+                enabled = True
+            block[surface] = _blank("approved", provider, path, "", enabled)
+            continue
+        if via == "bridges":
+            kind = SURFACE_KIND[surface]
+            block[surface] = _blank("bridges", "bridge", "", "", bool(cleaned[kind]["enabled"]))
+            block[surface]["base_url"] = cleaned[kind]["base_url"]
+            continue
+        block[surface] = _blank("skip")
+    block["kind"] = kind_for(block)
+    cfg["integrations"] = block
+    cfg["local_bridges"] = cleaned
+    chats = block.get("chats") or {}
+    if os_name == "darwin" and chats.get("enabled") and chats.get("via") == "native":
+        cfg.setdefault("modules", {})
+        cfg["modules"]["imessage"] = True
 
 
 def describe(cfg: dict) -> str:
     kind = str((cfg.get("integrations") or {}).get("kind") or "off")
+    block = cfg.get("integrations") or {}
     if kind == "native":
-        block = cfg.get("integrations") or {}
         on = [name for name in SURFACES if (block.get(name) or {}).get("enabled")]
         if not on:
             return "Connections: native, no installed app was found."
         return "Connections: native " + ", ".join(on) + "."
     if kind == "bridges":
         names = [spec.name for spec in enabled_specs(cfg)]
-        assist = str((cfg.get("integrations") or {}).get("assist") or "defaults")
+        assist = str(block.get("assist") or "defaults")
         listed = ", ".join(names) if names else "none"
         return f"Connections: bridges {listed} ({assist})."
+    if kind in ("approved", "mixed"):
+        parts = []
+        for name in SURFACES:
+            item = block.get(name) or {}
+            if item.get("enabled"):
+                parts.append(name + " " + str(item.get("provider") or item.get("via") or ""))
+        if not parts:
+            return "Connections: " + kind + ", nothing connected yet."
+        return "Connections: " + ", ".join(parts) + "."
     return "Connections: off."
 
 
@@ -350,26 +591,34 @@ def connection_status(cfg: dict) -> tuple[bool, str]:
     if kind == "off":
         return True, "not configured"
     if kind == "native":
-        block = cfg.get("integrations") or {}
-        on = []
-        missing = []
-        for name in SURFACES:
-            item = block.get(name) or {}
-            if not item.get("enabled"):
-                continue
-            on.append(name)
-            path = str(item.get("path") or "")
-            if not path or not Path(path).exists():
-                missing.append(name)
-        if not on:
-            return True, "native none installed"
-        if missing:
-            return False, "missing " + ",".join(missing)
-        return True, "native " + ",".join(on)
+        return _path_status(cfg, "native")
     if kind == "bridges":
         names = [spec.name for spec in enabled_specs(cfg)]
         if not names:
             return False, "bridges selected and none are enabled"
         assist = str((cfg.get("integrations") or {}).get("assist") or "defaults")
         return True, "bridges " + ",".join(names) + " " + assist
+    if kind in ("approved", "mixed"):
+        return _path_status(cfg, kind)
     return False, "unknown connection kind"
+
+
+def _path_status(cfg: dict, label: str) -> tuple[bool, str]:
+    block = cfg.get("integrations") or {}
+    on = []
+    missing = []
+    for name in SURFACES:
+        item = block.get(name) or {}
+        if not item.get("enabled"):
+            continue
+        on.append(name)
+        via = str(item.get("via") or label)
+        if via == "native" or str(item.get("provider") or "") == "files":
+            path = str(item.get("path") or "")
+            if not path or not Path(path).exists():
+                missing.append(name)
+    if not on:
+        return True, label + " none connected" if label != "native" else "native none installed"
+    if missing:
+        return False, "missing " + ",".join(missing)
+    return True, label + " " + ",".join(on)

@@ -9,9 +9,12 @@ from hailports.notes import cosine, search as lexical_search
 
 RRF_K = 60
 DEFAULT_SCOPES = {
-    "notes": ("note", "paste", "file"),
+    "notes": ("note", "paste", "file", "contact"),
     "web": ("url",),
-    "all": ("note", "paste", "file", "url"),
+    "email": ("email",),
+    "calendar": ("calendar",),
+    "chats": ("chat",),
+    "all": ("note", "paste", "file", "url", "email", "calendar", "chat", "contact"),
 }
 
 

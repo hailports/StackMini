@@ -72,6 +72,20 @@ def path_block(value: str) -> str | None:
     return None
 
 
+def redact_secrets(text: str) -> str:
+    """Replace secret-shaped spans. The label can stay so a masked password is not stored."""
+    if not text:
+        return ""
+    out = _PRIVACY.sub("[masked]", text)
+    out = _OTP_RE.sub("[masked]", out)
+
+    def _pw(match: re.Match[str]) -> str:
+        label = re.split(r"\s*(?::|=|\bis\b)\s*", match.group(0), maxsplit=1)[0]
+        return label + " [masked]"
+
+    return _PW_RE.sub(_pw, out)
+
+
 def hit_block(hit: dict) -> str | None:
     if not isinstance(hit, dict):
         return None
