@@ -24,6 +24,7 @@ This repo is a fresh write of a local model appliance. Private trees, databases,
 | Display override, client match, window reflow, phone keyboard inset | hailports/display/ |
 | Loopback session bridges (mail draft, meetings, tracker, browser CDP) | hailports/local_bridges/ |
 | Setup records native mail, notes, and chats, or drafts loopback bridges with the user's subscription | hailports/wizard.py, hailports_setup/connect_assist.py |
+| Account sessions in headful Edge, lower right. Edge is installed by the package manager, not shipped. The selected model writes read and draft lines. Nothing is sent | hailports/accounts.py, hailports/wizard.py |
 | Focus list | hailports/worknow.py |
 | Health check, freshness, and restart | hailports/sentinel.py |
 | Service file hash | hailports/integrity.py |
@@ -56,6 +57,7 @@ Also left out:
 - Note databases, snapshots, corpora, and embedding indexes
 - Logs, ledgers, runtime JSON, caches, and backups
 - Model weight files (download them yourself)
+- Microsoft Edge. Setup installs it with brew, winget, or the distro package. The binary is not in this repo
 - Secret files, tokens, and browser profiles
 - Anything from a legal or finance folder
 - Synced drive copies
@@ -69,3 +71,4 @@ Also left out:
 | 8097 | Embedding server |
 | 8078 | Notes service bind |
 | 8079 | Notes ask API, loopback unless an overlay bind is turned on |
+| 9340 | First Edge account session, debug port on 127.0.0.1. Later accounts step up by one |

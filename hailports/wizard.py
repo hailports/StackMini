@@ -17,6 +17,16 @@ from hailports.doctor import failed, format_report, run_doctor
 from hailports.llm import health as local_health
 from hailports.paths import config_dir
 from hailports.promptui import PlainIO, YesIO
+from hailports.accounts import (
+    assist_accounts,
+    edge_install_script,
+    edge_record,
+    find_edge,
+    open_plan,
+    parse_accounts,
+    parse_screen,
+    place_accounts,
+)
 from hailports.providers.factory import DEFAULTS, build_cloud, build_router
 from hailports.secrets_store import EnvAndKeychain
 from hailports_setup.connect_assist import (
@@ -93,9 +103,12 @@ def add_setup_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--download", action="store_true", help="Download the llama.cpp build and the model.")
     parser.add_argument("--apply-install", action="store_true", help="Allow setup to run a package manager after you agree.")
     parser.add_argument("--binary", choices=["prebuilt", "source"], default="prebuilt")
-    parser.add_argument("--connect", choices=["native", "bridges", "skip"], default="", help="Native apps, loopback bridges, or neither.")
+    parser.add_argument("--connect", choices=["native", "bridges", "accounts", "skip"], default="", help="Native apps, loopback bridges, Edge account sessions, or none.")
     parser.add_argument("--bridge-kinds", default="", help="Comma-separated bridges: mail, meetings, tracker, cdp.")
     parser.add_argument("--bridge-ports", default="", help="Ports for mail, meetings, tracker, and cdp.")
+    parser.add_argument("--accounts", default="", help="name=https://host/login pairs. Each one gets a headful Edge window.")
+    parser.add_argument("--screen", default="1440x900", help="Desktop size used to park Edge in the lower right.")
+    parser.add_argument("--open-accounts", action="store_true", help="Open Edge so you can sign in. Off unless you pass this.")
 
 
 def package_command(os_name: str, distro: str, package: str) -> list[str]:
@@ -510,26 +523,34 @@ class Wizard:
         picked = self.io.choose(
             "connect",
             "How should email, notes, and chats connect?",
-            "Native records the apps installed on this computer. Bridges stay on this computer, and the draft comes from your own model subscription. Skip leaves both off. Setup does not read mail, notes, or chats.",
+            "Native records installed apps. Bridges stay on this computer. Accounts opens Microsoft Edge, headful, in the lower right, and your selected model writes how that page is read and drafted. Nothing is sent.",
             [
                 ("native", "Mail, notes, and chats through the apps installed here."),
                 ("bridges", "Loopback bridges. Your subscription drafts the config."),
+                ("accounts", "Any account in its own Edge window, parked in the lower right."),
                 ("skip", "Leave email, notes, and chats unconnected."),
             ],
             default,
         )
         if picked == "back":
             return "back"
-        if picked == "skip":
+        extra = str(self.args.accounts or "").strip()
+        if picked == "skip" and not extra:
             self._remember("connect", "skip")
             self._log("connect skip")
             return "ok"
         if picked == "native":
-            return self._connect_native()
-        if picked == "bridges":
-            return self._connect_bridges()
-        self._remember("connect", "skip")
-        return "ok"
+            result = self._connect_native()
+        elif picked == "bridges":
+            result = self._connect_bridges()
+        elif picked in ("accounts", "skip"):
+            result = self._connect_accounts()
+        else:
+            self._remember("connect", "skip")
+            result = "ok"
+        if result == "ok" and extra and picked not in ("accounts", "skip"):
+            return self._connect_accounts(attach=True)
+        return result
 
     def _connect_native(self) -> str:
         hw = self.hw or probe(self.args.target_os, self.args.arch, self.args.accel, self.args.ram_gb, self.args.vram_gb)
@@ -614,6 +635,102 @@ class Wizard:
         self._remember("bridge_plan_json", json.dumps({"bridges": plan["bridges"], "source": plan.get("source") or "defaults"}))
         self._log("connect bridges " + str(plan.get("source") or "defaults"))
         return "ok"
+
+    def _connect_accounts(self, attach: bool = False) -> str:
+        automatic = bool(self.args.yes or self.args.non_interactive)
+        raw = str(self.args.accounts or "")
+        if not automatic:
+            raw = self.io.ask(
+                "accounts",
+                "Which accounts should sign in?",
+                "Comma-separated name=https://host/login. Each account gets its own headful Edge window in the lower right. Eight at most. Edge is installed from Microsoft, not from this repo.",
+                raw,
+            )
+            if raw == "back":
+                return "back"
+            if raw == "skip":
+                if not attach:
+                    self._remember("connect", "skip")
+                return "ok"
+        try:
+            rows = parse_accounts(raw)
+            screen = parse_screen(self.args.screen or "1440x900")
+        except ValueError as exc:
+            raise StepFailed(str(exc), "Use name=https://host/login and a screen like 1440x900.") from exc
+        sessions = place_accounts(rows, screen)
+        hw = self.hw or probe(self.args.target_os, self.args.arch, self.args.accel, self.args.ram_gb, self.args.vram_gb)
+        self.hw = hw
+        binary = find_edge(hw.os_name)
+        record = edge_record(hw.os_name, getattr(hw, "distro", "") or "", binary)
+        if not binary:
+            self.io.say("Microsoft Edge is not installed. This repo does not include it.")
+            self.io.say("Install command: " + record["install"])
+            script = edge_install_script(hw.os_name, getattr(hw, "distro", "") or "")
+            if script:
+                script_path = self.state / "edge-install.sh"
+                script_path.write_text(script, encoding="utf-8")
+                script_path.chmod(0o755)
+                self.io.say("Linux install steps: " + str(script_path))
+            if not automatic:
+                agree = self.io.confirm(
+                    "install_edge",
+                    "Install Microsoft Edge now?",
+                    "Setup runs that command only when you also pass --apply-install.",
+                    False,
+                )
+                if agree:
+                    if not self.args.apply_install:
+                        raise StepFailed(
+                            "Setup will not run a package manager unless you pass --apply-install.",
+                            "Run the command above yourself, or re-run setup with --apply-install.",
+                        )
+                    self._install_edge(hw, script)
+                    binary = find_edge(hw.os_name)
+                    record = edge_record(hw.os_name, getattr(hw, "distro", "") or "", binary)
+        if sessions and not automatic and not self.args.skip_network:
+            mode = str(self.answers.get("mode") or self.args.mode or "local")
+            if mode == "local":
+                self.io.say("The local model writes read and write lines when you run hailports accounts adapt.")
+            else:
+                key = self.secrets.get(self._cfg()) or ""
+                if not key:
+                    raise StepFailed(
+                        "Account setup uses your selected model, and no key is set.",
+                        "Export HAILPORTS_API_KEY, or use local mode and run hailports accounts adapt.",
+                    )
+                cloud = build_cloud(self._cfg(), key)
+                sessions = assist_accounts(cloud, sessions, secret=key)
+                self.io.say("The selected model wrote how each account is read and drafted. Nothing is sent.")
+        elif sessions:
+            self.io.say("Edge sessions are planned in the lower right. Run hailports accounts adapt, then hailports accounts open --apply. Nothing is sent.")
+        if not attach:
+            self._remember("connect", "accounts")
+        self._remember("accounts_json", json.dumps({"sessions": sessions, "edge": record}))
+        self._log("connect accounts " + str(len(sessions)))
+        if self.args.open_accounts and binary and sessions:
+            self.io.say("Opening Edge in the lower right. Sign in yourself. Setup does not type a password.")
+            self._open_edge(sessions, binary)
+        elif self.args.open_accounts and sessions and not binary:
+            raise StepFailed("Edge is not installed, so the window was not opened.", "Install Edge, then run hailports accounts open --apply.")
+        return "ok"
+
+    def _install_edge(self, hw, script: str) -> None:
+        import subprocess
+        if script:
+            script_path = self.state / "edge-install.sh"
+            script_path.write_text(script, encoding="utf-8")
+            script_path.chmod(0o755)
+            subprocess.run(["/bin/sh", str(script_path)], check=False)
+            return
+        from hailports.accounts import edge_install_argv
+        subprocess.run(edge_install_argv(hw.os_name, getattr(hw, "distro", "") or ""), check=False)
+
+    def _open_edge(self, sessions: dict, binary: str) -> None:
+        import subprocess
+        for argv in open_plan(sessions, binary):
+            if any(part == "--headless" or part.startswith("--headless=") for part in argv):
+                raise StepFailed("Edge sessions are headful.", "Do not pass a headless flag.")
+            subprocess.Popen(argv)
 
     def _bridge_subscription(self) -> str:
         """Make sure a provider the user named is in the answers. Local mode has not asked yet."""

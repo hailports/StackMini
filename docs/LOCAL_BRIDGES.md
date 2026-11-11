@@ -19,6 +19,14 @@
 
 The bridge choice calls the provider and key already configured. The prompt is the operating system, the bridge names, and the ports. Mail, notes, and chats are not sent. A URL that is not loopback or an overlay address is dropped. `--connect skip` leaves both paths off. `--yes` skips this unless `--connect` is set.
 
+## Account sessions
+
+`--connect accounts` is not the loopback bridge table. You pass accounts as `name=https://host/login`. Each account gets one Edge user-data directory and one loopback debug port, starting at 9340. The window is headful. On a 1440x900 screen the first one sits at 1020,580 in a 420x320 frame, which is the lower-right corner. The next windows step 20px up and left and stay on screen.
+
+Microsoft Edge is not in this repository. Setup looks for the installed binary. When it is missing, the install line is `brew install --cask microsoft-edge` on macOS, `winget install --id Microsoft.Edge` on Windows, or `state/edge-install.sh` for Debian and Fedora. That script is the Microsoft apt or dnf repo plus `microsoft-edge-stable`. Setup runs the package manager only when you confirm and pass `--apply-install`. `--yes` and CI do not install Edge and do not open a window. `--open-accounts` opens the windows. You sign in yourself. Setup does not type a password.
+
+The model selected in setup writes `read_list` and `write_fill`. `send` is forced false. `hailports accounts tick` takes page text from `--page`. It returns ingest, draft, or none. A send op is dropped. Script and a secret page are dropped before the model is called. Model-written JavaScript is not executed. A draft row uses channel `account`, never a mail or meetings channel, and `sent` stays false.
+
 ## What a tick does
 
 - Probe `/health` or the CDP `/json/version` port you configured.
