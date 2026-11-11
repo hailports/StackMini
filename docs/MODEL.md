@@ -163,3 +163,16 @@ you control; do not rely on the previous process still having the mapping.
 ## API mode
 
 `hailports setup` asks for the mode first. API mode does not build llama.cpp and does not download a GGUF. Hybrid mode still uses the local build above for reading, summarizing, retrieval, drafting, and compression, and calls the configured cloud provider only when the routing policy says the job is hard, unsure, or too long.
+
+
+## Output quality (2026-11-10)
+
+The decode rate in the table above is the server. A fast server still writes a bad note if the note shape or the facts in front of it are wrong.
+
+- Instruct sampling, only when the caller does not set a temperature: 0.7, top_p 0.95, top_k 100, min_p 0, repeat penalty 1.03. That is the model's instruct card.
+- Overnight notes use a grammar whose lines are about a sentence long (about 140 to 160 characters, 8 result lines). A 680-character line made the model repeat itself, and those notes were discarded. That path uses repeat penalty 1.05, and a note that starts repeating is cut off.
+- A work question is answered from the local index first. If the index has no excerpt, the reply says so instead of guessing. Draft jobs that already carry the long stable prefix are not rewritten, so their prompt cache stays valid.
+- A public deep-research ask fetches more pages than a normal question. A work question stays on the local index.
+- PDF text covers 30 pages. Plain text, markdown, csv, and html are read as text. Pictures go to the vision projector.
+- One decode slot is the default. A second slot is allowed only when the memory level is 40 or higher at server start. Two slots share one GPU, so each stream is slower. Do not open the second slot just to look busy.
+- Record the change with `scripts/stack-change.sh` before the session ends. See `docs/SOP-STACK-CHANGES.md`.
