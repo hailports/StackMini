@@ -34,6 +34,7 @@ The model selected in setup writes `read_list` and `write_fill`. `send` is force
 - A hot browser is watched, then reloaded, then the renderer is recycled, then the main process is bounced, and only when a bounce is allowed. A login, a held lock, or text sitting in a composer skips that.
 - Garbage collection is separate. It never quits, reloads, or clicks.
 - Restart goes through the service manager, and only when the recorded process id is still the live one. A different pid is left alone.
+- A stale receipt is rewritten to the service pid only when that pid is this job and the argv proof matches. If the port is down, the debug port is silent, ensure says BLOCKED, or the cache is older than 10 minutes while unread is above zero, the ladder is adopt, then kickstart -k of this label, then a signal to that owned pid. Three heals an hour, then one local note. No mail and no chat.
 
 ## Drafts
 
