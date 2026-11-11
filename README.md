@@ -21,6 +21,7 @@ Illustrative walkthrough of StackMini chat (with image input), notes with embedd
 - Ask / do that reads notes and runbooks, then asks the model. It does not change files
 - Grounded drafter. A line without a source citation is held. A quoted scheduling line does not hide a later note. Each skip is logged with its reason and the subject or sender
 - Draft queue, story card, sprint packet, and calendar focus blocks as an `.ics` file
+- Read-only sprint prep. The local model writes one card per open item, and a draft note is kept only when the comment gate accepts it. See `hailports/sprint_prep.py` and `contrib/sprint_prep/`.
 - Duplicate-card guard, including a near-duplicate title
 - Notes database with file and page ingest, bge-small embeddings, and hybrid search
 - Freshness check that restarts a dead embed server through the service manager

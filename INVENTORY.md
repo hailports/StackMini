@@ -15,6 +15,7 @@ This repo is a fresh write of a local model appliance. Private trees, databases,
 | Draft queue, one id per round, skip reason in the log, chat badge restored once | hailports/draft_runner.py, hailports/chat_badge.py |
 | Story card from a short request | hailports/story.py |
 | Sprint pack and focus blocks | hailports/sprint.py, hailports/calendar_blocker.py |
+| Read-only sprint prep cards from the local model, comment gate, weekday schedule | hailports/sprint_prep.py, contrib/sprint_prep/ |
 | Do not open a duplicate card | hailports/ticket_guard.py, hailports/plugins/tracker.py |
 | Runbook index | hailports/runbooks.py, hailports/learning.py |
 | Notes ingest and hybrid search | hailports/notes.py |
