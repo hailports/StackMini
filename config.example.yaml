@@ -56,9 +56,27 @@ edge:
 paiste:
   enabled: false
   copy: true
+  notes: off
   notes_dir: ""
   obsidian_vault: ""
+  mail: off
+  email_dir: ""
+  chat: off
+  chat_dir: ""
+  calendar: off
+  calendar_dir: ""
   brain_db: ""
+  # First hop wins. http is a server on this computer. ssh runs curl on a computer you own.
+  # Blank ssh_host is skipped. Nothing is sent. hailports paiste setup asks before it writes these.
+  order:
+    - local
+  models:
+    local:
+      via: http
+      base_url: http://127.0.0.1:18080/v1
+      model: local
+      ssh_host: ""
+      remote_url: ""
 web:
   search_url: ""
   news_url: ""
