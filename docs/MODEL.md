@@ -178,3 +178,4 @@ The decode rate in the table above is the server. A fast server still writes a b
 - Record the change with `scripts/stack-change.sh` before the session ends. See `docs/SOP-STACK-CHANGES.md`.
 
 Work questions are embedded and the nearest notes are retrieved by meaning. The model then picks the passage that answers the question and writes from that passage. A keyword list is not the lookup.
+A work answer may use up to about 8k tokens of the 16k window. The model fact-checks a grounded reply, and a clean miss can go to a premium model. The 32k window is armed and applies on the next start only when the memory level is 40 or higher.
