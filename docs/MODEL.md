@@ -176,3 +176,5 @@ The decode rate in the table above is the server. A fast server still writes a b
 - PDF text covers 30 pages. Plain text, markdown, csv, and html are read as text. Pictures go to the vision projector.
 - One decode slot is the default. A second slot is allowed only when the memory level is 40 or higher at server start. Two slots share one GPU, so each stream is slower. Do not open the second slot just to look busy.
 - Record the change with `scripts/stack-change.sh` before the session ends. See `docs/SOP-STACK-CHANGES.md`.
+
+Work questions are embedded and the nearest notes are retrieved by meaning. The model then picks the passage that answers the question and writes from that passage. A keyword list is not the lookup.
