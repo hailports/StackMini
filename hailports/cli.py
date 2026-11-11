@@ -624,6 +624,57 @@ def cmd_uninstall(cfg: dict, cfg_path: Path, delete_data: bool, apply: bool) -> 
     return 0
 
 
+def _cmd_accounts(cfg: dict, cfg_path: Path, args) -> int:
+    from hailports.accounts import assist_accounts, find_edge, open_plan, tick
+    from hailports.draft_runner import run_round
+
+    sessions = dict(cfg.get("accounts") or {})
+    os_name = current_os()
+    binary = str((cfg.get("edge") or {}).get("path") or "") or find_edge(os_name) or "microsoft-edge"
+    if args.action == "plan" or (args.action == "open" and not args.apply):
+        print(json.dumps({"browser": "edge", "headful": True, "argv": open_plan(sessions, binary), "sent": False}))
+        if args.action == "open":
+            print("Pass --apply to open Edge.")
+        return 0
+    if args.action == "open":
+        import subprocess
+        for argv in open_plan(sessions, binary):
+            if any(part == "--headless" or str(part).startswith("--headless=") for part in argv):
+                print("refusing headless")
+                return 2
+            subprocess.Popen(argv)
+        print(json.dumps({"opened": len(sessions), "sent": False}))
+        return 0
+    try:
+        router = _router(cfg)
+    except ProviderError as exc:
+        return _fail_provider(exc)
+
+    def complete(messages):
+        reply = router.complete(messages, task="draft")
+        return reply.text or ""
+
+    if args.action == "adapt":
+        class _Cloud:
+            def chat(self, messages, max_tokens=512, temperature=0):
+                from hailports.providers.base import Reply
+                return Reply(complete(messages), "local", "local", 1, 1, {})
+
+        updated = assist_accounts(_Cloud(), sessions)
+        cfg["accounts"] = updated
+        config_mod.save_file(cfg_path, cfg)
+        print(json.dumps({"adapted": list(updated), "sent": False}))
+        return 0
+    pages = {}
+    if args.page:
+        pages = json.loads(Path(args.page).read_text(encoding="utf-8"))
+    results = tick(sessions, pages, complete)
+    rows = [item["row"] for item in results if item.get("row")]
+    drafted = run_round(rows, router=router) if rows else {"drafted": 0, "drafts": []}
+    print(json.dumps({"sent": False, "results": [{k: v for k, v in item.items() if k != "row"} for item in results], "drafted": drafted.get("drafted", 0)}))
+    return 0
+
+
 def cmd_update() -> int:
     print(f"hailports {__version__}")
     print("Update with: python -m pip install --user --upgrade .")
@@ -725,6 +776,16 @@ def build_parser() -> argparse.ArgumentParser:
     block_p.add_argument("title")
     msg_p = sub.add_parser("imessage", help="macOS poll hint, or a model reply for a message.")
     msg_p.add_argument("text", nargs="?")
+    paiste_p = sub.add_parser("paiste", help="Read the text near the cursor and copy a reply. Nothing is sent.")
+    paiste_p.add_argument("action", nargs="?", default="draft", choices=["draft", "auto", "menu"])
+    paiste_p.add_argument("--scene", default="")
+    paiste_p.add_argument("--inbox", default="")
+    paiste_p.add_argument("--outbox", default="")
+    paiste_p.add_argument("--copy", action="store_true")
+    acct_p = sub.add_parser("accounts", help="Edge sessions. The selected model configures read and draft. Nothing is sent.")
+    acct_p.add_argument("action", choices=["plan", "open", "adapt", "tick"])
+    acct_p.add_argument("--page", default="", help="JSON object of account label to visible page text.")
+    acct_p.add_argument("--apply", action="store_true", help="Open Edge. Without this, open only prints the plan.")
     return parser
 
 
@@ -885,6 +946,11 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_idle(cfg, cfg_path)
     if args.cmd == "alerts":
         return _cmd_alerts(cfg, cfg_path, args.probe, args.channel)
+    if args.cmd == "paiste":
+        from hailports.paiste_cmd import cmd_paiste
+        return cmd_paiste(args, cfg, _state_dir(cfg_path))
+    if args.cmd == "accounts":
+        return _cmd_accounts(cfg, cfg_path, args)
     if args.cmd == "imessage":
         if args.text:
             try:

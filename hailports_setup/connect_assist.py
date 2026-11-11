@@ -292,8 +292,31 @@ def _json_dict(raw) -> dict | None:
     return loaded if isinstance(loaded, dict) else None
 
 
+def _write_accounts(cfg: dict, answers: dict) -> None:
+    doc = _json_dict((answers or {}).get("accounts_json"))
+    if not isinstance(doc, dict):
+        return
+    sessions = doc.get("sessions") if isinstance(doc.get("sessions"), dict) else {}
+    cfg["accounts"] = sessions
+    edge = doc.get("edge") if isinstance(doc.get("edge"), dict) else {}
+    if edge:
+        cfg["edge"] = {
+            "browser": "edge",
+            "path": str(edge.get("path") or ""),
+            "install": str(edge.get("install") or ""),
+            "bundled": False,
+            "headful": True,
+            "corner": "lower-right",
+        }
+
+
 def apply_connection(cfg: dict, answers: dict, os_name: str) -> None:
     kind = str((answers or {}).get("connect") or "skip")
+    if kind == "accounts":
+        cfg["integrations"] = {"kind": "accounts", "browser": "edge", "headful": True, "corner": "lower-right"}
+        cfg["local_bridges"] = default_bridges([])
+        _write_accounts(cfg, answers)
+        return
     if kind == "native":
         native = _json_dict((answers or {}).get("native_json")) or detect_native(os_name)
         block = {"kind": "native"}
@@ -309,6 +332,7 @@ def apply_connection(cfg: dict, answers: dict, os_name: str) -> None:
         if os_name == "darwin" and block["chats"]["enabled"]:
             cfg.setdefault("modules", {})
             cfg["modules"]["imessage"] = True
+        _write_accounts(cfg, answers)
         return
     if kind == "bridges":
         plan = _json_dict((answers or {}).get("bridge_plan_json")) or {}
@@ -324,9 +348,11 @@ def apply_connection(cfg: dict, answers: dict, os_name: str) -> None:
             cleaned[name] = {"enabled": bool(item.get("enabled")) and _url_ok(url), "base_url": url}
         cfg["integrations"] = {"kind": "bridges", "assist": str(plan.get("source") or "defaults")}
         cfg["local_bridges"] = cleaned
+        _write_accounts(cfg, answers)
         return
     cfg["integrations"] = {"kind": "off"}
     cfg["local_bridges"] = default_bridges([])
+    _write_accounts(cfg, answers)
 
 
 def describe(cfg: dict) -> str:
@@ -342,6 +368,10 @@ def describe(cfg: dict) -> str:
         assist = str((cfg.get("integrations") or {}).get("assist") or "defaults")
         listed = ", ".join(names) if names else "none"
         return f"Connections: bridges {listed} ({assist})."
+    if kind == "accounts":
+        names = list((cfg.get("accounts") or {}).keys())
+        listed = ", ".join(names) if names else "none"
+        return f"Connections: accounts {listed} (Edge, headful, lower right)."
     return "Connections: off."
 
 
@@ -372,4 +402,23 @@ def connection_status(cfg: dict) -> tuple[bool, str]:
             return False, "bridges selected and none are enabled"
         assist = str((cfg.get("integrations") or {}).get("assist") or "defaults")
         return True, "bridges " + ",".join(names) + " " + assist
+    if kind == "accounts":
+        sessions = cfg.get("accounts") or {}
+        if not isinstance(sessions, dict) or not sessions:
+            return True, "accounts none"
+        edge = cfg.get("edge") or {}
+        path = str(edge.get("path") or "")
+        if path and not Path(path).exists():
+            return False, "edge missing"
+        if edge.get("bundled"):
+            return False, "edge must be installed, not shipped"
+        for name, item in sessions.items():
+            if not isinstance(item, dict):
+                return False, "bad account " + str(name)
+            if item.get("browser") != "edge" or not item.get("headful") or item.get("send"):
+                return False, "bad account " + str(name)
+            url = str(item.get("url") or "")
+            if not (url.startswith("https://") or url.startswith("http://127.0.0.1") or url.startswith("http://localhost")):
+                return False, "bad url " + str(name)
+        return True, "accounts " + ",".join(sessions)
     return False, "unknown connection kind"

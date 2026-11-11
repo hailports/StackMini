@@ -354,6 +354,27 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
             continue
         sources = list(row.get("sources") or [])
         ask = str(row.get("ask") or subject or newest)
+        scene = row.get("scene")
+        prepared = None
+        if scene:
+            from hailports.paiste import prepare as paiste_prepare
+
+            prepared = paiste_prepare(scene, search=row.get("memory_search"), folders=row.get("memory_folders"))
+            if not prepared.get("ok"):
+                emit(str(prepared.get("reason") or "paiste"), subject or str(prepared.get("subject") or ""), sender or str(prepared.get("app") or ""))
+                continue
+            held_scene = secret_hold(str(prepared.get("subject_text") or ""))
+            if held_scene:
+                emit("secret", subject, sender, held_scene)
+                continue
+            if not sources:
+                sources = list(prepared.get("sources") or [])
+            if not str(row.get("ask") or "").strip():
+                ask = str(prepared.get("ask") or ask)
+            if not subject:
+                subject = str(prepared.get("subject") or subject)
+            if not sender:
+                sender = str(prepared.get("app") or sender)
         link_kinds: list[str] = []
         if row.get("pages"):
             from hailports.contextpack import pack_pages
@@ -370,7 +391,11 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
                 sources = sources + [packed["text"]]
             link_kinds = list(packed.get("kinds") or [])
         try:
-            if router is None:
+            if prepared is not None and router is not None:
+                got = router.complete(prepared["messages"], task="draft")
+                held = False
+                text = got.text or ""
+            elif router is None:
                 text = draft(ask, sources)
                 held = False
             else:
@@ -461,7 +486,7 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
             "from": sender,
             "text": text,
             "sent": False,
-            "via": "draft",
+            "via": "paiste" if prepared else "draft",
         }
         if link_kinds:
             staged["links"] = link_kinds

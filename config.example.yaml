@@ -42,8 +42,23 @@ local_bridges:
     enabled: false
     base_url: http://127.0.0.1:9222
 integrations:
-  # off, native, or bridges. hailports setup writes this.
+  # off, native, bridges, or accounts. hailports setup writes this.
   kind: off
+# Account sessions. Empty until setup. Edge is installed by brew, winget, or the distro package.
+accounts:
+edge:
+  browser: edge
+  path: ""
+  install: ""
+  bundled: false
+  headful: true
+  corner: lower-right
+paiste:
+  enabled: false
+  copy: true
+  notes_dir: ""
+  obsidian_vault: ""
+  brain_db: ""
 web:
   search_url: ""
   news_url: ""
