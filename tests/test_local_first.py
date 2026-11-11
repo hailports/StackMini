@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ["LOCAL_FIRST_RECORD"] = "0"
+os.environ["JEV_DISABLE"] = "1"
 os.environ.pop("LOCAL_FIRST_ROUTER", None)
 os.environ.pop("LOCAL_FIRST_DONE", None)
 for _env_name in ("GROK_REAL_BIN", "CLAUDE_REAL_BIN", "CODEX_REAL_BIN", "CURSOR_AGENT_REAL_BIN"):
@@ -66,6 +67,43 @@ def test_grok_plan_does_not_exec_on_local():
     assert args[1] == "31536000"
     joined = " ".join(args)
     assert "[LOCAL-FIRST BRIEF v1]" in joined
+
+
+def test_jev_weak_escalates_and_good_stops(monkeypatch):
+    monkeypatch.delenv("JEV_DISABLE", raising=False)
+    import sys as _sys
+    gate_dir = str(Path(__file__).resolve().parents[1] / "hailports")
+    if gate_dir not in _sys.path:
+        _sys.path.insert(0, gate_dir)
+    import jev_gates
+
+    def weak(_task, _answer, caller="local-first"):
+        return "escalate"
+
+    def good(_task, _answer, caller="local-first"):
+        return "stop"
+
+    task = "Summarize this log line: the router started"
+    monkeypatch.setattr(jev_gates, "score_local", weak)
+    low = r.route_task(
+        task,
+        caller="local-first-route",
+        fetch=lambda _p: {"ok": True, "text": "unrelated status paragraph that looks finished enough", "backend": "fake"},
+        config={"transport": "inject"},
+    )
+    assert low["decision"] == "need_premium"
+    assert low["why"] == "jev_low_confidence"
+    monkeypatch.setattr(jev_gates, "score_local", good)
+    high = r.route_task(
+        task,
+        caller="local-first-route",
+        fetch=lambda _p: {"ok": True, "text": "4", "backend": "fake"},
+        config={"transport": "inject"},
+    )
+    assert high["decision"] == "complete_local"
+    assert high["answer"] == "4"
+    assert high["why"] == "jev_high_confidence"
+    monkeypatch.setenv("JEV_DISABLE", "1")
 
 
 def test_route_with_fake_fetch_never_marks_paid():
