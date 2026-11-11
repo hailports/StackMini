@@ -33,3 +33,7 @@ Copy an audit note to `data/ado_prep/context/*.md` when you have one. The run al
 Each model call is a background call. If priority work is in flight, the run waits and then retries. A busy slot that is other background work is queued behind. The run does not unload or swap the model.
 
 An unfinished day file (status still running) is resumed. Cards that already have a summary are not sent to the model again. A finished day file is prepped again.
+
+## Notes
+
+A later note step may mail one note per card. It mails a card only when System.AssignedTo is the configured owner, or when blocking_who names that owner. The next-step sentence does not count. If that step would send more than 25 notes, it sends none.
