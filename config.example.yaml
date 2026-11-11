@@ -65,6 +65,8 @@ paiste:
   chat_dir: ""
   calendar: off
   calendar_dir: ""
+  context_file: ""
+  lookup_cmd: ""
   brain_db: ""
   # First hop wins. http is a server on this computer. ssh runs curl on a computer you own.
   # Blank ssh_host is skipped. Nothing is sent. hailports paiste setup asks before it writes these.
