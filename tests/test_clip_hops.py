@@ -316,6 +316,7 @@ def test_login_choice_stores_the_app_and_not_a_key():
     assert cursor[1:6] == ["-p", "--mode", "ask", "--trust", "--output-format"]
     assert "--yolo" not in cursor
     assert "viewing a communication" in cursor_prompt("be brief", "Sam asked")
+    assert "already connected" in cursor_prompt("be brief", "Sam asked")
     assert only_reply("Ask mode, so I didn't stage it in Zoom") == ""
     assert only_reply("hey Sam -- on it") == "hey Sam -- on it"
     plain = show_board({
