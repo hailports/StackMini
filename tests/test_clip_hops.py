@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from hailports.llm import ModelOffline
-from hailports.clip.board import BoardError, apply_board, discover, guide, parse_hop, show_board, store_api_key
+from hailports.clip.board import BoardError, apply_board, discover, guide, parse_hop, probe_model, show_board, store_api_key
 from hailports.clip.hops import complete, endpoints_from, ssh_argv
 from hailports.clip.scene import folder_hits
 
@@ -194,6 +194,139 @@ def test_board_keeps_the_model_choice_and_not_the_key(tmp_path):
         pass
     else:
         raise AssertionError("a local server is not the API")
+
+
+def test_several_models_keep_the_remote_path(tmp_path):
+    existing = {
+        "me": "Ada",
+        "context_file": "/tmp/voice.md",
+        "lookup_cmd": "/tmp/lookup",
+        "order": ["brain"],
+        "models": {"brain": {
+            "via": "ssh", "base_url": "", "model": "desk-model",
+            "ssh_host": "brain", "remote_url": "http://127.0.0.1:8080/v1",
+        }},
+    }
+    shown = show_board(existing, {})
+    assert shown["locals"][0]["host"] == "brain"
+    assert shown["locals"][0]["remote"] == "http://127.0.0.1:8080/v1"
+    assert shown["locals"][0]["line"] == "ssh brain http://127.0.0.1:8080/v1"
+    one = store_api_key(tmp_path, "sk-one", "api-1")
+    two = store_api_key(tmp_path, "sk-two", "api-2")
+    saved = apply_board(existing, {
+        "link": "both",
+        "locals": [
+            {"host": "brain", "remote": "http://127.0.0.1:8080/v1", "model": "desk-model"},
+            {"url": "http://127.0.0.1:11434/v1", "model": "llama"},
+        ],
+        "apis": [
+            {"url": "https://api.openai.com/v1", "model": "gpt-4o-mini", "key_file": one},
+            {"url": "https://api.groq.com/openai/v1", "model": "llama-3.3-70b", "key_file": two},
+        ],
+        "mail": "front",
+        "chat": "off",
+        "notes": "off",
+        "calendar": "off",
+    })
+    assert saved["order"][0] == "brain"
+    assert saved["models"]["brain"]["ssh_host"] == "brain"
+    assert saved["models"]["brain"]["remote_url"] == "http://127.0.0.1:8080/v1"
+    assert saved["models"]["brain"]["model"] == "desk-model"
+    assert saved["me"] == "Ada"
+    assert len(saved["order"]) == 4
+    assert "sk-one" not in str(saved)
+    assert "sk-two" not in str(saved)
+    again = show_board(saved, {})
+    kept = apply_board(saved, {
+        "link": "both",
+        "locals": again["locals"],
+        "apis": [{"url": row["url"], "model": row["model"]} for row in again["apis"]],
+        "mail": "front",
+        "chat": "off",
+        "notes": "off",
+        "calendar": "off",
+    })
+    assert kept["models"]["brain"]["remote_url"] == "http://127.0.0.1:8080/v1"
+    assert kept["order"][0] == "brain"
+    assert Path(kept["models"][kept["order"][2]]["key_file"]).read_text(encoding="utf-8").strip() == "sk-one"
+    blank = probe_model("ssh nope", "sk-secret-value")
+    missed = probe_model("http://127.0.0.1:1/v1", "sk-secret-value")
+    assert "sk-secret" not in blank
+    assert "sk-secret" not in missed
+    assert missed == "Not reachable."
+
+
+def test_local_keeps_a_connected_premium():
+    saved = apply_board({
+        "order": ["cursor"],
+        "models": {"cursor": {
+            "via": "cursor", "bin": "/usr/bin/agent", "model": "cursor",
+            "base_url": "", "ssh_host": "", "remote_url": "",
+        }},
+    }, {
+        "link": "local",
+        "local": "ssh brain http://127.0.0.1:8080/v1",
+        "local_model": "desk-model",
+        "mail": "off",
+        "chat": "off",
+        "notes": "off",
+        "calendar": "off",
+    })
+    assert saved["order"][-1] == "cursor"
+    assert saved["models"]["cursor"]["via"] == "cursor"
+    assert saved["order"][0] != "cursor"
+
+
+def test_login_choice_stores_the_app_and_not_a_key():
+    from hailports.clip.hops import claude_argv, codex_argv, cursor_argv, cursor_prompt, only_reply
+    saved = apply_board({
+        "me": "Ada",
+        "context_file": "/tmp/voice.md",
+        "order": ["brain"],
+        "models": {"brain": {
+            "via": "ssh", "base_url": "", "model": "desk-model",
+            "ssh_host": "brain", "remote_url": "http://127.0.0.1:8080/v1",
+        }},
+    }, {
+        "link": "app",
+        "app": "claude",
+        "bin": "/usr/bin/claude",
+        "mail": "front",
+        "chat": "off",
+        "notes": "off",
+        "calendar": "off",
+    })
+    assert saved["order"] == ["brain", "claude"]
+    assert saved["models"]["brain"]["remote_url"] == "http://127.0.0.1:8080/v1"
+    assert saved["models"]["claude"]["via"] == "claude"
+    assert saved["models"]["claude"]["bin"] == "/usr/bin/claude"
+    assert saved["me"] == "Ada"
+    assert saved["context_file"] == "/tmp/voice.md"
+    shown = show_board(saved, {})
+    assert shown["app"] == "claude"
+    assert shown["link"] == "app"
+    argv = claude_argv("/usr/bin/claude", "rules", "hi")
+    assert argv[1:5] == ["-p", "--output-format", "text", "--permission-mode"]
+    assert "plan" in argv
+    assert "bypass" not in " ".join(argv)
+    codex = " ".join(codex_argv("/usr/bin/codex", "/tmp/out"))
+    assert "--sandbox read-only" in codex
+    assert "bypass" not in codex
+    cursor = cursor_argv("/usr/bin/agent", "hi")
+    assert cursor[1:6] == ["-p", "--mode", "ask", "--trust", "--output-format"]
+    assert "--yolo" not in cursor
+    assert "viewing a communication" in cursor_prompt("be brief", "Sam asked")
+    assert only_reply("Ask mode, so I didn't stage it in Zoom") == ""
+    assert only_reply("hey Sam -- on it") == "hey Sam -- on it"
+    plain = show_board({
+        "order": ["brain"],
+        "models": {"brain": {
+            "via": "ssh", "model": "desk-model", "ssh_host": "brain",
+            "remote_url": "http://127.0.0.1:8080/v1",
+        }},
+    }, {})
+    assert plain["app"] == ""
+    assert plain["locals"][0]["host"] == "brain"
 
 
 def test_guide_says_the_model_holds_the_data():

@@ -5,8 +5,11 @@ Mail and chat stay copy-only. Nothing is sent. A blank model line stops the list
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
+import subprocess
+import urllib.error
 import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
@@ -173,18 +176,163 @@ def _key_path_ok(path: str) -> bool:
     return text.startswith("/") and ".." not in text and len(text) <= 240 and "\n" not in text
 
 
-def store_api_key(directory: Path, secret: str) -> str:
-    """Write the model key on this Mac. The route file stores the path, not the key."""
+def store_api_key(directory: Path, secret: str, name: str = "api") -> str:
+    """Write one model key on this Mac. The route file stores the path, not the key."""
     text = (secret or "").strip()
     if not text or len(text) > 400 or any(ch in text for ch in "\r\n\t "):
         raise BoardError("That key was not kept.")
     if secret_hold(text):
         raise BoardError("That key was not kept.")
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / "api.key"
+    safe = re.sub(r"[^A-Za-z0-9._-]", "", name or "")[:40] or "api"
+    folder = directory / "keys"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / (safe + ".key")
     path.write_text(text + "\n", encoding="utf-8")
     path.chmod(0o600)
     return str(path)
+
+
+def _local_line(row: dict) -> str:
+    """One local hop. A host means the model is on another Mac you can ssh to."""
+    host = str(row.get("host") or "").strip()
+    remote = str(row.get("remote") or "").strip()
+    if host:
+        if not remote:
+            remote = "http://127.0.0.1:8080/v1"
+        return "ssh " + host + " " + remote
+    url = str(row.get("url") or "").strip()
+    if url:
+        return url
+    return str(row.get("line") or "").strip()
+
+
+def _local_rows(answers: dict) -> list[tuple[str, str]]:
+    rows = answers.get("locals")
+    picked = []
+    if isinstance(rows, list) and rows:
+        for row in rows:
+            if isinstance(row, str):
+                line = row.strip()
+                model = ""
+            elif isinstance(row, dict):
+                line = _local_line(row)
+                model = str(row.get("model") or "")
+            else:
+                continue
+            if line:
+                picked.append((line, model))
+        return picked[:6]
+    line = str(answers.get("local") or "").strip()
+    if line:
+        return [(line, str(answers.get("local_model") or ""))]
+    return []
+
+
+def _api_rows(answers: dict) -> list[dict]:
+    rows = answers.get("apis")
+    picked = []
+    if isinstance(rows, list) and rows:
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            url = str(row.get("url") or row.get("api_url") or "").strip()
+            if not url:
+                continue
+            picked.append({
+                "url": url,
+                "model": str(row.get("model") or row.get("api_model") or ""),
+                "key_file": str(row.get("key_file") or ""),
+            })
+        return picked[:6]
+    url = str(answers.get("api_url") or "").strip()
+    if url:
+        return [{
+            "url": url,
+            "model": str(answers.get("api_model") or ""),
+            "key_file": str(answers.get("key_file") or ""),
+        }]
+    return []
+
+
+def attach_keys(directory: Path, answers: dict) -> dict:
+    """Move pasted keys into 0600 files. The answers keep paths only."""
+    out = dict(answers)
+    out.pop("api_key", None)
+    rows = out.get("apis")
+    if isinstance(rows, list):
+        stored = []
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                continue
+            item = {key: value for key, value in row.items() if key != "key"}
+            secret = str(row.get("key") or "")
+            if secret:
+                item["key_file"] = store_api_key(directory, secret, "api-%d" % (index + 1))
+            stored.append(item)
+        out["apis"] = stored
+        return out
+    secret = str(answers.get("api_key") or "")
+    if secret:
+        out["key_file"] = store_api_key(directory, secret, "api")
+    return out
+
+
+def _split_local(line: str, model: str) -> dict:
+    parts = (line or "").split()
+    if len(parts) >= 3 and parts[0] == "ssh":
+        return {"line": line, "host": parts[1], "remote": parts[2], "url": "", "model": model}
+    return {"line": line, "host": "", "remote": "", "url": line, "model": model}
+
+
+def probe_model(line: str, key: str = "", open_url=None, run_ssh=None) -> str:
+    """Check one model address. No window text is sent. The key is not repeated."""
+    text = (line or "").strip()
+    if text.startswith("ssh "):
+        hop = parse_hop(text, 0)
+        if not hop:
+            return "That address was not checked."
+        host = hop["spec"]["ssh_host"]
+        remote = hop["spec"]["remote_url"].rstrip("/") + "/models"
+        try:
+            code = run_ssh(host, remote) if run_ssh is not None else _ssh_status(host, remote)
+        except (OSError, subprocess.TimeoutExpired):
+            return "Not reachable."
+        return "Connected." if str(code).strip() == "200" else "Not reachable."
+    if not text.startswith(("http://", "https://")) or not _url_ok(text.split()[0]):
+        return "That address was not checked."
+    url = text.split()[0].rstrip("/") + "/models"
+    opener = open_url or _probe_open
+    try:
+        status = opener(url, key)
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            return "The server answered, and the key was refused."
+        return "Not reachable."
+    except (OSError, TimeoutError, urllib.error.URLError):
+        return "Not reachable."
+    if status == 200:
+        return "Connected. The key stayed on this Mac." if (key or "").strip() else "Connected."
+    return "Not reachable."
+
+
+def _probe_open(url: str, key: str) -> int:
+    req = urllib.request.Request(url, method="GET")
+    token = (key or "").strip()
+    if token:
+        req.add_header("Authorization", "Bearer " + token)
+    with urllib.request.urlopen(req, timeout=3) as resp:
+        return int(resp.status)
+
+
+def _ssh_status(host: str, url: str) -> str:
+    if not _HOST.match(host) or not _url_ok(url):
+        return ""
+    argv = [
+        "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+        host, "curl", "-sS", "-m", "6", "-o", "/dev/null", "-w", "%{http_code}", url,
+    ]
+    done = subprocess.run(argv, capture_output=True, check=False, timeout=12)
+    return (done.stdout or b"").decode("utf-8", "replace").strip()
 
 
 def show_board(paiste: dict | None = None, found: dict | None = None) -> dict:
@@ -192,33 +340,49 @@ def show_board(paiste: dict | None = None, found: dict | None = None) -> dict:
     current = paiste or {}
     models = current.get("models") if isinstance(current.get("models"), dict) else {}
     order = current.get("order") if isinstance(current.get("order"), list) else []
-    local = ""
-    local_model = "local"
-    api_url = ""
-    api_model = ""
-    has_key = False
+    locals_out = []
+    apis_out = []
+    app_name = ""
     for name in order:
         spec = models.get(name)
         if not isinstance(spec, dict):
             continue
         via = str(spec.get("via") or "http")
-        if via == "ssh" and not local:
+        model = str(spec.get("model") or "local")
+        if via in {"claude", "codex", "cursor"} and not app_name:
+            app_name = via
+            continue
+        if via == "ssh":
             host = str(spec.get("ssh_host") or "")
             remote = str(spec.get("remote_url") or "")
             if host and remote:
-                local = "ssh " + host + " " + remote
-                local_model = str(spec.get("model") or "local")
+                locals_out.append(_split_local("ssh " + host + " " + remote, model))
         elif via == "http":
             base = str(spec.get("base_url") or "")
-            if _loopback(base) and not local:
-                local = base
-                local_model = str(spec.get("model") or "local")
-            elif base and not _loopback(base) and not api_url:
-                api_url = base
-                api_model = str(spec.get("model") or "")
-                has_key = _key_path_ok(str(spec.get("key_file") or ""))
-    if not local and not api_url:
+            if _loopback(base):
+                locals_out.append(_split_local(base, model))
+            elif base:
+                apis_out.append({
+                    "url": base,
+                    "model": model,
+                    "has_key": _key_path_ok(str(spec.get("key_file") or "")),
+                })
+    local = ""
+    local_model = "local"
+    api_url = ""
+    api_model = ""
+    has_key = False
+    if locals_out:
+        local = str(locals_out[0].get("line") or "")
+        local_model = str(locals_out[0].get("model") or "local")
+    if apis_out:
+        api_url = str(apis_out[0].get("url") or "")
+        api_model = str(apis_out[0].get("model") or "")
+        has_key = bool(apis_out[0].get("has_key"))
+    if not local and not api_url and not app_name:
         local = str((found or {}).get("model") or "")
+        if local:
+            locals_out = [_split_local(local, "local")]
     if local and api_url:
         link = "both"
     elif api_url:
@@ -231,11 +395,14 @@ def show_board(paiste: dict | None = None, found: dict | None = None) -> dict:
         return value if value in {"off", "front", "folder"} else "off"
 
     return {
-        "link": link,
+        "link": "app" if app_name else link,
+        "app": app_name,
         "local": local,
         "local_model": local_model,
+        "locals": locals_out,
         "api_url": api_url,
         "api_model": api_model,
+        "apis": apis_out,
         "has_key": has_key,
         "mail": mode("mail"),
         "chat": mode("chat"),
@@ -279,8 +446,8 @@ def apply_board(existing: dict | None, answers: dict) -> dict:
     """Save local, API, or both, plus which windows to read once. No account links."""
     current = dict(existing or {})
     link = str(answers.get("link") or "").strip().lower()
-    if link not in {"local", "api", "both"}:
-        raise BoardError("Choose local, API, or both.")
+    if link not in {"local", "api", "both", "app"}:
+        raise BoardError("Choose Claude, Codex, Cursor, or custom.")
     out = {key: current[key] for key in _KEEP if key in current}
     out["enabled"] = True
     out["copy"] = True
@@ -289,47 +456,291 @@ def apply_board(existing: dict | None, answers: dict) -> dict:
     _one_surface(out, "notes", "notes_dir", str(answers.get("notes") or ""), str(answers.get("notes_path") or ""))
     _one_surface(out, "calendar", "calendar_dir", str(answers.get("calendar") or ""), str(answers.get("calendar_path") or ""))
     out.setdefault("obsidian_vault", "")
+    if link == "app":
+        name = str(answers.get("app") or "").strip().lower()
+        if name not in _APP_NAMES:
+            raise BoardError("Choose Claude, Codex, Cursor, or custom.")
+        binary = str(answers.get("bin") or "").strip() or app_bin(name)
+        if not binary.startswith("/") or ".." in binary:
+            raise BoardError("That app is not on this Mac.")
+        swapped = use_app(current, name, binary)
+        out["order"] = swapped["order"]
+        out["models"] = swapped["models"]
+        return out
     order = []
     models = {}
     if link in {"local", "both"}:
-        hop = parse_hop(str(answers.get("local") or ""), 0)
-        if not hop:
+        rows = _local_rows(answers)
+        if not rows:
             raise BoardError("Add a local model, or choose API.")
-        model = str(answers.get("local_model") or hop["spec"]["model"])
-        hop["spec"]["model"] = model if _model_ok(model) else "local"
-        name = _named(current, hop["spec"], hop["name"])
-        order.append(name)
-        models[name] = hop["spec"]
+        for index, (line, model) in enumerate(rows):
+            hop = parse_hop(line, index)
+            if not hop:
+                raise BoardError("That local address was not kept. Use a URL, or ssh host and the address on that Mac.")
+            _keep_model(current, hop, model)
+            name = _unique(_named(current, hop["spec"], hop["name"]), models, hop["name"])
+            order.append(name)
+            models[name] = hop["spec"]
     if link in {"api", "both"}:
-        url = str(answers.get("api_url") or "").strip()
-        if not _url_ok(url) or _loopback(url):
-            raise BoardError("The API address is a service, not a local server.")
-        model = str(answers.get("api_model") or "").strip()
-        if not _model_ok(model):
-            raise BoardError("Name the API model.")
-        key_file = str(answers.get("key_file") or "")
-        if key_file and not _key_path_ok(key_file):
-            raise BoardError("That key was not kept.")
-        if not key_file:
-            old_models = current.get("models") if isinstance(current.get("models"), dict) else {}
-            for old in old_models.values():
-                if isinstance(old, dict) and old.get("base_url") == url and _key_path_ok(str(old.get("key_file") or "")):
-                    key_file = str(old.get("key_file"))
-                    break
-        spec = {
-            "via": "http",
-            "base_url": url,
-            "model": model,
-            "ssh_host": "",
-            "remote_url": "",
-            "key_file": key_file if _key_path_ok(key_file) else "",
-        }
-        name = _named(current, spec, "api")
-        order.append(name)
-        models[name] = spec
+        rows = _api_rows(answers)
+        if not rows:
+            raise BoardError("Add the API address, or choose local.")
+        old_models = current.get("models") if isinstance(current.get("models"), dict) else {}
+        for index, row in enumerate(rows):
+            url = row["url"]
+            if not _url_ok(url) or _loopback(url):
+                raise BoardError("The API address is a service, not a local server.")
+            model = row["model"]
+            if not _model_ok(model):
+                raise BoardError("Name the API model.")
+            key_file = row["key_file"]
+            if key_file and not _key_path_ok(key_file):
+                raise BoardError("That key was not kept.")
+            if not key_file:
+                for old in old_models.values():
+                    if isinstance(old, dict) and old.get("base_url") == url and _key_path_ok(str(old.get("key_file") or "")):
+                        key_file = str(old.get("key_file"))
+                        break
+            spec = {
+                "via": "http",
+                "base_url": url,
+                "model": model,
+                "ssh_host": "",
+                "remote_url": "",
+                "key_file": key_file if _key_path_ok(key_file) else "",
+            }
+            fallback = "api" if index == 0 else "api" + str(index + 1)
+            name = _unique(_named(current, spec, fallback), models, fallback)
+            order.append(name)
+            models[name] = spec
+    order, models = _prefer_connected_app(current, order, models, answers)
     out["order"] = order
     out["models"] = models
     return out
+
+
+_APP_NAMES = ("claude", "codex", "cursor")
+
+
+def _wrapper(path: str) -> bool:
+    """Skip the local-first shim. paisty already tries the local model first."""
+    try:
+        head = Path(path).read_text(encoding="utf-8", errors="replace")[:180]
+    except OSError:
+        return False
+    return "local-first-wrapper" in head
+
+
+def app_bin(name: str) -> str:
+    """Absolute path. The menu app does not inherit a full shell path."""
+    import os
+    home = str(Path.home())
+    folders = [home + "/.local/bin", "/opt/homebrew/bin", "/usr/local/bin"]
+    folders.extend(part for part in os.environ.get("PATH", "").split(":") if part)
+    names = ("agent", "cursor-agent") if name == "cursor" else (name,)
+    for folder in folders:
+        for candidate in names:
+            found = str(Path(folder) / candidate)
+            if not os.path.isfile(found) or not os.access(found, os.X_OK):
+                continue
+            if ".." in found or _wrapper(found):
+                continue
+            return found
+    return ""
+
+
+def _local_spec(spec: dict) -> bool:
+    via = str(spec.get("via") or "http")
+    if via == "ssh":
+        return True
+    return via == "http" and _loopback(str(spec.get("base_url") or ""))
+
+
+def _premium_spec(spec: dict) -> bool:
+    via = str(spec.get("via") or "")
+    if via in _APP_NAMES:
+        return True
+    base = str(spec.get("base_url") or "")
+    return via == "http" and bool(base) and not _loopback(base)
+
+
+def _premium_key(spec: dict) -> str:
+    via = str(spec.get("via") or "")
+    if via in _APP_NAMES:
+        return "app:" + via
+    return "api:" + str(spec.get("base_url") or "")
+
+
+def _prefer_connected_app(current: dict, order: list, models: dict, answers: dict) -> tuple[list, dict]:
+    """The login they picked is the fallback. Local hops stay in front of it."""
+    wanted = str((answers or {}).get("app") or "").strip().lower()
+    if wanted in _APP_NAMES:
+        binary = str((answers or {}).get("bin") or "").strip() or app_bin(wanted)
+        if binary.startswith("/") and ".." not in binary:
+            order = [name for name in order if str((models.get(name) or {}).get("via") or "") not in _APP_NAMES]
+            models = {name: spec for name, spec in models.items() if name in order}
+            models[wanted] = {
+                "via": wanted,
+                "bin": binary,
+                "model": wanted,
+                "base_url": "",
+                "ssh_host": "",
+                "remote_url": "",
+            }
+            order.append(wanted)
+            kept = dict(current or {})
+            old_models = current.get("models") if isinstance(current.get("models"), dict) else {}
+            kept["models"] = {
+                name: spec for name, spec in old_models.items()
+                if str((spec or {}).get("via") or "") not in _APP_NAMES
+            }
+            kept["order"] = [
+                name for name in (current.get("order") or [])
+                if name in kept["models"]
+            ]
+            current = kept
+    return _premium_after_local(current, order, models)
+
+
+def _premium_after_local(current: dict, order: list, models: dict) -> tuple[list, dict]:
+    """Locals first. A premium hop that is already connected still runs after them."""
+    locals_first = []
+    premiums = []
+    rest = []
+    for name in order:
+        spec = models.get(name) or {}
+        if _local_spec(spec):
+            locals_first.append(name)
+        elif _premium_spec(spec):
+            premiums.append(name)
+        else:
+            rest.append(name)
+    if locals_first:
+        seen = {_premium_key(models[name]) for name in premiums}
+        has_app = any(str((models.get(name) or {}).get("via") or "") in _APP_NAMES for name in premiums)
+        old = current.get("models") if isinstance(current.get("models"), dict) else {}
+        for old_name in current.get("order") or []:
+            spec = old.get(old_name)
+            if not isinstance(spec, dict) or not _premium_spec(spec):
+                continue
+            if has_app and str(spec.get("via") or "") in _APP_NAMES:
+                continue
+            key = _premium_key(spec)
+            if key in seen:
+                continue
+            slot = old_name if old_name not in models else _unique(old_name, models, old_name)
+            models[slot] = dict(spec)
+            premiums.append(slot)
+            seen.add(key)
+    return locals_first + rest + premiums, models
+
+
+def use_app(current: dict, name: str, binary: str = "") -> dict:
+    """Add one signed-in app after any local hop. Mail, notes, and context stay."""
+    picked = (name or "").strip().lower()
+    if picked not in _APP_NAMES:
+        raise BoardError("Choose Claude, Codex, or Cursor.")
+    path = (binary or "").strip() or app_bin(picked)
+    if not path.startswith("/") or ".." in path:
+        raise BoardError("That app is not on this Mac.")
+    out = dict(current or {})
+    old_models = current.get("models") if isinstance(current.get("models"), dict) else {}
+    models = {}
+    order = []
+    for hop in current.get("order") or []:
+        spec = old_models.get(hop)
+        if not isinstance(spec, dict):
+            continue
+        if _local_spec(spec) or (_premium_spec(spec) and str(spec.get("via") or "") not in _APP_NAMES):
+            order.append(hop)
+            models[hop] = spec
+    models[picked] = {
+        "via": picked,
+        "bin": path,
+        "model": picked,
+        "base_url": "",
+        "ssh_host": "",
+        "remote_url": "",
+    }
+    order.append(picked)
+    order, models = _premium_after_local(current, order, models)
+    out["enabled"] = True
+    out["copy"] = True
+    out["order"] = order
+    out["models"] = models
+    return out
+
+
+def start_login(name: str) -> str:
+    """Open the browser sign-in for this Mac. No window text is sent."""
+    picked = (name or "").strip().lower()
+    binary = app_bin(picked)
+    if not binary:
+        return "missing"
+    if picked == "claude":
+        argv = [binary, "auth", "login"]
+    elif picked == "codex":
+        argv = [binary, "login"]
+    elif picked == "cursor":
+        argv = [binary, "login"]
+    else:
+        return "missing"
+    subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    return "browser"
+
+
+def app_status(name: str) -> str:
+    """signed-in, login, or missing. No account name and no token."""
+    if name not in _APP_NAMES:
+        return "missing"
+    binary = app_bin(name)
+    if not binary:
+        return "missing"
+    if name == "claude":
+        argv = [binary, "auth", "status"]
+    elif name == "codex":
+        argv = [binary, "login", "status"]
+    else:
+        argv = [binary, "status"]
+    try:
+        done = subprocess.run(argv, capture_output=True, check=False, timeout=12)
+    except (OSError, subprocess.TimeoutExpired):
+        return "login"
+    text = ((done.stdout or b"") + b"\n" + (done.stderr or b"")).decode("utf-8", "replace")
+    if name == "claude":
+        try:
+            doc = json.loads(done.stdout.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeError):
+            doc = {}
+        return "signed-in" if doc.get("loggedIn") is True else "login"
+    if "logged in" in text.lower():
+        return "signed-in"
+    return "login"
+
+
+def _keep_model(current: dict, hop: dict, model: str) -> None:
+    if _model_ok(model):
+        hop["spec"]["model"] = model
+        return
+    name = _named(current, hop["spec"], "")
+    old_models = current.get("models") if isinstance(current.get("models"), dict) else {}
+    old = old_models.get(name)
+    if isinstance(old, dict) and _model_ok(str(old.get("model") or "")):
+        hop["spec"]["model"] = str(old.get("model"))
+        return
+    hop["spec"]["model"] = "local"
+
+
+def _unique(name: str, models: dict, fallback: str) -> str:
+    if name and name not in models:
+        return name
+    base = fallback or "local"
+    if base not in models:
+        return base
+    number = 2
+    while (base + str(number)) in models:
+        number += 1
+    return base + str(number)
 
 
 def guide(io, paiste: dict | None = None, found: dict | None = None) -> dict:
@@ -343,7 +754,7 @@ def guide(io, paiste: dict | None = None, found: dict | None = None) -> dict:
     hint = setup_hint()
     if hint:
         io.say(hint)
-    io.say("You do not need a special server. Use a model on this computer, ssh to a computer you own, or the http address of a model you already run. Local, API, or both.")
+    io.say("A local model has to already be running, on this computer or on a powerful machine you can reach. paisty does not start it. A paid model works anywhere you have an internet connection. Local, paid, or both.")
     io.say("Any app in front is read once, then forgotten. skip leaves one off. Mail and chat can use the text already on screen, or a folder you export.")
     io.say("Use that one thread plus a few matching notes. Calendar shows a conflict or the matching event. You still accept, book, and send. Leave money, legal, HR, and conflict to yourself.")
     found = found or {}
@@ -364,7 +775,7 @@ def guide(io, paiste: dict | None = None, found: dict | None = None) -> dict:
     out["lookup_cmd"] = command if _path_ok(command) else ""
     if command and not out["lookup_cmd"]:
         io.say("That program was not kept.")
-    io.say("Add models in the order Paiste should try them. A local server is http://127.0.0.1:18080/v1. A model on another machine is: ssh hostname http://127.0.0.1:8080/v1. A blank line stops.")
+    io.say("Add models in the order Paiste should try them. A local server is http://127.0.0.1:18080/v1. A model already running on another machine is: ssh hostname http://127.0.0.1:8080/v1. A paid service is an https address that ends in /v1. A blank line stops.")
     order = []
     models = {}
     for index in range(4):
