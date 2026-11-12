@@ -123,11 +123,10 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
             "Then draft only the reply.\n\n"
             + rules
         )
-    if "newest message" not in rules:
+    if "whole conversation" not in rules:
         rules = (
-            "Reply only to the newest message that still needs an answer. "
-            "If a question already has a reply on screen, do not answer it again. "
-            "Ignore clipboard history and old copied text. Do not offer a meeting.\n\n"
+            "Read the whole conversation on screen, not only the last line. "
+            "Use what was already said. Draft the reply to what is still open.\n\n"
             + rules
         )
     messages = prepared.get("messages") or []
