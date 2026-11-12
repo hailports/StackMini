@@ -365,8 +365,8 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         nextButton.title = page == 6 ? "Save on this Mac" : "Next"
         switch page {
         case 0:
-            titleField.stringValue = "One click. The reply is yours."
-            body.stringValue = "If your AI is integrated with your email, chat, or notes, paisty works for you.\n\npaisty does not connect to those systems and does not retain any data. That is your model's job. A click reads the window, asks your model, and copies a reply. Then it forgets the window.\n\nAfter you pay, the key arrives by email. Paste it here once."
+            titleField.stringValue = "Step 1. Connect your systems."
+            body.stringValue = "Three connections, then the first click.\n\n1. Connect your AI.\n2. Connect mail and calendar inside that AI.\n3. Connect notes or Obsidian inside that AI.\n\npaisty does not sign into those systems and does not keep them. The click asks your AI, which already has them, and copies a reply.\n\nPaste the key from the email once."
             _ = field("license", "License key from the email", "", 8)
             let saveKey = NSButton(title: "Save key", target: self, action: #selector(saveLicense))
             saveKey.frame = NSRect(x: 0, y: 44, width: 140, height: 28)
@@ -374,29 +374,29 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             extra.addSubview(saveKey)
             extraHeight = 84
         case 1:
-            titleField.stringValue = "Connect your AI."
-            body.stringValue = "One click checks the app and the command on this Mac. If neither is signed in, the browser opens and signs this Mac into that account."
+            titleField.stringValue = "1. Connect your AI."
+            body.stringValue = "One click checks the app and the command on this Mac. If neither is signed in, the browser opens and signs this Mac into that account. Later clicks ask this AI, including the mail, calendar, and notes you connect inside it."
             modelPage()
         case 2:
-            titleField.stringValue = "Mail is your model's job."
-            body.stringValue = "Connect mail in the model you chose. paisty will not sign in, and it will not keep the message. The switch only reads the window in front for that one click."
+            titleField.stringValue = "2. Mail and calendar, inside your AI."
+            body.stringValue = "In Claude, Cursor, or Codex, connect the mail and calendar you already use. paisty does not sign in and does not keep the message. The switch below only lets a click read the window that is already open."
             toggle("mail", "Read the mail window once", mailFront, 8)
             extraHeight = 40
         case 3:
-            titleField.stringValue = "Calendar is your model's job."
-            body.stringValue = "Connect the calendar in your model. paisty does not accept or send invites, and it does not keep events. A folder of .ics files is optional. It is read on the click, then forgotten."
+            titleField.stringValue = "2. Calendar, still inside your AI."
+            body.stringValue = "Connect the calendar in the same AI. paisty does not accept or send invites, and it does not keep events. A folder of .ics files is optional. It is read on the click, then forgotten."
             toggle("calendar", "Read a folder of .ics files on the click", calendarOn, 8)
             _ = field("calendar_path", "Folder of .ics files", calendarPath, 40)
             extraHeight = 100
         case 4:
-            titleField.stringValue = "Notes are your model's job."
+            titleField.stringValue = "3. Notes and Obsidian, inside your AI."
             body.stringValue = notesCopy()
             toggle("notes", "Read a notes folder on the click", notesOn, 8)
             _ = field("notes_path", "Notes folder", notesPath.isEmpty ? obsidian : notesPath, 40)
             extraHeight = 100
         case 5:
-            titleField.stringValue = "Chat is your model's job."
-            body.stringValue = "Connect chat in your model. paisty does not join the chat and does not keep it. The switch only reads the window in front for that one click."
+            titleField.stringValue = "3. Chat, inside your AI."
+            body.stringValue = "Connect chat in the same AI. paisty does not join the chat and does not keep it. The switch only reads the window in front for that one click."
             toggle("chat", "Read the chat window once", chatFront, 8)
             extraHeight = 40
         default:
@@ -408,7 +408,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
     }
 
     func notesCopy() -> String {
-        var text = "Connect notes in your model. Obsidian, Apple Notes, or a project file. paisty does not keep them. If a notes window is in front, the click can read it once."
+        var text = "Give your AI the notes folder or the Obsidian vault. Obsidian, Apple Notes, or a project file. paisty does not upload it and does not keep it. If a notes window is in front, the click can read it once."
         if !obsidian.isEmpty {
             text += "\n\nA vault is on this Mac at " + obsidian + ". Give that folder to your model. paisty does not upload it."
         }
