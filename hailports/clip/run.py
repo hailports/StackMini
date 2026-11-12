@@ -129,6 +129,12 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
             "Use what was already said. Draft the reply to what is still open.\n\n"
             + rules
         )
+    if "already connected" not in rules:
+        rules = (
+            "Use the mail, calendar, and notes already connected to you. "
+            "Do not invent a fact that is not on screen and not in those.\n\n"
+            + rules
+        )
     messages = prepared.get("messages") or []
     if messages and messages[0].get("role") == "system":
         messages[0]["content"] = rules

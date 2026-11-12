@@ -178,7 +178,10 @@ def cursor_prompt(system: str, user: str) -> str:
     lead = (
         "You are viewing a communication on the screen. "
         "Read the whole conversation, not only the last line. "
-        "Use what was already said. Draft the reply to what is still open. "
+        "Use what was already said. "
+        "Use the mail, calendar, and notes already connected to you. "
+        "Do not invent a fact that is not on screen and not in those. "
+        "Draft the reply to what is still open. "
         "No title. No code fence. "
         "Do not mention Cursor, ask mode, or the app. "
         "Do not say you staged, posted, or sent anything.\n\n"
