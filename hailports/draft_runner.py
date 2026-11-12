@@ -357,9 +357,9 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
         scene = row.get("scene")
         prepared = None
         if scene:
-            from hailports.paiste import prepare as paiste_prepare
+            from hailports.clip.scene import prepare as scene_prepare
 
-            prepared = paiste_prepare(scene, search=row.get("memory_search"), folders=row.get("memory_folders"))
+            prepared = scene_prepare(scene, search=row.get("memory_search"), folders=row.get("memory_folders"))
             if not prepared.get("ok"):
                 emit(str(prepared.get("reason") or "paiste"), subject or str(prepared.get("subject") or ""), sender or str(prepared.get("app") or ""))
                 continue
@@ -377,7 +377,7 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
                 sender = str(prepared.get("app") or sender)
             note = str(row.get("context") or "").strip()
             if note:
-                from hailports.paiste import runner_context
+                from hailports.clip.scene import runner_context
                 prepared["messages"] = runner_context(prepared.get("messages") or [], note)
         link_kinds: list[str] = []
         if row.get("pages"):

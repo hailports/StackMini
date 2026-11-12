@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""Standalone Paiste. One scene in, one reply on stdout. Nothing is sent.
+
+Run from a StackMini checkout:
+
+    python3 contrib/paiste/paiste draft --scene scene.json --copy
+    python3 contrib/paiste/paiste auto --inbox ~/paiste-inbox --outbox ~/paiste-outbox
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from hailports.config import load_file  # noqa: E402
+from hailports.llm import ModelOffline  # noqa: E402
+from hailports.clip.scene import prepare, run_inbox, scene_from, source_dirs  # noqa: E402
+from hailports.clip.run import _complete, cmd_onboard, draft_scene  # noqa: E402
+
+
+def _cfg(path: str, base_url: str, model: str) -> dict:
+    route = path or os.environ.get("PAISTE_ROUTE") or ""
+    if route and Path(route).is_file():
+        loaded = load_file(Path(route))
+        if isinstance(loaded, dict):
+            return loaded
+    return {"llm": {"base_url": base_url, "model": model}}
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="paiste", description="Draft from the text near the cursor. Nothing is sent.")
+    parser.add_argument("action", nargs="?", default="draft", choices=["draft", "auto", "menu", "check", "onboard"])
+    parser.add_argument("--scene", default="")
+    parser.add_argument("--inbox", default="")
+    parser.add_argument("--outbox", default="")
+    parser.add_argument("--copy", action="store_true")
+    parser.add_argument("--base-url", default="http://127.0.0.1:18080/v1")
+    parser.add_argument("--model", default="local")
+    parser.add_argument("--route", default="")
+    parser.add_argument("--route-out", default="")
+    parser.add_argument("--answers", default="")
+    parser.add_argument("--show", action="store_true")
+    parser.add_argument("--hint", action="store_true")
+    args = parser.parse_args(argv)
+    cfg = _cfg(args.route, args.base_url, args.model)
+    if args.action == "onboard":
+        return cmd_onboard(args, cfg)
+    if args.action == "menu":
+        print("Build contrib/paiste/build.sh and open Paiste.app. The menu title is Paiste.")
+        return 0
+    if args.action == "check":
+        raw = Path(args.scene).read_text(encoding="utf-8") if args.scene else sys.stdin.read()
+        if not raw.strip():
+            print("Pass --scene or a JSON scene on stdin.")
+            return 2
+        prepared = prepare(scene_from(json.loads(raw)), folders=source_dirs(cfg))
+        blob = json.dumps(prepared.get("messages") or "")
+        print(json.dumps({
+            "ok": bool(prepared.get("ok")),
+            "kind": prepared.get("kind") or prepared.get("reason") or "",
+            "ask": prepared.get("ask") or "",
+            "chars": len(blob),
+            "has_link": "http" in blob.lower(),
+            "sent": False,
+        }))
+        return 0 if prepared.get("ok") else 2
+    if args.action == "auto":
+        if not args.inbox or not args.outbox:
+            print("auto needs --inbox and --outbox")
+            return 2
+        try:
+            rows = run_inbox(Path(args.inbox), Path(args.outbox), _complete(cfg), copy=args.copy)
+        except ModelOffline as exc:
+            print("model offline: " + str(exc))
+            return 2
+        print(json.dumps({"sent": False, "results": rows}))
+        return 0
+    raw = Path(args.scene).read_text(encoding="utf-8") if args.scene else sys.stdin.read()
+    if not raw.strip():
+        print("Pass --scene or a JSON scene on stdin.")
+        return 2
+    return draft_scene(json.loads(raw), args.base_url, args.model, args.copy, cfg)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

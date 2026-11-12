@@ -101,7 +101,6 @@ The wizard then connects email, notes, and chats, or leaves them off. Native rec
 
 `--connect accounts` is a different path. You name any account as `name=https://host/login` (eight at most). Each one is its own Microsoft Edge profile, headful, parked in the lower-right corner. Edge is not in this repo. Setup prints `brew install --cask microsoft-edge` on macOS, `winget install --id Microsoft.Edge` on Windows, or writes `state/edge-install.sh` for the distro package on Linux. It runs that installer only after you agree and pass `--apply-install`. `--yes` does not install Edge and does not open a window. `--open-accounts` is what opens the windows so you can sign in yourself. The model you picked writes how each account is read and how a draft is filled. `send` stays false. `hailports accounts tick` reads page text you supply. It does not run model-written script.
 
-
 ```sh
 hailports doctor
 hailports chat
