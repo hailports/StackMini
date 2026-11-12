@@ -70,7 +70,7 @@ def _context_note(cfg: dict | None) -> str:
     path = Path(raw).expanduser()
     if not path.is_file():
         return ""
-    return path.read_text(encoding="utf-8", errors="replace").strip()[:2000]
+    return path.read_text(encoding="utf-8", errors="replace").strip()[:6000]
 
 
 def _lookup_notes(cfg: dict | None, text: str) -> str:
@@ -84,7 +84,7 @@ def _lookup_notes(cfg: dict | None, text: str) -> str:
     try:
         proc = subprocess.run(
             [str(path)],
-            input=text[:1500],
+            input=text[:4000],
             text=True,
             capture_output=True,
             timeout=25,
@@ -93,7 +93,7 @@ def _lookup_notes(cfg: dict | None, text: str) -> str:
         return ""
     if proc.returncode != 0:
         return ""
-    return proc.stdout.strip()[:1200]
+    return proc.stdout.strip()[:4000]
 
 
 def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | None = None) -> int:
@@ -110,6 +110,13 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
     if not rules:
         print("license")
         return 2
+    if not rules.startswith("You are viewing"):
+        rules = (
+            "You are viewing a communication on the screen. "
+            "Use the on-screen text and every connected note or lookup. "
+            "Then draft only the reply.\n\n"
+            + rules
+        )
     messages = prepared.get("messages") or []
     if messages and messages[0].get("role") == "system":
         messages[0]["content"] = rules
@@ -154,10 +161,41 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
     return 0 if text else 2
 
 
+def _route_dest(args):
+    import os
+    raw = str(getattr(args, "route_out", "") or "").strip()
+    if not raw or raw == ".":
+        raw = os.environ.get("PAISTE_ROUTE") or str(Path.home() / ".config" / "paiste" / "route.yaml")
+    return Path(raw)
+
+
 def cmd_onboard(args, cfg) -> int:
     """Write the model choice. The window text is not saved and nothing is sent."""
     from hailports.config import save_file
-    from hailports.clip.board import BoardError, apply_board, discover, setup_hint, show_board, store_api_key
+    from hailports.clip.board import BoardError, app_status, apply_board, attach_keys, discover, probe_model, setup_hint, show_board, start_login, use_app
+    if getattr(args, "login", ""):
+        print(start_login(str(args.login)))
+        return 0
+    if getattr(args, "use", ""):
+        name = str(args.use).strip().lower()
+        state = app_status(name)
+        if state != "signed-in":
+            print(state)
+            return 2
+        dest = _route_dest(args)
+        try:
+            updated = use_app(cfg.get("paiste") or {}, name)
+        except BoardError as exc:
+            print(exc)
+            return 2
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        save_file(dest, {"paiste": updated})
+        dest.chmod(0o600)
+        print("using")
+        return 0
+    if getattr(args, "connect", ""):
+        print(app_status(str(args.connect)))
+        return 0
     if getattr(args, "hint", False):
         print(setup_hint() or "")
         return 0
@@ -175,17 +213,17 @@ def cmd_onboard(args, cfg) -> int:
             path.unlink()
         except OSError:
             pass
+    if getattr(args, "probe", False):
+        doc = answers if isinstance(answers, dict) else {}
+        text = probe_model(str(doc.get("line") or ""), str(doc.get("key") or ""))
+        print(text)
+        return 0 if text.startswith("Connected") else 2
     if not isinstance(answers, dict):
         print("answers")
         return 2
-    secret = str(answers.pop("api_key", "") or "")
-    dest = Path(getattr(args, "route_out", "") or "")
-    if not str(dest):
-        import os
-        dest = Path(os.environ.get("PAISTE_ROUTE") or Path.home() / ".config" / "paiste" / "route.yaml")
+    dest = _route_dest(args)
     try:
-        if secret:
-            answers["key_file"] = store_api_key(dest.parent, secret)
+        answers = attach_keys(dest.parent, answers)
         updated = apply_board(cfg.get("paiste") or {}, answers)
     except BoardError as exc:
         print(str(exc))

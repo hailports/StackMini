@@ -4,6 +4,17 @@ import ScreenCaptureKit
 import Vision
 import os
 
+func paisteCommand() -> String {
+    if let set = ProcessInfo.processInfo.environment["PAISTE_CMD"], !set.isEmpty {
+        return set
+    }
+    let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/paiste-run").path
+    if FileManager.default.isExecutableFile(atPath: bundled) {
+        return bundled
+    }
+    return "hailports"
+}
+
 /// One click on the menu-bar paperclip. The reply is copied. Nothing is typed or sent.
 final class PaisteApp: NSObject, NSApplicationDelegate {
     var item: NSStatusItem?
@@ -19,7 +30,11 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
     let log = Logger(subsystem: "com.hailports.paiste", category: "click")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        item.isVisible = true
+        let frame = item.button?.window?.frame ?? .zero
+        try? "visible \(item.isVisible) x \(frame.origin.x) y \(frame.origin.y) w \(frame.width)\n".write(toFile: "/tmp/paisty-status.txt", atomically: true, encoding: .utf8)
         self.item = item
         let button = item.button
         button?.image = mark
@@ -29,6 +44,9 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         button?.target = self
         button?.action = #selector(click)
         button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        if let icon = Bundle.main.url(forResource: "paisty", withExtension: "icns").flatMap(NSImage.init(contentsOf:)) {
+            NSApp.applicationIconImage = icon
+        }
         let route = ProcessInfo.processInfo.environment["PAISTE_ROUTE"] ?? (NSHomeDirectory() + "/.config/paiste/route.yaml")
         if !FileManager.default.fileExists(atPath: route) {
             openSetup()
@@ -78,7 +96,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
         let options = [key: true] as CFDictionary
         AXIsProcessTrustedWithOptions(options)
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ListenEvent") {
             NSWorkspace.shared.open(url)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
@@ -118,7 +136,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         if !AXIsProcessTrusted() {
             promptTrust()
             item?.button?.image = NSImage(systemSymbolName: "questionmark", accessibilityDescription: "Allow paisty in Accessibility")
-            item?.button?.toolTip = "Allow paisty in Accessibility"
+            item?.button?.toolTip = "System Settings, search assistive, turn on paisty"
             log.error("untrusted")
             return
         }
@@ -235,24 +253,29 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
     }
 
+    static func clipPath() -> NSBezierPath {
+        let path = NSBezierPath()
+        path.lineWidth = 2.3
+        path.lineCapStyle = .round
+        path.lineJoinStyle = .round
+        path.move(to: NSPoint(x: 4.8, y: 1.4))
+        path.line(to: NSPoint(x: 4.8, y: 10.2))
+        path.curve(to: NSPoint(x: 15.4, y: 10.0),
+                   controlPoint1: NSPoint(x: 4.8, y: 16.4),
+                   controlPoint2: NSPoint(x: 16.2, y: 16.2))
+        path.curve(to: NSPoint(x: 8.6, y: 8.6),
+                   controlPoint1: NSPoint(x: 14.6, y: 4.6),
+                   controlPoint2: NSPoint(x: 8.4, y: 5.0))
+        path.curve(to: NSPoint(x: 11.6, y: 11.8),
+                   controlPoint1: NSPoint(x: 8.8, y: 11.2),
+                   controlPoint2: NSPoint(x: 10.2, y: 12.6))
+        return path
+    }
+
     static func paperclip() -> NSImage {
         let side: CGFloat = 18
         let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in
-            let path = NSBezierPath()
-            path.lineWidth = 2.3
-            path.lineCapStyle = .round
-            path.lineJoinStyle = .round
-            path.move(to: NSPoint(x: 4.8, y: 1.4))
-            path.line(to: NSPoint(x: 4.8, y: 10.2))
-            path.curve(to: NSPoint(x: 15.4, y: 10.0),
-                       controlPoint1: NSPoint(x: 4.8, y: 16.4),
-                       controlPoint2: NSPoint(x: 16.2, y: 16.2))
-            path.curve(to: NSPoint(x: 8.6, y: 8.6),
-                       controlPoint1: NSPoint(x: 14.6, y: 4.6),
-                       controlPoint2: NSPoint(x: 8.4, y: 5.0))
-            path.curve(to: NSPoint(x: 11.6, y: 11.8),
-                       controlPoint1: NSPoint(x: 8.8, y: 11.2),
-                       controlPoint2: NSPoint(x: 10.2, y: 12.6))
+            let path = clipPath()
             NSColor.black.setStroke()
             path.stroke()
             return true
@@ -261,12 +284,31 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         return image
     }
 
+    static func logo(_ side: CGFloat) -> NSImage {
+        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in
+            let path = clipPath()
+            let bounds = path.bounds.insetBy(dx: -1.4, dy: -1.4)
+            let fit = min(side / bounds.width, side / bounds.height) * 0.92
+            var t = AffineTransform()
+            t.translate(x: (side - bounds.width * fit) / 2 - bounds.minX * fit,
+                        y: (side - bounds.height * fit) / 2 - bounds.minY * fit)
+            t.scale(fit)
+            let weight = path.lineWidth
+            path.transform(using: t)
+            path.lineWidth = weight * fit
+            NSColor.black.setStroke()
+            path.stroke()
+            return true
+        }
+        return image
+    }
+
     static func draft(_ scene: String) -> (reply: String, blocked: String) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("paiste-scene.json")
         try? scene.data(using: .utf8)?.write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
         let task = Process()
-        let script = ProcessInfo.processInfo.environment["PAISTE_CMD"] ?? "hailports"
+        let script = paisteCommand()
         if script == "hailports" {
             task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
             task.arguments = ["hailports", "paiste", "draft", "--scene", url.path]
@@ -416,3 +458,5 @@ enum PaisteMain {
         app.run()
     }
 }
+
+

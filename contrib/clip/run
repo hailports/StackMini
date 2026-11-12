@@ -48,6 +48,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--answers", default="")
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--hint", action="store_true")
+    parser.add_argument("--probe", action="store_true")
+    parser.add_argument("--connect", default="")
+    parser.add_argument("--login", default="")
+    parser.add_argument("--use", default="")
     args = parser.parse_args(argv)
     cfg = _cfg(args.route, args.base_url, args.model)
     if args.action == "onboard":
