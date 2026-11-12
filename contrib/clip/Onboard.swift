@@ -42,6 +42,12 @@ final class SetupBoard: NSObject, NSWindowDelegate {
     var calendarOn = false
     var calendarPath = ""
     var obsidian = ""
+    var foundModels: [[String: String]] = []
+    var foundVaults: [String] = []
+    var mailApps: [String] = []
+    var scanning = true
+    var scanned = false
+    var showManualLocal = false
     var linkControl: NSSegmentedControl?
     var fields: [String: NSTextField] = [:]
     var toggles: [String: NSButton] = [:]
@@ -83,7 +89,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         titleField.textColor = NSColor(srgbRed: 0.16, green: 0.13, blue: 0.10, alpha: 1)
         body.font = NSFont.systemFont(ofSize: 13)
         body.preferredMaxLayoutWidth = 480
-        body.maximumNumberOfLines = 8
+        body.maximumNumberOfLines = 12
         footer.font = NSFont.systemFont(ofSize: 12, weight: .medium)
         footer.textColor = NSColor(srgbRed: 0.45, green: 0.28, blue: 0.16, alpha: 1)
         footer.preferredMaxLayoutWidth = 480
@@ -144,10 +150,22 @@ final class SetupBoard: NSObject, NSWindowDelegate {
     func load() {
         DispatchQueue.global(qos: .userInitiated).async {
             let text = SetupBoard.run(["onboard", "--show"]).out
-            guard let data = text.data(using: .utf8),
-                  let doc = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
             DispatchQueue.main.async {
-                self.applyShow(doc)
+                if let data = text.data(using: .utf8),
+                   let doc = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    self.applyShow(doc)
+                    self.render()
+                }
+            }
+            let scanText = SetupBoard.run(["onboard", "--scan"]).out
+            DispatchQueue.main.async {
+                if let data = scanText.data(using: .utf8),
+                   let doc = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    self.applyScan(doc)
+                } else {
+                    self.scanning = false
+                    self.scanned = true
+                }
                 self.render()
             }
         }
@@ -204,11 +222,12 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             var next: [LocalHop] = []
             for i in 0..<locals.count {
                 guard fields["model-\(i)"] != nil || fields["host-\(i)"] != nil else { continue }
+                let previous = i < locals.count ? locals[i].model : "local"
                 next.append(LocalHop(
                     host: fields["host-\(i)"]?.stringValue ?? "",
                     remote: fields["remote-\(i)"]?.stringValue ?? "",
                     url: fields["url-\(i)"]?.stringValue ?? "",
-                    model: fields["model-\(i)"]?.stringValue ?? "local"
+                    model: fields["model-\(i)"]?.stringValue ?? previous
                 ))
             }
             if !next.isEmpty { locals = next }
@@ -244,7 +263,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
 
     @objc func forward() {
         capture()
-        if page < 6 {
+        if page < 5 {
             page += 1
             statusField.stringValue = ""
             render()
@@ -362,57 +381,46 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         linkControl = nil
         extra.subviews.forEach { $0.removeFromSuperview() }
         backButton.isHidden = page == 0
-        nextButton.title = page == 6 ? "Save on this Mac" : "Next"
+        nextButton.title = page == 5 ? "Save on this Mac" : "Next"
         switch page {
         case 0:
-            titleField.stringValue = "Step 1. Connect your systems."
-            body.stringValue = "Three connections, then the first click.\n\n1. Connect your AI.\n2. Connect mail and calendar inside that AI.\n3. Connect notes or Obsidian inside that AI.\n\npaisty does not sign into those systems and does not keep them. The click asks your AI, which already has them, and copies a reply.\n\nPaste the key from the email once."
+            titleField.stringValue = "Step 1. Connect your mail."
+            body.stringValue = "Open the mail sign-in inside your AI and finish it in the browser. A later click asks that AI to search all of your mail, not a sample.\n\npaisty does not see the password and does not keep the mail."
+            mailPage()
+        case 1:
+            titleField.stringValue = "Step 2. Connect your calendar."
+            body.stringValue = "Use the same AI and turn on the calendar there. A click asks it to search all of the events it can see.\n\npaisty does not accept invites and does not keep them."
+            calendarPage()
+        case 2:
+            titleField.stringValue = "Step 3. Connect notes."
+            body.stringValue = notesCopy()
+            notesPage()
+        case 3:
+            titleField.stringValue = "Step 4. Connect your AI to paisty."
+            body.stringValue = "One click checks the app on this Mac. If it is not signed in, the browser opens and signs this Mac into that account. This is the AI a click will ask."
+            aiPage()
+        case 4:
+            titleField.stringValue = "Step 5. A local model is optional."
+            body.stringValue = "This is after the AI login. We look on this Mac and on computers you already reach by ssh. You do not type a model name. Next skips this."
+            localPage()
+        default:
+            titleField.stringValue = "Save on this Mac."
+            body.stringValue = reviewCopy()
             _ = field("license", "License key from the email", "", 8)
             let saveKey = NSButton(title: "Save key", target: self, action: #selector(saveLicense))
             saveKey.frame = NSRect(x: 0, y: 44, width: 140, height: 28)
             saveKey.bezelStyle = .rounded
             extra.addSubview(saveKey)
             extraHeight = 84
-        case 1:
-            titleField.stringValue = "1. Connect your AI."
-            body.stringValue = "One click checks the app and the command on this Mac. If neither is signed in, the browser opens and signs this Mac into that account. Later clicks ask this AI, including the mail, calendar, and notes you connect inside it."
-            modelPage()
-        case 2:
-            titleField.stringValue = "2. Mail and calendar, inside your AI."
-            body.stringValue = "In Claude, Cursor, or Codex, connect the mail and calendar you already use. paisty does not sign in and does not keep the message. The switch below only lets a click read the window that is already open."
-            toggle("mail", "Read the mail window once", mailFront, 8)
-            extraHeight = 40
-        case 3:
-            titleField.stringValue = "2. Calendar, still inside your AI."
-            body.stringValue = "Connect the calendar in the same AI. paisty does not accept or send invites, and it does not keep events. A folder of .ics files is optional. It is read on the click, then forgotten."
-            toggle("calendar", "Read a folder of .ics files on the click", calendarOn, 8)
-            _ = field("calendar_path", "Folder of .ics files", calendarPath, 40)
-            extraHeight = 100
-        case 4:
-            titleField.stringValue = "3. Notes and Obsidian, inside your AI."
-            body.stringValue = notesCopy()
-            toggle("notes", "Read a notes folder on the click", notesOn, 8)
-            _ = field("notes_path", "Notes folder", notesPath.isEmpty ? obsidian : notesPath, 40)
-            extraHeight = 100
-        case 5:
-            titleField.stringValue = "3. Chat, inside your AI."
-            body.stringValue = "Connect chat in the same AI. paisty does not join the chat and does not keep it. The switch only reads the window in front for that one click."
-            toggle("chat", "Read the chat window once", chatFront, 8)
-            extraHeight = 40
-        default:
-            titleField.stringValue = "Nothing is kept."
-            body.stringValue = reviewCopy()
-            extraHeight = 8
         }
         extra.frame = NSRect(x: 0, y: 0, width: 484, height: max(extraHeight, 40))
     }
 
     func notesCopy() -> String {
-        var text = "Give your AI the notes folder or the Obsidian vault. Obsidian, Apple Notes, or a project file. paisty does not upload it and does not keep it. If a notes window is in front, the click can read it once."
-        if !obsidian.isEmpty {
-            text += "\n\nA vault is on this Mac at " + obsidian + ". Give that folder to your model. paisty does not upload it."
+        if foundVaults.isEmpty && obsidian.isEmpty {
+            return "No Obsidian vault turned up in the usual places. You can skip this. paisty does not upload notes and does not keep them."
         }
-        return text
+        return "We found notes on this Mac. Press the folder, then add that same folder in your AI. paisty does not upload it and does not keep it."
     }
 
     func reviewCopy() -> String {
@@ -434,48 +442,144 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         let chat = chatFront ? "Chat window, once." : "Chat stays with your model."
         let notes = notesOn ? "A notes folder, read on the click." : "Notes stay with your model."
         let calendar = calendarOn ? "A calendar folder, read on the click." : "Calendar stays with your model."
-        return model + "\n" + mail + " " + chat + "\n" + notes + " " + calendar + "\n\nA local model has to already be running on this Mac or on a powerful machine you can reach. A paid model works anywhere this Mac is online.\n\nSaving writes the model choice on this Mac. It does not connect paisty to mail, calendar, notes, or chat, and it does not retain any data."
+        let known = establishedLocal()
+        let shown = known.isEmpty ? model : known + ". " + model
+        return "A click asks your AI to search all connected mail, calendar, and notes.\n" + shown + "\n" + mail + " " + chat + "\n" + notes + " " + calendar + "\n\nA local model is optional. The AI login works without one.\n\nSaving writes the choice on this Mac. paisty does not sign into mail, calendar, or notes, and it does not keep them."
     }
 
-    func modelPage() {
-        var y = caption("One click. A login already on this Mac is used. Otherwise the browser opens.", 0)
+    func mailPage() {
+        var y = CGFloat(0)
+        if !mailApps.isEmpty {
+            y = caption("On this Mac: " + mailApps.joined(separator: ", ") + ".", y)
+        } else if scanned {
+            y = caption("No Mail, Outlook, or Spark app turned up. The buttons still open your AI.", y)
+        } else {
+            y = caption("Looking at this Mac.", y)
+        }
+        y = linkButton("Connect mail in Claude", "https://claude.ai/settings/connectors", y)
+        y = linkButton("Connect mail in ChatGPT", "https://chatgpt.com/settings/connectors", y)
+        y = tagButton("Connect mail in Cursor", #selector(openCursor(_:)), 0, y)
+        toggle("mail", "Also read the mail window that is already open", mailFront, y)
+        extraHeight = y + 36
+    }
+
+    func calendarPage() {
+        var y = linkButton("Connect calendar in Claude", "https://claude.ai/settings/connectors", 0)
+        y = linkButton("Connect calendar in ChatGPT", "https://chatgpt.com/settings/connectors", y)
+        y = tagButton("Connect calendar in Cursor", #selector(openCursor(_:)), 1, y)
+        extraHeight = y + 8
+    }
+
+    func notesPage() {
+        var y = CGFloat(0)
+        let paths = notePaths()
+        if paths.isEmpty {
+            y = caption("You can skip this.", y)
+        }
+        for (i, path) in paths.enumerated() {
+            let name = URL(fileURLWithPath: path).lastPathComponent
+            y = tagButton(name.isEmpty ? "Use this folder" : name, #selector(useVault(_:)), i, y)
+        }
+        if !notesPath.isEmpty {
+            y = caption("Folder ready: " + URL(fileURLWithPath: notesPath).lastPathComponent, y)
+        }
+        toggle("notes", "Read that folder when a click needs it", notesOn, y)
+        extraHeight = y + 36
+    }
+
+    func aiPage() {
+        var y = caption("Claude, Codex, or Cursor. A login already on this Mac is used.", 0)
         y = choiceButton("Connect Claude", "claude", y)
         y = choiceButton("Connect Codex", "codex", y)
         y = choiceButton("Connect Cursor", "cursor", y)
-        y = choiceButton("Custom", "custom", y)
-        y = caption("Tried first, when a local model is already running. The login above is the fallback.", y)
-        for (i, row) in locals.enumerated() {
-            y = field("host-\(i)", "ssh host name. Blank if the model is on this Mac.", row.host, y)
-            y = field("remote-\(i)", "Address on that Mac. http://127.0.0.1:8080/v1", row.remote, y)
-            y = field("url-\(i)", "Or on this Mac. http://127.0.0.1:11434/v1", row.url, y)
-            y = field("model-\(i)", "Model name", row.model, y)
-            y = rowButtons(probe: 1000 + i, remove: 3000 + i, showRemove: locals.count > 1, y)
-        }
-        if locals.count < 4 {
-            y = addButton("Add a local model", #selector(addLocal), y)
-        }
+        y = choiceButton(showCustom ? "API key" : "I have an API key", "custom", y)
         if !showCustom {
             extraHeight = y + 8
             return
         }
-        if true {
-            y = caption("Paid works anywhere this Mac is online. OpenAI-style /v1. Tried after the local rows.", y)
-            for (i, row) in apis.enumerated() {
-                y = field("api-url-\(i)", "https://api.openai.com/v1", row.url, y)
-                y = field("api-model-\(i)", "Model name", row.model, y)
-                let placeholder = row.hasKey || !row.key.isEmpty ? "Key already on this Mac. Leave blank to keep it." : "API key. Stays on this Mac."
-                y = field("api-key-\(i)", placeholder, "", y, secure: true)
-                y = rowButtons(probe: 2000 + i, remove: 4000 + i, showRemove: apis.count > 1, y)
-            }
-            if apis.count < 4 {
-                y = addButton("Add a paid model", #selector(addPaid), y)
+        y = caption("Paid works anywhere this Mac is online. OpenAI-style /v1. Tried after a local model, when you add one.", y)
+        for (i, row) in apis.enumerated() {
+            y = field("api-url-\(i)", "https://api.openai.com/v1", row.url, y)
+            y = field("api-model-\(i)", "Model name", row.model, y)
+            let placeholder = row.hasKey || !row.key.isEmpty ? "Key already on this Mac. Leave blank to keep it." : "API key. Stays on this Mac."
+            y = field("api-key-\(i)", placeholder, "", y, secure: true)
+            y = rowButtons(probe: 2000 + i, remove: 4000 + i, showRemove: apis.count > 1, y)
+        }
+        if apis.count < 4 {
+            y = addButton("Add a paid model", #selector(addPaid), y)
+        }
+        extraHeight = y + 8
+    }
+
+    func localPage() {
+        var y = CGFloat(0)
+        let known = establishedLocal()
+        if !known.isEmpty {
+            y = caption("Connected: " + known, y)
+        }
+        if scanning {
+            y = caption("Looking on this Mac and on your ssh computers.", y)
+        } else if foundModels.isEmpty {
+            y = caption("No local model answered. Next keeps the AI you connected.", y)
+        }
+        for (i, row) in foundModels.enumerated() {
+            let name = (row["model"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let whereText = row["where"] ?? "This Mac"
+            let title = name.isEmpty ? "Use the model on " + whereText : name + " on " + whereText
+            y = tagButton(title, #selector(useFoundModel(_:)), i, y)
+        }
+        y = tagButton("Look again", #selector(lookAgain(_:)), 0, y)
+        if !showManualLocal {
+            y = tagButton("A different machine", #selector(showManual(_:)), 0, y)
+            extraHeight = y + 8
+            return
+        }
+        y = caption("Host and address only. The name shows after it answers.", y)
+        for (i, row) in locals.enumerated() {
+            y = field("host-\(i)", "ssh host name. Blank if it is on this Mac.", row.host, y)
+            y = field("remote-\(i)", "http://127.0.0.1:8080/v1", row.remote, y)
+            y = field("url-\(i)", "Or on this Mac. http://127.0.0.1:11434/v1", row.url, y)
+            y = rowButtons(probe: 1000 + i, remove: 3000 + i, showRemove: locals.count > 1, y)
+        }
+        if locals.count < 4 {
+            y = addButton("Add another address", #selector(addLocal), y)
+        }
+        extraHeight = y + 8
+    }
+
+    func establishedLocal() -> String {
+        for row in locals {
+            let name = row.model.trimmingCharacters(in: .whitespacesAndNewlines)
+            let host = row.host.trimmingCharacters(in: .whitespacesAndNewlines)
+            let url = row.url.trimmingCharacters(in: .whitespacesAndNewlines)
+            let remote = row.remote.trimmingCharacters(in: .whitespacesAndNewlines)
+            if host.isEmpty && url.isEmpty && remote.isEmpty { continue }
+            if name.isEmpty || name == "local" { continue }
+            let whereText = host.isEmpty ? "this Mac" : host
+            return name + " on " + whereText
+        }
+        return ""
+    }
+
+    func applyScan(_ doc: [String: Any]) {
+        mailApps = doc["mail_apps"] as? [String] ?? []
+        foundVaults = doc["vaults"] as? [String] ?? []
+        var rows: [[String: String]] = []
+        if let found = doc["models"] as? [[String: Any]] {
+            for row in found {
+                let url = row["url"] as? String ?? ""
+                if url.isEmpty { continue }
+                rows.append([
+                    "where": row["where"] as? String ?? "This Mac",
+                    "host": row["host"] as? String ?? "",
+                    "url": url,
+                    "model": row["model"] as? String ?? "",
+                ])
             }
         }
-        let help = NSButton(title: "Help me point my model", target: self, action: #selector(hint))
-        help.frame = NSRect(x: 0, y: y, width: 220, height: 28)
-        help.bezelStyle = .rounded
-        extra.addSubview(help)
-        extraHeight = y + 36
+        foundModels = rows
+        scanning = false
+        scanned = true
     }
 
     @discardableResult
@@ -529,6 +633,102 @@ final class SetupBoard: NSObject, NSWindowDelegate {
                 }
             }
         }
+    }
+
+    @discardableResult
+    func linkButton(_ title: String, _ url: String, _ y: CGFloat) -> CGFloat {
+        let button = NSButton(title: title, target: self, action: #selector(openLink(_:)))
+        button.identifier = NSUserInterfaceItemIdentifier(url)
+        button.frame = NSRect(x: 0, y: y, width: 460, height: 36)
+        button.bezelStyle = .rounded
+        extra.addSubview(button)
+        return y + 44
+    }
+
+    @discardableResult
+    func tagButton(_ title: String, _ action: Selector, _ tag: Int, _ y: CGFloat) -> CGFloat {
+        let button = NSButton(title: title, target: self, action: action)
+        button.tag = tag
+        button.frame = NSRect(x: 0, y: y, width: 460, height: 36)
+        button.bezelStyle = .rounded
+        extra.addSubview(button)
+        return y + 44
+    }
+
+    @objc func openLink(_ sender: NSButton) {
+        let raw = sender.identifier?.rawValue ?? ""
+        guard let url = URL(string: raw) else { return }
+        NSWorkspace.shared.open(url)
+        statusField.stringValue = "The browser is open. Turn it on there, then press Next."
+    }
+
+    @objc func openCursor(_ sender: NSButton) {
+        let app = URL(fileURLWithPath: "/Applications/Cursor.app")
+        if FileManager.default.fileExists(atPath: app.path) {
+            NSWorkspace.shared.open(app)
+            statusField.stringValue = "Cursor is open. In Settings, add the account, then press Next."
+            return
+        }
+        if let url = URL(string: "https://cursor.com/dashboard") {
+            NSWorkspace.shared.open(url)
+            statusField.stringValue = "The browser is open. Sign in, then press Next."
+        }
+    }
+
+    func notePaths() -> [String] {
+        if !foundVaults.isEmpty { return foundVaults }
+        return obsidian.isEmpty ? [] : [obsidian]
+    }
+
+    @objc func useVault(_ sender: NSButton) {
+        let paths = notePaths()
+        guard paths.indices.contains(sender.tag) else { return }
+        notesOn = true
+        notesPath = paths[sender.tag]
+        statusField.stringValue = "That folder stays on this Mac. Add it in your AI too. paisty does not upload it."
+        render()
+    }
+
+    @objc func useFoundModel(_ sender: NSButton) {
+        guard foundModels.indices.contains(sender.tag) else { return }
+        let row = foundModels[sender.tag]
+        let host = (row["host"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let url = (row["url"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = (row["model"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let hop = LocalHop(host: host, remote: host.isEmpty ? "" : url, url: host.isEmpty ? url : "", model: name.isEmpty ? "local" : name)
+        if locals.count == 1 && locals[0].host.isEmpty && locals[0].url.isEmpty && locals[0].remote.isEmpty {
+            locals = [hop]
+        } else if !locals.contains(where: { $0.host == hop.host && $0.url == hop.url && $0.remote == hop.remote }) {
+            locals.insert(hop, at: 0)
+            if locals.count > 4 { locals = Array(locals.prefix(4)) }
+        }
+        statusField.stringValue = name.isEmpty ? "That model will be tried first." : name
+        render()
+    }
+
+    @objc func lookAgain(_ sender: NSButton) {
+        scanning = true
+        statusField.stringValue = "Looking on this Mac and on your ssh computers."
+        render()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let scanText = SetupBoard.run(["onboard", "--scan"]).out
+            DispatchQueue.main.async {
+                if let data = scanText.data(using: .utf8),
+                   let doc = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    self.applyScan(doc)
+                } else {
+                    self.scanning = false
+                    self.scanned = true
+                }
+                self.render()
+            }
+        }
+    }
+
+    @objc func showManual(_ sender: NSButton) {
+        capture()
+        showManualLocal = true
+        render()
     }
 
     func openBrowser(_ name: String) {
@@ -599,8 +799,16 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             let done = SetupBoard.run(["onboard", "--probe", "--answers", url.path])
             try? FileManager.default.removeItem(at: url)
             let text = done.out.trimmingCharacters(in: .whitespacesAndNewlines)
+            let localIndex = tag >= 2000 ? -1 : tag - 1000
             DispatchQueue.main.async {
+                if localIndex >= 0, text.hasPrefix("Connected.") {
+                    let rest = text.dropFirst("Connected.".count).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !rest.isEmpty, !rest.hasPrefix("The key"), self.locals.indices.contains(localIndex) {
+                        self.locals[localIndex].model = String(rest.prefix(64))
+                    }
+                }
                 self.statusField.stringValue = text.isEmpty ? "Not reachable." : String(text.prefix(200))
+                if localIndex >= 0 { self.render() }
             }
         }
     }

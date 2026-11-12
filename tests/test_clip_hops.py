@@ -3,7 +3,10 @@
 from pathlib import Path
 
 from hailports.llm import ModelOffline
-from hailports.clip.board import BoardError, apply_board, discover, guide, parse_hop, probe_model, show_board, store_api_key
+from hailports.clip.board import (
+    BoardError, apply_board, discover, guide, model_ids, parse_hop, probe_model,
+    scan_models, show_board, ssh_host_names, store_api_key,
+)
 from hailports.clip.hops import complete, endpoints_from, ssh_argv
 from hailports.clip.scene import folder_hits
 
@@ -316,7 +319,7 @@ def test_login_choice_stores_the_app_and_not_a_key():
     assert cursor[1:6] == ["-p", "--mode", "ask", "--trust", "--output-format"]
     assert "--yolo" not in cursor
     assert "viewing a communication" in cursor_prompt("be brief", "Sam asked")
-    assert "already connected" in cursor_prompt("be brief", "Sam asked")
+    assert "Search all connected mail" in cursor_prompt("be brief", "Sam asked")
     assert only_reply("Ask mode, so I didn't stage it in Zoom") == ""
     assert only_reply("hey Sam -- on it") == "hey Sam -- on it"
     plain = show_board({
@@ -345,3 +348,30 @@ def test_calendar_and_mail_files_are_read(tmp_path):
     blob = " ".join(hit["body"] for hit in hits)
     assert "budget review" in blob
     assert "please review the budget" in blob
+
+
+def test_scan_shows_the_server_name_and_skips_wildcards():
+    import json
+    body = json.dumps({"data": [{"id": "desk-model"}]})
+    assert model_ids(body) == ["desk-model"]
+    assert ssh_host_names("Host *\nHost brain extra\nHost bad*name\n") == ["brain", "extra"]
+
+    def read_local(url):
+        if url == "http://127.0.0.1:8080/v1/models":
+            return body
+        return ""
+
+    seen = []
+
+    def read_ssh(host, url):
+        seen.append((host, url))
+        if host == "brain" and url == "http://127.0.0.1:8080/v1/models":
+            return body
+        return ""
+
+    rows = scan_models(read_local=read_local, hosts=["brain", "other"], read_ssh=read_ssh)
+    assert rows[0] == {"where": "This Mac", "host": "", "url": "http://127.0.0.1:8080/v1", "model": "desk-model"}
+    assert rows[1]["host"] == "brain"
+    assert rows[1]["model"] == "desk-model"
+    assert all(url.startswith("http://127.0.0.1:") for _, url in seen)
+    assert "other" not in [host for host, _ in seen]
