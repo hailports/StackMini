@@ -31,7 +31,15 @@ def health(base_url: str, timeout: float = 3.0) -> bool:
         return False
 
 
-def chat(base_url: str, model: str, prompt: str, timeout: float = 120.0, system: str = "") -> ChatResult:
+def _headers(key: str = "") -> dict:
+    headers = {"Content-Type": "application/json"}
+    token = (key or "").strip()
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    return headers
+
+
+def chat(base_url: str, model: str, prompt: str, timeout: float = 120.0, system: str = "", key: str = "") -> ChatResult:
     root = base_url.rstrip("/")
     messages = []
     if system:
@@ -43,7 +51,7 @@ def chat(base_url: str, model: str, prompt: str, timeout: float = 120.0, system:
     req = urllib.request.Request(
         url + "/chat/completions",
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers=_headers(key),
         method="POST",
     )
     try:
@@ -52,25 +60,27 @@ def chat(base_url: str, model: str, prompt: str, timeout: float = 120.0, system:
     except urllib.error.HTTPError as exc:
         # Older servers only have /completion.
         if exc.code in (404, 400, 500):
-            return _completion(root, prompt, timeout, system)
+            return _completion(root, prompt, timeout, system, key)
         raise ModelOffline(str(exc)) from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise ModelOffline(str(exc)) from exc
     try:
         text = doc["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise ModelOffline("bad chat response") from exc
+    except (KeyError, IndexError, TypeError):
+        text = doc.get("content") or ""
+    if not text:
+        raise ModelOffline("bad chat response")
     return ChatResult(text=text or "", raw=doc)
 
 
-def _completion(root: str, prompt: str, timeout: float, system: str) -> ChatResult:
+def _completion(root: str, prompt: str, timeout: float, system: str, key: str = "") -> ChatResult:
     bare = root[:-3] if root.endswith("/v1") else root
     text = (system + "\n" + prompt).strip()
     data = json.dumps({"prompt": text, "n_predict": 64, "temperature": 0.2}).encode("utf-8")
     req = urllib.request.Request(
         bare + "/completion",
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers=_headers(key),
         method="POST",
     )
     try:
