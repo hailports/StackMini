@@ -776,14 +776,14 @@ def build_parser() -> argparse.ArgumentParser:
     block_p.add_argument("title")
     msg_p = sub.add_parser("imessage", help="macOS poll hint, or a model reply for a message.")
     msg_p.add_argument("text", nargs="?")
-    paiste_p = sub.add_parser("paiste", help="Read the text near the cursor and copy a reply. Nothing is sent.")
+    paiste_p = sub.add_parser("clip", help="Copy a short reply from the text already on screen. Nothing is sent.")
     paiste_p.add_argument("action", nargs="?", default="draft", choices=["draft", "auto", "menu", "setup", "onboard"])
     paiste_p.add_argument("--scene", default="")
     paiste_p.add_argument("--inbox", default="")
     paiste_p.add_argument("--outbox", default="")
     paiste_p.add_argument("--copy", action="store_true")
-    paiste_p.add_argument("--yes", action="store_true", help="Accept Paiste setup defaults. Does not send.")
-    paiste_p.add_argument("--route-out", default="", help="Where paiste setup writes the route file.")
+    paiste_p.add_argument("--yes", action="store_true", help="Accept the setup defaults. Does not send.")
+    paiste_p.add_argument("--route-out", default="", help="Where setup writes the route file.")
     paiste_p.add_argument("--answers", default="", help="JSON for the onboarding window. The file is removed after it is read.")
     paiste_p.add_argument("--show", action="store_true", help="Print the onboarding values. No key and no mail text.")
     paiste_p.add_argument("--hint", action="store_true", help="One setup line. No mail or notes text is sent.")
@@ -951,8 +951,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_idle(cfg, cfg_path)
     if args.cmd == "alerts":
         return _cmd_alerts(cfg, cfg_path, args.probe, args.channel)
-    if args.cmd == "paiste":
-        from hailports.paiste_cmd import cmd_paiste
+    if args.cmd == "clip":
+        from hailports.clip.run import cmd_paiste
         return cmd_paiste(args, cfg, _state_dir(cfg_path))
     if args.cmd == "accounts":
         return _cmd_accounts(cfg, cfg_path, args)

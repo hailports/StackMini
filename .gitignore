@@ -1,6 +1,6 @@
 __pycache__/
-contrib/paiste/Paiste.app/
-contrib/paiste/paisty.app/
+contrib/clip/Paiste.app/
+contrib/clip/paisty.app/
 .pytest_cache/
 .ruff_cache/
 *.pyc

@@ -1,0 +1,7 @@
+{
+  "app": "Microsoft Outlook",
+  "title": "accounts",
+  "field_role": "AXTextArea",
+  "field_text": "thanks, I will check\n\nFrom: Dana\nSubject: accounts\n\nCan you create the account?\n\nFrom: Old\nSubject: meet\n\navailable at https://example.com/join\n",
+  "field_box": {"x": 0, "y": 0, "w": 700, "h": 900}
+}

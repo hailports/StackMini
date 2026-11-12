@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.hailports.paiste-auto</string>
+  <key>StartInterval</key>
+  <integer>300</integer>
+  <key>ProgramArguments</key>
+  <array>
+    <string>hailports</string>
+    <string>paiste</string>
+    <string>auto</string>
+  </array>
+  <key>Comment</key>
+  <string>Example only. Setup does not load this. The local model drafts. Nothing is sent.</string>
+</dict>
+</plist>
