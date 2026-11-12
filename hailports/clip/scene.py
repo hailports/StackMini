@@ -168,6 +168,9 @@ def _mail_parts(text: str) -> tuple[str, str]:
 
 
 _CHROME = re.compile(r"(?i)(\b(ctrl|cmd|alt|shift|command)\s*\+|shortcut|write a message or type|type / for more)")
+_CLIP = re.compile(
+    r"(?i)(select the clip|pasteable draft|delete all history|join mailing list|rate app|customer support|preferences\.\.\.)"
+)
 
 
 def _placeholder(text: str) -> bool:
@@ -180,8 +183,10 @@ def _placeholder(text: str) -> bool:
 
 def _chrome(text: str) -> bool:
     body = " ".join((text or "").split())
-    if not body or len(body) > 160:
-        return not body
+    if not body or _CLIP.search(body):
+        return True
+    if len(body) > 160:
+        return False
     if _placeholder(body) or _CHROME.search(body):
         return True
     role_like = body.lower()
