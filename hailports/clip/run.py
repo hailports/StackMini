@@ -129,9 +129,10 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
             "Use what was already said. Draft the reply to what is still open.\n\n"
             + rules
         )
-    if "already connected" not in rules:
+    if "Search all connected mail" not in rules:
         rules = (
-            "Use the mail, calendar, and notes already connected to you. "
+            "Search all connected mail, all connected calendar events, and all connected notes. "
+            "Do not stop at a sample. Use what matches this conversation. "
             "Do not invent a fact that is not on screen and not in those.\n\n"
             + rules
         )
@@ -216,6 +217,10 @@ def cmd_onboard(args, cfg) -> int:
         return 0
     if getattr(args, "hint", False):
         print(setup_hint() or "")
+        return 0
+    if getattr(args, "scan", False):
+        from hailports.clip.board import scan_setup
+        print(json.dumps(scan_setup()))
         return 0
     if getattr(args, "show", False):
         print(json.dumps(show_board(cfg.get("paiste") or {}, discover())))

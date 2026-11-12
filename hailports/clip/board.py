@@ -110,6 +110,191 @@ def discover(home: Path | None = None) -> dict:
     }
 
 
+_LOCAL_URLS = (
+    "http://127.0.0.1:8080/v1",
+    "http://127.0.0.1:11434/v1",
+    "http://127.0.0.1:1234/v1",
+    "http://127.0.0.1:18080/v1",
+)
+_REMOTE_ENDPOINTS = (
+    ("http://127.0.0.1:8080/v1/models", "http://127.0.0.1:8080/v1"),
+    ("http://127.0.0.1:11434/v1/models", "http://127.0.0.1:11434/v1"),
+    ("http://127.0.0.1:11434/api/tags", "http://127.0.0.1:11434/v1"),
+    ("http://127.0.0.1:1234/v1/models", "http://127.0.0.1:1234/v1"),
+)
+
+
+def model_ids(body: str) -> list[str]:
+    """Names from an OpenAI /models body or an Ollama tags body. Nothing else."""
+    try:
+        doc = json.loads(body or "")
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(doc, dict):
+        return []
+    names = []
+    for key, field in (("data", "id"), ("models", "name")):
+        rows = doc.get(key)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get(field) or "").strip()
+            if _model_ok(name) and name not in names:
+                names.append(name)
+            if len(names) == 4:
+                return names
+    return names
+
+
+def ssh_host_names(text: str) -> list[str]:
+    """Host names from an ssh config. Wildcards are skipped. No addresses are invented."""
+    hosts = []
+    for raw in (text or "").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line.lower().startswith("host "):
+            continue
+        for token in line.split()[1:]:
+            if any(ch in token for ch in "*?["):
+                continue
+            if not _HOST.match(token) or token in hosts:
+                continue
+            hosts.append(token)
+            if len(hosts) == 8:
+                return hosts
+    return hosts
+
+
+def _read_quiet(url: str) -> str:
+    if not url.startswith("http://127.0.0.1:"):
+        return ""
+    try:
+        with urllib.request.urlopen(url, timeout=0.4) as resp:
+            if int(resp.status) != 200:
+                return ""
+            return resp.read(8000).decode("utf-8", "replace")
+    except (OSError, TimeoutError, urllib.error.URLError):
+        return ""
+
+
+def _ssh_body(host: str, url: str) -> str:
+    allowed = {item[0] for item in _REMOTE_ENDPOINTS}
+    if url not in allowed or not _HOST.match(host or ""):
+        return ""
+    argv = [
+        "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=2",
+        host, "curl", "-fsS", "-m", "3", url,
+    ]
+    try:
+        done = subprocess.run(argv, capture_output=True, check=False, timeout=8)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if done.returncode != 0:
+        return ""
+    return (done.stdout or b"")[:8000].decode("utf-8", "replace")
+
+
+def _hosts_from_ssh(root: Path) -> list[str]:
+    path = root / ".ssh" / "config"
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    return ssh_host_names(text)
+
+
+def scan_models(read_local=None, hosts=None, read_ssh=None) -> list[dict]:
+    """Find a running model on this Mac or on an ssh host. The name comes from the server."""
+    reader = read_local or _read_quiet
+    remote = read_ssh or _ssh_body
+    rows = []
+    seen = set()
+
+    def add(where: str, host: str, base: str, body: str) -> None:
+        if not body or not body.lstrip().startswith("{"):
+            return
+        ids = model_ids(body)
+        name = ids[0] if ids else ""
+        key = (host, base, name)
+        if key in seen:
+            return
+        seen.add(key)
+        rows.append({"where": where, "host": host, "url": base, "model": name})
+
+    for base in _LOCAL_URLS:
+        body = reader(base.rstrip("/") + "/models")
+        if body:
+            add("This Mac", "", base, body)
+        if ":11434/" in base:
+            tags = reader("http://127.0.0.1:11434/api/tags")
+            if tags:
+                add("This Mac", "", "http://127.0.0.1:11434/v1", tags)
+    found_remote = False
+    for host in list(hosts or [])[:8]:
+        if found_remote or not _HOST.match(host):
+            continue
+        for endpoint, base in _REMOTE_ENDPOINTS:
+            body = remote(host, endpoint)
+            if not body:
+                continue
+            add(host, host, base, body)
+            found_remote = True
+            break
+    return rows[:6]
+
+
+def _vaults(root: Path) -> list[str]:
+    found = []
+    cfg = root / "Library" / "Application Support" / "obsidian" / "obsidian.json"
+    try:
+        doc = json.loads(cfg.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        doc = {}
+    vaults = doc.get("vaults") if isinstance(doc, dict) else None
+    if isinstance(vaults, dict):
+        for row in vaults.values():
+            if not isinstance(row, dict):
+                continue
+            path = str(row.get("path") or "").strip()
+            if _path_ok(path) and Path(path).is_dir() and path not in found:
+                found.append(path)
+            if len(found) == 6:
+                return found
+    one = str(discover(root).get("obsidian") or "")
+    if one and one not in found:
+        found.insert(0, one)
+    return found[:6]
+
+
+def _mail_apps() -> list[str]:
+    names = []
+    pairs = (
+        ("Mail", ("/System/Applications/Mail.app", "/Applications/Mail.app")),
+        ("Outlook", ("/Applications/Microsoft Outlook.app",)),
+        ("Spark", ("/Applications/Spark.app",)),
+    )
+    for label, paths in pairs:
+        if any(Path(path).exists() for path in paths):
+            names.append(label)
+    return names
+
+
+def scan_setup(home: Path | None = None, read_local=None, hosts=None, read_ssh=None) -> dict:
+    """What the setup window can offer. No mail text, no key, no model list dumped raw."""
+    root = Path(home) if home is not None else Path.home()
+    picked_hosts = hosts if hosts is not None else _hosts_from_ssh(root)
+    return {
+        "mail_apps": _mail_apps(),
+        "vaults": _vaults(root),
+        "apps": [
+            {"name": name, "installed": bool(app_bin(name))}
+            for name in ("claude", "codex", "cursor")
+        ],
+        "models": scan_models(read_local=read_local, hosts=picked_hosts, read_ssh=read_ssh),
+    }
+
+
 def _surface(io, out: dict, key: str, path_key: str, title: str, explain: str, suggested: str = "") -> None:
     if not io.confirm("paiste_" + key, title, explain, False):
         out[key] = "off"
@@ -297,7 +482,12 @@ def probe_model(line: str, key: str = "", open_url=None, run_ssh=None) -> str:
             code = run_ssh(host, remote) if run_ssh is not None else _ssh_status(host, remote)
         except (OSError, subprocess.TimeoutExpired):
             return "Not reachable."
-        return "Connected." if str(code).strip() == "200" else "Not reachable."
+        if str(code).strip() != "200":
+            return "Not reachable."
+        if run_ssh is not None:
+            return "Connected."
+        ids = model_ids(_ssh_body(host, remote))
+        return "Connected. " + ids[0] if ids else "Connected."
     if not text.startswith(("http://", "https://")) or not _url_ok(text.split()[0]):
         return "That address was not checked."
     url = text.split()[0].rstrip("/") + "/models"
@@ -311,7 +501,12 @@ def probe_model(line: str, key: str = "", open_url=None, run_ssh=None) -> str:
     except (OSError, TimeoutError, urllib.error.URLError):
         return "Not reachable."
     if status == 200:
-        return "Connected. The key stayed on this Mac." if (key or "").strip() else "Connected."
+        if (key or "").strip():
+            return "Connected. The key stayed on this Mac."
+        if open_url is not None:
+            return "Connected."
+        ids = model_ids(_read_quiet(url))
+        return "Connected. " + ids[0] if ids else "Connected."
     return "Not reachable."
 
 
