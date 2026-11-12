@@ -28,7 +28,13 @@ def _complete(cfg: dict):
     hops = endpoints_from(cfg)
 
     def run(messages: list[dict]) -> str:
-        text, _name = complete(hops, messages)
+        text, name = complete(hops, messages)
+        try:
+            path = Path.home() / ".config" / "paiste" / "last-hop"
+            path.write_text(name + "\n", encoding="utf-8")
+            path.chmod(0o600)
+        except OSError:
+            pass
         return text
 
     return run
@@ -115,6 +121,13 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
             "You are viewing a communication on the screen. "
             "Use the on-screen text and every connected note or lookup. "
             "Then draft only the reply.\n\n"
+            + rules
+        )
+    if "newest message" not in rules:
+        rules = (
+            "Reply only to the newest message that still needs an answer. "
+            "If a question already has a reply on screen, do not answer it again. "
+            "Ignore clipboard history and old copied text. Do not offer a meeting.\n\n"
             + rules
         )
     messages = prepared.get("messages") or []

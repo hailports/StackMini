@@ -177,7 +177,8 @@ def cursor_prompt(system: str, user: str) -> str:
     body = (user or "").strip()[:4000]
     lead = (
         "You are viewing a communication on the screen. "
-        "Use the on-screen text and every connected note or lookup. "
+        "Reply only to the newest message that still needs an answer. "
+        "Ignore clipboard history. "
         "Then draft only the reply. No title. No code fence. "
         "Do not mention Cursor, ask mode, or the app. "
         "Do not say you staged, posted, or sent anything.\n\n"
