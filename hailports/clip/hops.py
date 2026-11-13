@@ -179,6 +179,7 @@ def cursor_prompt(system: str, user: str) -> str:
         "You are viewing a communication on the screen. "
         "Read the whole conversation, not only the last line. "
         "Use what was already said. "
+        "Answer every question that is still open. One short line each. Do not stop after the first. "
         "Search all connected mail, all connected calendar events, and all connected notes. "
         "Do not stop at a sample. Use what matches this conversation. "
         "Do not invent a fact that is not on screen and not in those. "

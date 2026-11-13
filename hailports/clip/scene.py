@@ -461,7 +461,7 @@ def _excerpt(path: Path, text: str) -> str:
 def source_dirs(cfg: dict | None) -> list[str]:
     paiste = (cfg or {}).get("paiste") or {}
     found = []
-    for key in ("notes_dir", "obsidian_vault", "email_dir", "chat_dir", "calendar_dir"):
+    for key in ("notes_dir", "obsidian_vault", "email_dir", "chat_dir", "calendar_dir", "sources_dir"):
         raw = str(paiste.get(key) or "").strip()
         if raw:
             found.append(raw)
@@ -506,9 +506,18 @@ def source_notes(reading: Reading, hits: list[dict]) -> list[str]:
     return notes
 
 
+def plain_reply(text: str) -> str:
+    """Drop a trailing thanks and markdown. The reply is what they paste."""
+    body = strip_signoff(text or "").replace("**", "").replace("__", "")
+    parts = re.split(r"(?<=[.!?])\s+", body.strip())
+    while parts and re.match(r"(?i)^thanks\b", parts[-1].strip()):
+        parts.pop()
+    return " ".join(parts).strip()
+
+
 def runner_context(messages: list[dict], note: str) -> list[dict]:
     """Extra wording for the draft runner only. A menu click does not call this."""
-    extra = " ".join((note or "").split())[:2000]
+    extra = " ".join((note or "").split())[:4200]
     if not extra:
         return messages
     out = [dict(item) for item in messages]

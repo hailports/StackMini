@@ -18,7 +18,7 @@ from hailports.clip.scene import (
     run_inbox,
     scene_from,
     source_dirs,
-    strip_signoff,
+    plain_reply,
     trim_overreach,
 )
 from hailports.clip.hops import complete, endpoints_from
@@ -79,6 +79,14 @@ def _context_note(cfg: dict | None) -> str:
     return path.read_text(encoding="utf-8", errors="replace").strip()[:6000]
 
 
+def lookup_query(text: str, limit: int = 2200) -> str:
+    """Keep the ask. On a long window the questions sit past the first 500 characters."""
+    flat = " ".join((text or "").split())
+    if len(flat) <= limit:
+        return flat
+    return (flat[-1500:] + "\n" + flat[:400])[:limit]
+
+
 def _lookup_notes(cfg: dict | None, text: str) -> str:
     paiste = (cfg or {}).get("paiste") or {}
     raw = str(paiste.get("lookup_cmd") or "").strip()
@@ -90,7 +98,7 @@ def _lookup_notes(cfg: dict | None, text: str) -> str:
     try:
         proc = subprocess.run(
             [str(path)],
-            input=text[:4000],
+            input=lookup_query(text),
             text=True,
             capture_output=True,
             timeout=25,
@@ -140,23 +148,29 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
     if messages and messages[0].get("role") == "system":
         messages[0]["content"] = rules
     me = [part.strip() for part in str((route.get("paiste") or {}).get("me") or "").split(",") if part.strip()]
-    note = _context_note(route)
+    voice = _context_note(route)[:1400]
+    parts = []
     if me:
-        note = (
+        parts.append(
             "You are " + me[0] + ". Never greet " + me[0] + ". "
             "Never start with hey " + me[0].split()[0] + ". "
-            "If the window is their own item and nobody else asked a question, write a note with no greeting.\n\n"
-            + note
-        ).strip()
+            "If the window is their own item and nobody else asked a question, write a note with no greeting."
+        )
+    if voice:
+        parts.append(voice)
     found = _lookup_notes(route, "\n".join(prepared.get("sources") or []))
     if found:
-        note = (note + "\n\nWork brain, use only the parts that match this message:\n" + found).strip()
+        parts.append(
+            "Notes that match this message. Ignore a note that does not match. "
+            "Use a matching note when you answer.\n" + found[:1600]
+        )
+    note = "\n\n".join(parts).strip()
     if note:
         from hailports.clip.scene import runner_context
         prepared["messages"] = runner_context(prepared.get("messages") or [], note)
     sources = "\n".join(prepared.get("sources") or [])
     try:
-        text = strip_signoff(_complete(route)(prepared["messages"]).strip())
+        text = plain_reply(_complete(route)(prepared["messages"]).strip())
         if overreach(text, sources):
             retry = list(prepared["messages"]) + [
                 {"role": "assistant", "content": text},
@@ -166,7 +180,7 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
                     "If the steps are not in the text, say they are not listed."
                 )},
             ]
-            text = strip_signoff(_complete(route)(retry).strip())
+            text = plain_reply(_complete(route)(retry).strip())
         text = as_writer(trim_overreach(text, sources), me)
     except ModelOffline as exc:
         print("model offline: " + str(exc))
@@ -236,6 +250,28 @@ def cmd_onboard(args, cfg) -> int:
             path.unlink()
         except OSError:
             pass
+    if getattr(args, "ingest", False):
+        from hailports.clip.board import ingest_files
+        from hailports.config import save_file
+        paths = []
+        if isinstance(answers, dict) and isinstance(answers.get("paths"), list):
+            paths = [str(item) for item in answers["paths"]]
+        root = Path.home() / ".config" / "paiste" / "sources"
+        info = ingest_files(paths, root)
+        if info["added"]:
+            paiste = dict(cfg.get("paiste") or {})
+            paiste["sources_dir"] = str(root)
+            route = dict(cfg)
+            route["paiste"] = paiste
+            dest = _route_dest(args)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            save_file(dest, route)
+            try:
+                dest.chmod(0o600)
+            except OSError:
+                pass
+        print("added %d%s" % (info["added"], " sent" if info.get("sent") else ""))
+        return 0
     if getattr(args, "probe", False):
         doc = answers if isinstance(answers, dict) else {}
         text = probe_model(str(doc.get("line") or ""), str(doc.get("key") or ""))
