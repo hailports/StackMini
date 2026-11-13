@@ -48,6 +48,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
     var scanning = true
     var scanned = false
     var showManualLocal = false
+    var showLocalAssist = false
     var feedNote = ""
     var linkControl: NSSegmentedControl?
     var fields: [String: NSTextField] = [:]
@@ -402,11 +403,11 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             feedPage()
         case 4:
             titleField.stringValue = "Step 5. Connect your AI to paisty."
-            body.stringValue = "One click checks the app on this Mac. If it is not signed in, the browser opens and signs this Mac into that account. This is the AI a click will ask."
+            body.stringValue = "One click checks the app on this Mac. If it is not signed in, the browser opens and signs this Mac into that account. A local model is uncommon. The help for that is on this screen."
             aiPage()
         case 5:
             titleField.stringValue = "Step 6. A local model is optional."
-            body.stringValue = "This is after the AI login. We look on this Mac and on computers you already reach by ssh. You do not type a model name. Next skips this."
+            body.stringValue = "Most people already finished on the last screen. Next keeps that AI. This page is only if you still want a local model."
             localPage()
         default:
             titleField.stringValue = "Save on this Mac."
@@ -498,34 +499,44 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         y = choiceButton("Connect Codex", "codex", y)
         y = choiceButton("Connect Cursor", "cursor", y)
         y = choiceButton(showCustom ? "API key" : "I have an API key", "custom", y)
-        if !showCustom {
+        if showCustom {
+            y = caption("Paid works anywhere this Mac is online. OpenAI-style /v1.", y)
+            for (i, row) in apis.enumerated() {
+                y = field("api-url-\(i)", "https://api.openai.com/v1", row.url, y)
+                y = field("api-model-\(i)", "Model name", row.model, y)
+                let placeholder = row.hasKey || !row.key.isEmpty ? "Key already on this Mac. Leave blank to keep it." : "API key. Stays on this Mac."
+                y = field("api-key-\(i)", placeholder, "", y, secure: true)
+                y = rowButtons(probe: 2000 + i, remove: 4000 + i, showRemove: apis.count > 1, y)
+            }
+            if apis.count < 4 {
+                y = addButton("Add a paid model", #selector(addPaid), y)
+            }
+        }
+        y = caption("A local model is uncommon. Most people stop here.", y)
+        if !showLocalAssist {
+            y = tagButton("Help me use a local model", #selector(openLocalHelp(_:)), 0, y)
             extraHeight = y + 8
             return
         }
-        y = caption("Paid works anywhere this Mac is online. OpenAI-style /v1. Tried after a local model, when you add one.", y)
-        for (i, row) in apis.enumerated() {
-            y = field("api-url-\(i)", "https://api.openai.com/v1", row.url, y)
-            y = field("api-model-\(i)", "Model name", row.model, y)
-            let placeholder = row.hasKey || !row.key.isEmpty ? "Key already on this Mac. Leave blank to keep it." : "API key. Stays on this Mac."
-            y = field("api-key-\(i)", placeholder, "", y, secure: true)
-            y = rowButtons(probe: 2000 + i, remove: 4000 + i, showRemove: apis.count > 1, y)
-        }
-        if apis.count < 4 {
-            y = addButton("Add a paid model", #selector(addPaid), y)
-        }
+        y = localAssist(y)
         extraHeight = y + 8
     }
 
     func localPage() {
-        var y = CGFloat(0)
+        extraHeight = localAssist(0) + 8
+    }
+
+    func localAssist(_ y: CGFloat) -> CGFloat {
+        var y = y
         let known = establishedLocal()
         if !known.isEmpty {
             y = caption("Connected: " + known, y)
         }
+        y = caption("It has to already be running on this Mac, or on a computer you already ssh to. We look for it. You do not type a name.", y)
         if scanning {
-            y = caption("Looking on this Mac and on your ssh computers.", y)
+            y = caption("Looking now.", y)
         } else if foundModels.isEmpty {
-            y = caption("No local model answered. Next keeps the AI you connected.", y)
+            y = caption("Nothing answered. Start Ollama or LM Studio on this Mac, then press Look again. The AI login above still works if you skip this.", y)
         }
         for (i, row) in foundModels.enumerated() {
             let name = (row["model"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -535,11 +546,9 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         }
         y = tagButton("Look again", #selector(lookAgain(_:)), 0, y)
         if !showManualLocal {
-            y = tagButton("A different machine", #selector(showManual(_:)), 0, y)
-            extraHeight = y + 8
-            return
+            return tagButton("It is on another computer", #selector(showManual(_:)), 0, y)
         }
-        y = caption("Host and address only. The name shows after it answers.", y)
+        y = caption("Type the computer and the address. The name shows after it answers.", y)
         for (i, row) in locals.enumerated() {
             y = field("host-\(i)", "ssh host name. Blank if it is on this Mac.", row.host, y)
             y = field("remote-\(i)", "http://127.0.0.1:8080/v1", row.remote, y)
@@ -549,7 +558,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         if locals.count < 4 {
             y = addButton("Add another address", #selector(addLocal), y)
         }
-        extraHeight = y + 8
+        return y
     }
 
     func establishedLocal() -> String {
@@ -728,6 +737,15 @@ final class SetupBoard: NSObject, NSWindowDelegate {
                 self.render()
             }
         }
+    }
+
+    @objc func openLocalHelp(_ sender: NSButton) {
+        showLocalAssist = true
+        if !scanned {
+            lookAgain(sender)
+            return
+        }
+        render()
     }
 
     @objc func showManual(_ sender: NSButton) {
