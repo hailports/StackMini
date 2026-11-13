@@ -411,3 +411,19 @@ def test_ingest_copies_notes_and_skips_secrets(tmp_path):
         },
     )
     assert kept["sources_dir"] == str(root)
+
+
+def test_the_screen_lists_every_ask_and_a_vague_reply_misses_the_code():
+    screen = """
+1. Add an Export button to download the open machine orders.
+2. If the user searches or filters the list, the export should contain only the matching records.
+Could you please clarify where exactly we need to add the Export button?
+"""
+    points = open_points(screen)
+    assert len(points) == 3
+    assert "export button" in code_phrases(screen)[0].lower()
+    notes = "lwc/valmontSalesOrdersListView/valmontSalesOrdersListView.html:27: label=Search orders"
+    vague = "the export button goes on that list. the export should follow the search."
+    assert thin_reply(vague, notes)
+    assert not thin_reply("add it on valmontSalesOrdersListView next to Search orders", notes)
+    assert misses_points("the button goes on that list.", points)

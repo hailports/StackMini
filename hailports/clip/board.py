@@ -306,20 +306,43 @@ _CODE_STOP = {
 }
 
 
+_CODE_LEAD = {
+    "add", "if", "show", "where", "the", "a", "an", "to", "for", "on", "in",
+    "should", "could", "please", "which", "what", "when", "and", "or",
+}
+
+
+def _code_trim(phrase: str) -> str:
+    words = phrase.split()
+    while words and words[0].lower() in _CODE_LEAD:
+        words = words[1:]
+    while words and words[-1].lower() in _CODE_LEAD:
+        words = words[:-1]
+    return " ".join(words)
+
+
 def code_phrases(query: str) -> list[str]:
     """Short phrases worth finding in a code tree. No whole window."""
+    raw = query or ""
     found = []
-    for match in re.findall(r"\b[A-Z][A-Za-z0-9]+(?:\s+[A-Za-z][A-Za-z0-9]+){1,4}", query or ""):
-        if match not in found:
-            found.append(match)
+
+    def add(phrase: str) -> None:
+        piece = " ".join(phrase.split())
+        if len(piece) < 8 or piece.lower() in {item.lower() for item in found}:
+            return
+        found.append(piece)
+
+    for stem in ("export button", "machine orders", "search orders", "open orders"):
+        if stem in raw.lower():
+            add(stem)
+    for match in re.findall(r"\b[A-Z][A-Za-z0-9]+(?:\s+[A-Za-z][A-Za-z0-9]+){1,4}", raw):
+        add(_code_trim(match))
     for match in re.findall(
         r"\b(?:export|search|orders|order|machine|filter|error)s?(?:\s+[A-Za-z]+){1,3}",
-        query or "",
+        raw,
         re.I,
     ):
-        piece = " ".join(match.split())
-        if len(piece) >= 8 and piece.lower() not in _CODE_STOP and piece not in found:
-            found.append(piece)
+        add(_code_trim(match))
     return found[:6]
 
 
@@ -345,27 +368,45 @@ def code_notes(query: str, roots_file: Path | None = None, runner=None) -> str:
         return ""
     if runner is not None:
         return str(runner(phrases, roots) or "").strip()[:1800]
-    rg = shutil.which("rg") or "/opt/homebrew/bin/rg"
-    if not Path(rg).is_file():
-        return ""
-    argv = [
-        rg, "-n", "-i", "-m", "2",
-        "-g", "*.cls", "-g", "*.js", "-g", "*.html", "-g", "*.xml",
-        "-g", "!**/__tests__/**", "-g", "!**/*Test.cls",
-    ]
-    for phrase in phrases:
-        argv.extend(["-e", phrase])
-    argv.extend(str(root) for root in roots[:4])
-    try:
-        done = subprocess.run(argv, capture_output=True, text=True, timeout=8, check=False)
-    except (OSError, subprocess.TimeoutExpired):
-        return ""
     kept = []
-    for line in (done.stdout or "").splitlines():
-        if line.strip():
+
+    def take(blob: str) -> None:
+        for line in (blob or "").splitlines():
+            if not line.strip() or "/__tests__/" in line or "Test.cls:" in line:
+                continue
+            if line[:220] in kept:
+                continue
             kept.append(line[:220])
-        if len(kept) == 12:
+            if len(kept) == 12:
+                return
+
+    rg = shutil.which("rg")
+    if rg:
+        argv = [rg, "-n", "-i", "-m", "2", "-g", "*.cls", "-g", "*.js", "-g", "*.html", "-g", "*.xml",
+                "-g", "!**/__tests__/**", "-g", "!**/*Test.cls"]
+        for phrase in phrases:
+            argv.extend(["-e", phrase])
+        argv.extend(str(root) for root in roots[:4])
+        try:
+            done = subprocess.run(argv, capture_output=True, text=True, timeout=8, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            done = None
+        if done is not None:
+            take(done.stdout or "")
+        return "\n".join(kept)
+    grep = "/usr/bin/grep"
+    for phrase in phrases:
+        if len(kept) >= 12:
             break
+        argv = [grep, "-R", "-n", "-i", "-m", "3",
+                "--include=*.cls", "--include=*.js", "--include=*.html", "--include=*.xml",
+                "-e", phrase]
+        argv.extend(str(root) for root in roots[:4])
+        try:
+            done = subprocess.run(argv, capture_output=True, text=True, timeout=8, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        take(done.stdout or "")
     return "\n".join(kept)
 
 
