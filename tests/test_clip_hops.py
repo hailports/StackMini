@@ -4,9 +4,11 @@ from pathlib import Path
 
 from hailports.llm import ModelOffline
 from hailports.clip.board import (
-    BoardError, apply_board, discover, guide, model_ids, parse_hop, probe_model,
+    BoardError, apply_board, discover, guide, ingest_files, model_ids, parse_hop, probe_model,
     scan_models, show_board, ssh_host_names, store_api_key,
 )
+from hailports.clip.run import lookup_query
+from hailports.clip.scene import plain_reply
 from hailports.clip.hops import complete, endpoints_from, ssh_argv
 from hailports.clip.scene import folder_hits
 
@@ -320,6 +322,7 @@ def test_login_choice_stores_the_app_and_not_a_key():
     assert "--yolo" not in cursor
     assert "viewing a communication" in cursor_prompt("be brief", "Sam asked")
     assert "Search all connected mail" in cursor_prompt("be brief", "Sam asked")
+    assert "every question" in cursor_prompt("be brief", "Sam asked")
     assert only_reply("Ask mode, so I didn't stage it in Zoom") == ""
     assert only_reply("hey Sam -- on it") == "hey Sam -- on it"
     plain = show_board({
@@ -375,3 +378,35 @@ def test_scan_shows_the_server_name_and_skips_wildcards():
     assert rows[1]["model"] == "desk-model"
     assert all(url.startswith("http://127.0.0.1:") for _, url in seen)
     assert "other" not in [host for host, _ in seen]
+
+
+def test_lookup_keeps_the_question_and_drops_a_trailing_thanks():
+    blob = ("section " * 400) + " WHERE should the export button go"
+    query = lookup_query(blob)
+    assert "WHERE should the export button go" in query[:1600]
+    assert plain_reply("the button goes on that list. thanks for checking!") == "the button goes on that list."
+    assert "**" not in plain_reply("use **Pivot Orders**.")
+
+
+def test_ingest_copies_notes_and_skips_secrets(tmp_path):
+    note = tmp_path / "orders.md"
+    note.write_text("open machine orders live on Pivot Orders in Progress", encoding="utf-8")
+    secret = tmp_path / ".env"
+    secret.write_text("token=nope", encoding="utf-8")
+    root = tmp_path / "sources"
+    info = ingest_files([str(tmp_path)], root, hook=tmp_path / "missing-hook")
+    assert info["added"] == 1
+    assert info["sent"] is False
+    kept = apply_board(
+        {"sources_dir": str(root), "order": [], "models": {}},
+        {
+            "link": "local",
+            "local": "http://127.0.0.1:8080/v1",
+            "local_model": "local",
+            "mail": "off",
+            "chat": "off",
+            "notes": "off",
+            "calendar": "off",
+        },
+    )
+    assert kept["sources_dir"] == str(root)
