@@ -4,7 +4,7 @@ from pathlib import Path
 
 from hailports.llm import ModelOffline
 from hailports.clip.board import (
-    BoardError, apple_note_pages, apply_board, code_phrases, discover, guide, ingest_files,
+    BoardError, apple_note_pages, apply_board, code_phrases, discover, guide, ingest_files, latest_from_other,
     misses_points, model_ids, monday_pages, open_points, parse_hop, probe_model, pull_source,
     scan_models, show_board, ssh_host_names, store_api_key, thin_reply,
 )
@@ -422,6 +422,18 @@ Could you please clarify where exactly we need to add the Export button?
     points = open_points(screen)
     assert len(points) == 3
     assert "export button" in code_phrases(screen)[0].lower()
+    thread = """You Yesterday
+yes but is the directive to not use ANY codex at all?
+Killana, Dinesh B. 11:34 AM
+All good as long as we use standard components with minimum custom components.
+Killana, Dinesh B. 11:35 AM
+Ramana to lead the team, and change dealer portal like SP portal in the next 6 months.
+"""
+    latest = latest_from_other(thread)
+    assert any("standard components" in line for line in latest)
+    assert any("6 months" in line for line in latest)
+    assert not any("directive" in line for line in latest)
+    assert "1." not in plain_reply("hey Dinesh -- 1. the directive is no. lmk if you need anything else!")
     notes = "lwc/valmontSalesOrdersListView/valmontSalesOrdersListView.html:27: label=Search orders"
     vague = "the export button goes on that list. the export should follow the search."
     assert thin_reply(vague, notes)
