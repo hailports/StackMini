@@ -4,9 +4,9 @@ from pathlib import Path
 
 from hailports.llm import ModelOffline
 from hailports.clip.board import (
-    BoardError, apply_board, code_phrases, discover, guide, ingest_files, misses_points,
-    model_ids, open_points, parse_hop, probe_model, scan_models, show_board, ssh_host_names,
-    store_api_key, thin_reply,
+    BoardError, apple_note_pages, apply_board, code_phrases, discover, guide, ingest_files,
+    misses_points, model_ids, monday_pages, open_points, parse_hop, probe_model, pull_source,
+    scan_models, show_board, ssh_host_names, store_api_key, thin_reply,
 )
 from hailports.clip.run import lookup_query
 from hailports.clip.scene import plain_reply
@@ -427,3 +427,18 @@ Could you please clarify where exactly we need to add the Export button?
     assert thin_reply(vague, notes)
     assert not thin_reply("add it on valmontSalesOrdersListView next to Search orders", notes)
     assert misses_points("the button goes on that list.", points)
+
+
+def test_setup_sources_keep_notes_and_drop_a_secret(tmp_path):
+    pages = apple_note_pages("NOTE Budget\nreview the open orders\nENDNOTE\nNOTE Login\npassword is hidden\nENDNOTE\n")
+    assert pages == [("Budget", "review the open orders")]
+    boards = monday_pages({"data": {"boards": [{"name": "Portal", "items_page": {"items": [{"name": "Export", "updates": [{"text_body": "on the orders list"}]}]}}]}})
+    assert boards[0][0] == "Portal"
+    assert "orders list" in boards[0][1]
+    folder = tmp_path / "Zoom"
+    folder.mkdir()
+    (folder / "captions.vtt").write_text("the export follows the search box", encoding="utf-8")
+    (folder / "auth.json").write_text("token nope", encoding="utf-8")
+    info = pull_source("zoom", tmp_path / "out", folder=folder, hook=tmp_path / "missing")
+    assert info["added"] == 1
+    assert info["sent"] is False

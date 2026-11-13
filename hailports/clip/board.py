@@ -459,6 +459,182 @@ def misses_points(reply: str, points: list[str]) -> bool:
     return hit < len(points)
 
 
+_SECRET_NOTE = re.compile(
+    r"(?i)password|seed phrase|mnemonic|verification code|one[- ]time code|\b2fa\b"
+)
+_NOTE_SPLIT = re.compile(r"\nENDNOTE\n")
+
+
+def apple_note_pages(text: str) -> list[tuple[str, str]]:
+    pages = []
+    for block in _NOTE_SPLIT.split(text or ""):
+        if not block.strip().startswith("NOTE "):
+            continue
+        head, _, body = block.partition("\n")
+        title = head[5:].strip()[:80] or "note"
+        body = body.strip()
+        if not body or _SECRET_NOTE.search(body):
+            continue
+        pages.append((title, body[:8000]))
+        if len(pages) == 30:
+            break
+    return pages
+
+
+def monday_pages(doc: dict) -> list[tuple[str, str]]:
+    data = doc.get("data") if isinstance(doc, dict) else None
+    boards = data.get("boards") if isinstance(data, dict) else None
+    if not isinstance(boards, list):
+        return []
+    pages = []
+    for board in boards:
+        if not isinstance(board, dict):
+            continue
+        name = str(board.get("name") or "board")[:80]
+        page = data.get("items_page") if False else board.get("items_page")
+        items = page.get("items") if isinstance(page, dict) else None
+        lines = ["# " + name]
+        if isinstance(items, list):
+            for item in items[:20]:
+                if not isinstance(item, dict):
+                    continue
+                lines.append(str(item.get("name") or "item"))
+                updates = item.get("updates")
+                if isinstance(updates, list):
+                    for update in updates[:3]:
+                        if isinstance(update, dict) and update.get("text_body"):
+                            lines.append(str(update.get("text_body"))[:500])
+        body = "\n".join(lines).strip()
+        if body and not _SECRET_NOTE.search(body):
+            pages.append((name, body[:8000]))
+        if len(pages) == 10:
+            break
+    return pages
+
+
+def _write_pages(dest: Path, pages: list[tuple[str, str]]) -> list[str]:
+    dest.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for index, (title, body) in enumerate(pages, 1):
+        safe = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in title)[:60] or "note"
+        path = dest / ("%02d-%s.txt" % (index, safe))
+        path.write_text(body.strip() + "\n", encoding="utf-8")
+        paths.append(str(path))
+    return paths
+
+
+def _text_files(root: Path, suffixes: set[str], limit: int = 40) -> list[Path]:
+    found = []
+    if not root.is_dir():
+        return found
+    for path in root.rglob("*"):
+        if len(found) >= limit:
+            break
+        if not path.is_file() or path.is_symlink():
+            continue
+        if any(part.startswith(".") or part in {".git", "node_modules"} for part in path.parts):
+            continue
+        name = path.name.lower()
+        if path.suffix.lower() not in suffixes:
+            continue
+        if any(word in name for word in ("auth", "token", "cookie", "secret", "password")):
+            continue
+        try:
+            if path.stat().st_size <= 0 or path.stat().st_size > 1_000_000:
+                continue
+        except OSError:
+            continue
+        found.append(path)
+    found.sort(key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True)
+    return found[:limit]
+
+
+def pull_source(name: str, dest: Path, token: str = "", text: str = "", doc: dict | None = None,
+                folder: Path | None = None, hook: Path | None = None) -> dict:
+    """Turn one setup source into text files. The password is not kept."""
+    import os
+    kind = (name or "").strip().lower()
+    pages: list[tuple[str, str]] = []
+    copied: list[str] = []
+    need = ""
+    if kind == "apple-notes":
+        pages = apple_note_pages(text)
+    elif kind == "monday":
+        if not (token or "").strip():
+            need = "need-token"
+        elif isinstance(doc, dict):
+            pages = monday_pages(doc)
+    elif kind in {"zoom", "littlebird", "onenote"} and folder is not None:
+        suffixes = {".txt", ".md", ".vtt", ".srt"} if kind == "zoom" else {".txt", ".md", ".html"}
+        if kind == "littlebird":
+            suffixes = {".txt", ".md"}
+        for path in _text_files(folder, suffixes):
+            try:
+                body = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if kind == "onenote" and path.suffix.lower() == ".html":
+                body = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", body)
+                body = re.sub(r"(?s)<[^>]+>", " ", body)
+            body = " ".join(body.split())
+            if body and not _SECRET_NOTE.search(body):
+                pages.append((path.stem[:60], body[:8000]))
+    else:
+        need = "none"
+    if pages:
+        copied = _write_pages(dest, pages)
+    sent = False
+    script = hook if hook is not None else Path.home() / ".config" / "paiste" / "ingest"
+    if copied and script.is_file() and os.access(script, os.X_OK):
+        try:
+            done = subprocess.run(
+                [str(script)], input="\n".join(copied) + "\n",
+                text=True, capture_output=True, timeout=120,
+            )
+            sent = done.returncode == 0 and "sent" in (done.stdout or "")
+        except (OSError, subprocess.TimeoutExpired):
+            sent = False
+    return {"added": len(copied), "sent": sent, "need": need}
+
+
+def apple_notes_text() -> str:
+    script = (
+        'tell application "Notes"\n'
+        'set i to 0\nset out to ""\n'
+        'repeat with n in notes\n'
+        'set i to i + 1\n'
+        'if i > 30 then exit repeat\n'
+        'set out to out & "NOTE " & (name of n) & linefeed & (plaintext of n) & linefeed & "ENDNOTE" & linefeed\n'
+        'end repeat\nreturn out\nend tell'
+    )
+    try:
+        done = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return done.stdout or ""
+
+
+def monday_fetch(token: str) -> dict:
+    query = (
+        "{ boards (limit: 8) { name items_page (limit: 12) "
+        "{ items { name updates (limit: 2) { text_body } } } } }"
+    )
+    req = urllib.request.Request(
+        "https://api.monday.com/v2",
+        data=json.dumps({"query": query}).encode("utf-8"),
+        headers={"Authorization": token, "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except (OSError, json.JSONDecodeError, TimeoutError, urllib.error.URLError):
+        return {}
+
+
 def ingest_files(paths, root: Path, hook: Path | None = None) -> dict:
     """Copy notes, mail, and calendar the person picked. Skip secrets. Nothing is sent by itself."""
     import os
