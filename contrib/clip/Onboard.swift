@@ -48,6 +48,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
     var scanning = true
     var scanned = false
     var showManualLocal = false
+    var feedNote = ""
     var linkControl: NSSegmentedControl?
     var fields: [String: NSTextField] = [:]
     var toggles: [String: NSButton] = [:]
@@ -263,7 +264,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
 
     @objc func forward() {
         capture()
-        if page < 5 {
+        if page < 6 {
             page += 1
             statusField.stringValue = ""
             render()
@@ -381,7 +382,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         linkControl = nil
         extra.subviews.forEach { $0.removeFromSuperview() }
         backButton.isHidden = page == 0
-        nextButton.title = page == 5 ? "Save on this Mac" : "Next"
+        nextButton.title = page == 6 ? "Save on this Mac" : "Next"
         switch page {
         case 0:
             titleField.stringValue = "Step 1. Connect your mail."
@@ -396,11 +397,15 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             body.stringValue = notesCopy()
             notesPage()
         case 3:
-            titleField.stringValue = "Step 4. Connect your AI to paisty."
+            titleField.stringValue = "Step 4. Add what the click can search."
+            body.stringValue = "Choose notes, a mail export, a calendar file, or other files. A copy stays on this Mac and the next click can search it. paisty does not sign in and does not send the password."
+            feedPage()
+        case 4:
+            titleField.stringValue = "Step 5. Connect your AI to paisty."
             body.stringValue = "One click checks the app on this Mac. If it is not signed in, the browser opens and signs this Mac into that account. This is the AI a click will ask."
             aiPage()
-        case 4:
-            titleField.stringValue = "Step 5. A local model is optional."
+        case 5:
+            titleField.stringValue = "Step 6. A local model is optional."
             body.stringValue = "This is after the AI login. We look on this Mac and on computers you already reach by ssh. You do not type a model name. Next skips this."
             localPage()
         default:
@@ -729,6 +734,60 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         capture()
         showManualLocal = true
         render()
+    }
+
+    func feedPage() {
+        var y = tagButton("Add notes", #selector(pickFeed(_:)), 1, 0)
+        y = tagButton("Add a mail export", #selector(pickFeed(_:)), 2, y)
+        y = tagButton("Add a calendar file", #selector(pickFeed(_:)), 3, y)
+        y = tagButton("Add other files", #selector(pickFeed(_:)), 4, y)
+        if !feedNote.isEmpty {
+            y = caption(feedNote, y)
+        }
+        extraHeight = y + 8
+    }
+
+    @objc func pickFeed(_ sender: NSButton) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Add"
+        panel.message = "The next click can search what you add. The password is not read."
+        panel.beginSheetModal(for: window) { response in
+            guard response == .OK else { return }
+            self.ingest(panel.urls.map { $0.path })
+        }
+    }
+
+    func ingest(_ paths: [String]) {
+        guard !paths.isEmpty else { return }
+        let payload: [String: Any] = ["paths": paths]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("paisty-ingest.json")
+        do {
+            try data.write(to: url, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        } catch {
+            feedNote = "Those files were not added."
+            render()
+            return
+        }
+        statusField.stringValue = "Adding those files."
+        DispatchQueue.global(qos: .userInitiated).async {
+            let done = SetupBoard.run(["onboard", "--ingest", "--answers", url.path])
+            try? FileManager.default.removeItem(at: url)
+            let line = done.out.trimmingCharacters(in: .whitespacesAndNewlines)
+            DispatchQueue.main.async {
+                if line.hasPrefix("added 0") || done.code != 0 {
+                    self.feedNote = "Nothing in that choice could be added. Use notes, mail, calendar, or a text file."
+                } else {
+                    self.feedNote = "Added. The next click can search them."
+                }
+                self.statusField.stringValue = self.feedNote
+                self.render()
+            }
+        }
     }
 
     func openBrowser(_ name: String) {

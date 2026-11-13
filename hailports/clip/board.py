@@ -303,6 +303,7 @@ def ingest_files(paths, root: Path, hook: Path | None = None) -> dict:
     """Copy notes, mail, and calendar the person picked. Skip secrets. Nothing is sent by itself."""
     import os
     root.mkdir(parents=True, exist_ok=True)
+    root = root.resolve()
     copied = []
     seen = set()
 
@@ -336,6 +337,11 @@ def ingest_files(paths, root: Path, hook: Path | None = None) -> dict:
 
     def walk(path: Path, depth: int) -> None:
         if depth > 2 or len(copied) >= 40 or path.is_symlink():
+            return
+        try:
+            if path.resolve().is_relative_to(root):
+                return
+        except OSError:
             return
         if path.is_file():
             take(path)
