@@ -25,7 +25,7 @@ _SURFACES = (
 )
 
 _MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$")
-_KEEP = ("context_file", "lookup_cmd", "me", "license")
+_KEEP = ("context_file", "lookup_cmd", "me", "license", "sources_dir")
 
 
 class BoardError(ValueError):
@@ -293,6 +293,82 @@ def scan_setup(home: Path | None = None, read_local=None, hosts=None, read_ssh=N
         ],
         "models": scan_models(read_local=read_local, hosts=picked_hosts, read_ssh=read_ssh),
     }
+
+
+_INGEST_OK = {".md", ".txt", ".markdown", ".eml", ".ics", ".pdf", ".csv"}
+_INGEST_SKIP = {"route.yaml", "license", "license-secret", "id_rsa", "credentials", ".env"}
+
+
+def ingest_files(paths, root: Path, hook: Path | None = None) -> dict:
+    """Copy notes, mail, and calendar the person picked. Skip secrets. Nothing is sent by itself."""
+    import os
+    root.mkdir(parents=True, exist_ok=True)
+    copied = []
+    seen = set()
+
+    def take(path: Path) -> None:
+        if len(copied) >= 40 or not path.is_file() or path.is_symlink():
+            return
+        name = path.name.lower()
+        if name.startswith(".") or name in _INGEST_SKIP or any(word in name for word in ("secret", "password", "token")):
+            return
+        if path.suffix.lower() not in _INGEST_OK:
+            return
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return
+        if size <= 0 or size > 5_000_000:
+            return
+        try:
+            key = str(path.resolve())
+        except OSError:
+            return
+        if key in seen:
+            return
+        seen.add(key)
+        dest = root / ("%02d-%s" % (len(copied) + 1, path.name.replace(" ", "_")))
+        try:
+            shutil.copyfile(path, dest)
+        except OSError:
+            return
+        copied.append(str(dest))
+
+    def walk(path: Path, depth: int) -> None:
+        if depth > 2 or len(copied) >= 40 or path.is_symlink():
+            return
+        if path.is_file():
+            take(path)
+            return
+        if not path.is_dir() or path.name.startswith(".") or path.name in {".git", "node_modules"}:
+            return
+        try:
+            children = sorted(path.iterdir())
+        except OSError:
+            return
+        for child in children:
+            walk(child, depth + 1)
+
+    for raw in paths or []:
+        text = str(raw or "").strip()
+        if not text or ".." in Path(text).parts:
+            continue
+        walk(Path(text).expanduser(), 0)
+    sent = False
+    script = hook if hook is not None else Path.home() / ".config" / "paiste" / "ingest"
+    if copied and script.is_file() and os.access(script, os.X_OK):
+        try:
+            done = subprocess.run(
+                [str(script)],
+                input="\n".join(copied) + "\n",
+                text=True,
+                capture_output=True,
+                timeout=120,
+            )
+            sent = done.returncode == 0 and "sent" in (done.stdout or "")
+        except (OSError, subprocess.TimeoutExpired):
+            sent = False
+    return {"added": len(copied), "sent": sent, "paths": copied}
 
 
 def _surface(io, out: dict, key: str, path_key: str, title: str, explain: str, suggested: str = "") -> None:

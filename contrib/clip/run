@@ -48,6 +48,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--answers", default="")
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--scan", action="store_true")
+    parser.add_argument("--ingest", action="store_true")
     parser.add_argument("--hint", action="store_true")
     parser.add_argument("--probe", action="store_true")
     parser.add_argument("--connect", default="")
