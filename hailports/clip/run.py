@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import urllib.request
@@ -88,26 +89,42 @@ def lookup_query(text: str, limit: int = 2200) -> str:
 
 
 def _lookup_notes(cfg: dict | None, text: str) -> str:
+    from hailports.clip.board import code_notes
+    brain = ""
     paiste = (cfg or {}).get("paiste") or {}
     raw = str(paiste.get("lookup_cmd") or "").strip()
-    if not raw or not text.strip():
-        return ""
-    path = Path(raw).expanduser()
-    if not path.is_file():
-        return ""
-    try:
-        proc = subprocess.run(
-            [str(path)],
-            input=lookup_query(text),
-            text=True,
-            capture_output=True,
-            timeout=25,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return ""
-    if proc.returncode != 0:
-        return ""
-    return proc.stdout.strip()[:4000]
+    path = Path(raw).expanduser() if raw else Path()
+    if text.strip() and path.is_file():
+        try:
+            proc = subprocess.run(
+                [str(path)],
+                input=lookup_query(text),
+                text=True,
+                capture_output=True,
+                timeout=25,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            proc = None
+        if proc is not None and proc.returncode == 0:
+            brain = proc.stdout.strip()[:2000]
+    code = code_notes(text) if text.strip() else ""
+    if code:
+        code = "Code on this Mac. Use a file, label, or message written here. Do not invent one.\n" + code
+    return (code + "\n" + brain).strip()[:4000]
+
+
+def _with_points(messages: list[dict], points: list[str]) -> list[dict]:
+    if not points:
+        return messages
+    lines = ["Address every point below. One short line each. Do not skip one."]
+    lines.extend("%d. %s" % (index, point) for index, point in enumerate(points, 1))
+    block = "\n".join(lines)
+    out = [dict(item) for item in messages]
+    for index in range(len(out) - 1, -1, -1):
+        if out[index].get("role") == "user":
+            out[index]["content"] = str(out[index].get("content") or "") + "\n\n" + block
+            break
+    return out
 
 
 def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | None = None) -> int:
@@ -162,15 +179,39 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
     if found:
         parts.append(
             "Notes that match this message. Ignore a note that does not match. "
-            "Use a matching note when you answer.\n" + found[:1600]
+            "If a note names a file, a label, or a message, use those words. "
+            "Do not replace them with a vague restatement. "
+            "Code lines outrank an older note when they disagree. "
+            "Do not invent a name that is not written in the notes.\n" + found[:2200]
         )
     note = "\n\n".join(parts).strip()
     if note:
         from hailports.clip.scene import runner_context
         prepared["messages"] = runner_context(prepared.get("messages") or [], note)
     sources = "\n".join(prepared.get("sources") or [])
+    from hailports.clip.board import misses_points, open_points, thin_reply
+    points = open_points(sources)
+    prepared["messages"] = _with_points(prepared.get("messages") or [], points)
     try:
-        text = plain_reply(_complete(route)(prepared["messages"]).strip())
+        hops = endpoints_from(route)
+        text, hop = complete(hops, prepared["messages"])
+        text = plain_reply(text)
+        researched = bool(re.search(r"\.(?:cls|js|html)\b", found or ""))
+        weak = misses_points(text, points) or (found and thin_reply(text, found)) or (len(points) >= 2 and not researched)
+        if weak and len(hops) > 1:
+            try:
+                nxt, nxt_hop = complete(hops[1:], prepared["messages"])
+                nxt = plain_reply(nxt)
+                if nxt and not thin_reply(nxt, found) and not misses_points(nxt, points):
+                    text, hop = nxt, nxt_hop
+            except ModelOffline:
+                pass
+        try:
+            mark = Path.home() / ".config" / "paiste" / "last-hop"
+            mark.write_text(hop + "\n", encoding="utf-8")
+            mark.chmod(0o600)
+        except OSError:
+            pass
         if overreach(text, sources):
             retry = list(prepared["messages"]) + [
                 {"role": "assistant", "content": text},
