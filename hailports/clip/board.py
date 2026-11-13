@@ -428,6 +428,48 @@ def thin_reply(reply: str, notes: str) -> bool:
     return not any(token.lower() in low for token in unique[:12])
 
 
+def latest_from_other(text: str) -> list[str]:
+    """What the other person just said. Older questions they already answered are not asks."""
+    speaker = ""
+    chunks = []
+    current = []
+
+    def flush() -> None:
+        if speaker and current:
+            chunks.append((speaker, " ".join(current)))
+
+    for raw in (text or "").splitlines():
+        line = " ".join(raw.split())
+        if not line or len(line) > 400:
+            continue
+        if re.match(r"(?i)^you\b", line) and len(line) < 48:
+            flush()
+            current = []
+            speaker = "me"
+            continue
+        if re.match(r"^[A-Z][A-Za-z.'-]+,\s+[A-Z]", line) and len(line) < 80:
+            flush()
+            current = []
+            speaker = "them"
+            continue
+        if speaker:
+            current.append(line)
+    flush()
+    theirs = [body for who, body in chunks if who == "them" and len(body) > 20]
+    if not theirs:
+        return []
+    last = theirs[-1]
+    if len(theirs) >= 2:
+        last = theirs[-2] + " " + last
+    parts = re.split(r"(?<=[.!?])\s+", last)
+    kept = []
+    for part in parts:
+        piece = part.strip()
+        if len(piece) > 20 and piece not in kept:
+            kept.append(piece)
+    return kept[:4]
+
+
 def open_points(text: str) -> list[str]:
     """The asks on the screen: a numbered line or a question. Not the chrome."""
     found = []

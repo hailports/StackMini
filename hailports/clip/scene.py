@@ -509,6 +509,8 @@ def source_notes(reading: Reading, hits: list[dict]) -> list[str]:
 def plain_reply(text: str) -> str:
     """Drop a trailing thanks and markdown. The reply is what they paste."""
     body = strip_signoff(text or "").replace("**", "").replace("__", "")
+    body = re.sub(r"(?i)(--\s*)\d+[.)]\s+", r"\1", body)
+    body = re.sub(r"(?i)\s*lmk if you need anything else[!?.]*", "", body)
     parts = re.split(r"(?<=[.!?])\s+", body.strip())
     while parts and re.match(r"(?i)^thanks\b", parts[-1].strip()):
         parts.pop()

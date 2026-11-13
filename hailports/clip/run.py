@@ -116,8 +116,12 @@ def _lookup_notes(cfg: dict | None, text: str) -> str:
 def _with_points(messages: list[dict], points: list[str]) -> list[dict]:
     if not points:
         return messages
-    lines = ["Address every point below. One short line each. Do not skip one."]
-    lines.extend("%d. %s" % (index, point) for index, point in enumerate(points, 1))
+    lines = [
+        "Reply only to what they just said. If they already answered an older question, do not answer it again.",
+        "Do not turn their update into a new rule they did not say.",
+        "Do not start with a number. Do not end with lmk.",
+    ]
+    lines.extend(points)
     block = "\n".join(lines)
     out = [dict(item) for item in messages]
     for index in range(len(out) - 1, -1, -1):
@@ -189,8 +193,8 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
         from hailports.clip.scene import runner_context
         prepared["messages"] = runner_context(prepared.get("messages") or [], note)
     sources = "\n".join(prepared.get("sources") or [])
-    from hailports.clip.board import misses_points, open_points, thin_reply
-    points = open_points(sources)
+    from hailports.clip.board import latest_from_other, misses_points, open_points, thin_reply
+    points = latest_from_other(sources) or open_points(sources)
     prepared["messages"] = _with_points(prepared.get("messages") or [], points)
     try:
         hops = endpoints_from(route)
