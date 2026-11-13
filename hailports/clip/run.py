@@ -196,8 +196,7 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
         hops = endpoints_from(route)
         text, hop = complete(hops, prepared["messages"])
         text = plain_reply(text)
-        researched = bool(re.search(r"\.(?:cls|js|html)\b", found or ""))
-        weak = misses_points(text, points) or (found and thin_reply(text, found)) or (len(points) >= 2 and not researched)
+        weak = misses_points(text, points) or (bool(re.search(r"\.(?:cls|js|html)\b", found or "")) and thin_reply(text, found))
         if weak and len(hops) > 1:
             try:
                 nxt, nxt_hop = complete(hops[1:], prepared["messages"])
@@ -222,11 +221,13 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
                 )},
             ]
             text = plain_reply(_complete(route)(retry).strip())
-        text = as_writer(trim_overreach(text, sources), me)
+        kept = as_writer(trim_overreach(text, sources), me)
+        if reply_ok(kept):
+            text = kept
     except ModelOffline as exc:
         print("model offline: " + str(exc))
         return 2
-    if overreach(text, sources) or not reply_ok(text):
+    if not reply_ok(text):
         print("empty")
         return 2
     if copy and text:

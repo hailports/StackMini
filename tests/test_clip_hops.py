@@ -9,7 +9,7 @@ from hailports.clip.board import (
     scan_models, show_board, ssh_host_names, store_api_key, thin_reply,
 )
 from hailports.clip.run import lookup_query
-from hailports.clip.scene import plain_reply
+from hailports.clip.scene import overreach, plain_reply
 from hailports.clip.hops import complete, endpoints_from, ssh_argv
 from hailports.clip.scene import folder_hits
 
@@ -442,3 +442,6 @@ def test_setup_sources_keep_notes_and_drop_a_secret(tmp_path):
     info = pull_source("zoom", tmp_path / "out", folder=folder, hook=tmp_path / "missing")
     assert info["added"] == 1
     assert info["sent"] is False
+    screen = "All good as long as we are using Salesforce standard components."
+    assert not overreach("1. standard components are fine. we are aligned.", screen)
+    assert overreach("1. click Settings and then deploy.", screen)

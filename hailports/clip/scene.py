@@ -26,7 +26,7 @@ _CLOSE = {
 }
 _LINK_ONLY = re.compile(r"(?is)^\s*(available at\s+)?https?://\S+\s*$")
 _PROMISE = re.compile(r"(?i)\b(i'll|i will|i am going to|i'm going to)\b|\blet me (?!know\b)")
-_STEPS = re.compile(r"(?:^|\s)\d+[.)]\s+\S")
+_STEPS = re.compile(r"(?im)(?:^|\n)\s*\d+[.)]\s+(?:open|go to|click|navigate|select|step)\b")
 _WORD = re.compile(r"[A-Za-z0-9']{4,}")
 _SKIP_DIR = {".git", "node_modules", ".obsidian"}
 

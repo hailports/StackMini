@@ -363,6 +363,8 @@ def code_notes(query: str, roots_file: Path | None = None, runner=None) -> str:
         root = Path(raw).expanduser()
         if root.is_dir():
             roots.append(root)
+    if not re.search(r"(?i)\b(export button|where (exactly|should)|add (?:an|a)|controller|\blwc\b|\bapex\b)\b", query or ""):
+        return ""
     phrases = code_phrases(query)
     if not roots or not phrases:
         return ""
@@ -403,9 +405,9 @@ def code_notes(query: str, roots_file: Path | None = None, runner=None) -> str:
                 "-e", phrase]
         argv.extend(str(root) for root in roots[:4])
         try:
-            done = subprocess.run(argv, capture_output=True, text=True, timeout=8, check=False)
+            done = subprocess.run(argv, capture_output=True, text=True, timeout=4, check=False)
         except (OSError, subprocess.TimeoutExpired):
-            continue
+            break
         take(done.stdout or "")
     return "\n".join(kept)
 
