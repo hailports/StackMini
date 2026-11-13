@@ -291,6 +291,56 @@ def cmd_onboard(args, cfg) -> int:
             path.unlink()
         except OSError:
             pass
+    if getattr(args, "pull", ""):
+        from hailports.clip.board import apple_notes_text, monday_fetch, pull_source
+        from hailports.config import save_file
+        kind = str(args.pull).strip().lower()
+        home = Path.home()
+        token = ""
+        text = ""
+        doc = None
+        folder = None
+        if kind == "apple-notes":
+            text = apple_notes_text()
+        elif kind == "monday":
+            token = str((answers or {}).get("token") or "").strip()
+            key = home / ".config" / "paiste" / "keys" / "monday.key"
+            if not token and key.is_file():
+                token = key.read_text(encoding="utf-8", errors="replace").strip()
+            if token:
+                key.parent.mkdir(parents=True, exist_ok=True)
+                key.write_text(token, encoding="utf-8")
+                key.chmod(0o600)
+                doc = monday_fetch(token)
+        elif kind == "zoom":
+            folder = home / "Documents" / "Zoom"
+        elif kind == "littlebird":
+            folder = home / "Library" / "Application Support" / "Littlebird"
+        elif kind == "onenote":
+            for candidate in (
+                home / "Library/Group Containers/UBF8T346G9.Office/OneNote",
+                home / "Library/Containers/com.microsoft.onenote.mac/Data",
+            ):
+                if candidate.is_dir():
+                    folder = candidate
+                    break
+        dest_root = home / ".config" / "paiste" / "sources" / kind
+        info = pull_source(kind, dest_root, token=token, text=text, doc=doc, folder=folder)
+        if info["added"]:
+            paiste = dict(cfg.get("paiste") or {})
+            paiste["sources_dir"] = str(home / ".config" / "paiste" / "sources")
+            route = dict(cfg)
+            route["paiste"] = paiste
+            dest = _route_dest(args)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            save_file(dest, route)
+            try:
+                dest.chmod(0o600)
+            except OSError:
+                pass
+        tail = info.get("need") or ""
+        print("added %d%s" % (info["added"], (" " + tail) if tail else ""))
+        return 0
     if getattr(args, "ingest", False):
         from hailports.clip.board import ingest_files
         from hailports.config import save_file

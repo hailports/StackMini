@@ -398,7 +398,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             notesPage()
         case 3:
             titleField.stringValue = "Step 4. Add what the click can search."
-            body.stringValue = "Choose notes, a mail export, a calendar file, or other files. A copy stays on this Mac and the next click can search it. paisty does not sign in and does not send the password."
+            body.stringValue = "Add the notes and call notes a click should search. Apple Notes, OneNote, Monday, Littlebird, and Zoom. A copy stays on this Mac. paisty does not keep the password."
             feedPage()
         case 4:
             titleField.stringValue = "Step 5. Connect your AI to paisty."
@@ -737,10 +737,15 @@ final class SetupBoard: NSObject, NSWindowDelegate {
     }
 
     func feedPage() {
-        var y = tagButton("Add notes", #selector(pickFeed(_:)), 1, 0)
-        y = tagButton("Add a mail export", #selector(pickFeed(_:)), 2, y)
-        y = tagButton("Add a calendar file", #selector(pickFeed(_:)), 3, y)
-        y = tagButton("Add other files", #selector(pickFeed(_:)), 4, y)
+        var y = tagButton("Add Apple Notes", #selector(pullSource(_:)), 1, 0)
+        y = tagButton("Add OneNote", #selector(pullSource(_:)), 2, y)
+        y = tagButton("Add Monday", #selector(pullSource(_:)), 3, y)
+        y = field("monday", "Monday token. Stays on this Mac.", "", y, secure: true)
+        y = tagButton("Add Littlebird", #selector(pullSource(_:)), 4, y)
+        y = tagButton("Add Zoom call notes", #selector(pullSource(_:)), 5, y)
+        y = tagButton("Add a notes file", #selector(pickFeed(_:)), 6, y)
+        y = tagButton("Add a mail export", #selector(pickFeed(_:)), 7, y)
+        y = tagButton("Add a calendar file", #selector(pickFeed(_:)), 8, y)
         if !feedNote.isEmpty {
             y = caption(feedNote, y)
         }
@@ -781,6 +786,51 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             DispatchQueue.main.async {
                 if line.hasPrefix("added 0") || done.code != 0 {
                     self.feedNote = "Nothing in that choice could be added. Use notes, mail, calendar, or a text file."
+                } else {
+                    self.feedNote = "Added. The next click can search them."
+                }
+                self.statusField.stringValue = self.feedNote
+                self.render()
+            }
+        }
+    }
+
+    @objc func pullSource(_ sender: NSButton) {
+        capture()
+        let names = [1: "apple-notes", 2: "onenote", 3: "monday", 4: "littlebird", 5: "zoom"]
+        guard let name = names[sender.tag] else { return }
+        let apps = [
+            "onenote": "/Applications/Microsoft OneNote.app",
+            "littlebird": "/Applications/Littlebird.app",
+        ]
+        if let path = apps[name], FileManager.default.fileExists(atPath: path) {
+            NSWorkspace.shared.open(URL(fileURLWithPath: path))
+        }
+        var payload: [String: Any] = [:]
+        if name == "monday" {
+            let token = fields["monday"]?.stringValue ?? ""
+            if !token.isEmpty { payload["token"] = token }
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("paisty-pull.json")
+        do {
+            try data.write(to: url, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        } catch {
+            feedNote = "That source was not added."
+            render()
+            return
+        }
+        statusField.stringValue = "Adding that source."
+        DispatchQueue.global(qos: .userInitiated).async {
+            let done = SetupBoard.run(["onboard", "--pull", name, "--answers", url.path])
+            try? FileManager.default.removeItem(at: url)
+            let line = done.out.trimmingCharacters(in: .whitespacesAndNewlines)
+            DispatchQueue.main.async {
+                if line.contains("need-token") {
+                    self.feedNote = "Paste the Monday token in the field. It stays on this Mac."
+                } else if line.hasPrefix("added 0") || done.code != 0 {
+                    self.feedNote = "No text notes were there yet. Export from that app, then press the button again."
                 } else {
                     self.feedNote = "Added. The next click can search them."
                 }
