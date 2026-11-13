@@ -299,6 +299,125 @@ _INGEST_OK = {".md", ".txt", ".markdown", ".eml", ".ics", ".pdf", ".csv"}
 _INGEST_SKIP = {"route.yaml", "license", "license-secret", "id_rsa", "credentials", ".env"}
 
 
+_CODE_STOP = {
+    "this", "that", "with", "from", "please", "could", "would", "should", "where",
+    "which", "what", "when", "have", "need", "your", "they", "them", "just", "make",
+    "sure", "about", "there", "their", "these", "those", "using", "before", "after",
+}
+
+
+def code_phrases(query: str) -> list[str]:
+    """Short phrases worth finding in a code tree. No whole window."""
+    found = []
+    for match in re.findall(r"\b[A-Z][A-Za-z0-9]+(?:\s+[A-Za-z][A-Za-z0-9]+){1,4}", query or ""):
+        if match not in found:
+            found.append(match)
+    for match in re.findall(
+        r"\b(?:export|search|orders|order|machine|filter|error)s?(?:\s+[A-Za-z]+){1,3}",
+        query or "",
+        re.I,
+    ):
+        piece = " ".join(match.split())
+        if len(piece) >= 8 and piece.lower() not in _CODE_STOP and piece not in found:
+            found.append(piece)
+    return found[:6]
+
+
+def code_notes(query: str, roots_file: Path | None = None, runner=None) -> str:
+    """Lines from code folders listed on this Mac. Empty when none are configured."""
+    path = roots_file if roots_file is not None else Path.home() / ".config" / "paiste" / "code-roots"
+    if not path.is_file():
+        return ""
+    roots = []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    for line in lines:
+        raw = line.strip()
+        if not raw or raw.startswith("#"):
+            continue
+        root = Path(raw).expanduser()
+        if root.is_dir():
+            roots.append(root)
+    phrases = code_phrases(query)
+    if not roots or not phrases:
+        return ""
+    if runner is not None:
+        return str(runner(phrases, roots) or "").strip()[:1800]
+    rg = shutil.which("rg") or "/opt/homebrew/bin/rg"
+    if not Path(rg).is_file():
+        return ""
+    argv = [
+        rg, "-n", "-i", "-m", "2",
+        "-g", "*.cls", "-g", "*.js", "-g", "*.html", "-g", "*.xml",
+        "-g", "!**/__tests__/**", "-g", "!**/*Test.cls",
+    ]
+    for phrase in phrases:
+        argv.extend(["-e", phrase])
+    argv.extend(str(root) for root in roots[:4])
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True, timeout=8, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    kept = []
+    for line in (done.stdout or "").splitlines():
+        if line.strip():
+            kept.append(line[:220])
+        if len(kept) == 12:
+            break
+    return "\n".join(kept)
+
+
+def thin_reply(reply: str, notes: str) -> bool:
+    """True when the notes name a file or type and the reply uses none of them."""
+    names = re.findall(r"[\w./-]+\.(?:cls|js|html)\b", notes or "")
+    names += re.findall(r"\b[A-Z][A-Za-z0-9]{7,}\b", notes or "")
+    unique = []
+    for name in names:
+        token = name.split("/")[-1]
+        token = token.split(".")[0]
+        if len(token) >= 6 and token not in unique:
+            unique.append(token)
+    if not unique:
+        return False
+    low = (reply or "").lower()
+    return not any(token.lower() in low for token in unique[:12])
+
+
+def open_points(text: str) -> list[str]:
+    """The asks on the screen: a numbered line or a question. Not the chrome."""
+    found = []
+    for raw in (text or "").splitlines():
+        line = " ".join(raw.split()).strip(" -*")
+        if len(line) < 16 or len(line) > 300:
+            continue
+        numbered = re.match(r"^\d+[.)]\s+(\S.*)$", line)
+        if numbered:
+            found.append(numbered.group(1).strip())
+            continue
+        if "?" in line:
+            found.append(line)
+    unique = []
+    for point in found:
+        if point not in unique:
+            unique.append(point)
+    return unique[:8]
+
+
+def misses_points(reply: str, points: list[str]) -> bool:
+    """True when two or more asks are on screen and the reply skips one."""
+    if len(points) < 2:
+        return False
+    low = (reply or "").lower()
+    hit = 0
+    for point in points:
+        words = [word.lower() for word in re.findall(r"[A-Za-z]{6,}", point)][:5]
+        if words and any(word in low for word in words):
+            hit += 1
+    return hit < len(points)
+
+
 def ingest_files(paths, root: Path, hook: Path | None = None) -> dict:
     """Copy notes, mail, and calendar the person picked. Skip secrets. Nothing is sent by itself."""
     import os

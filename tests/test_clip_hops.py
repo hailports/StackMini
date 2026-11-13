@@ -4,8 +4,9 @@ from pathlib import Path
 
 from hailports.llm import ModelOffline
 from hailports.clip.board import (
-    BoardError, apply_board, discover, guide, ingest_files, model_ids, parse_hop, probe_model,
-    scan_models, show_board, ssh_host_names, store_api_key,
+    BoardError, apply_board, code_phrases, discover, guide, ingest_files, misses_points,
+    model_ids, open_points, parse_hop, probe_model, scan_models, show_board, ssh_host_names,
+    store_api_key, thin_reply,
 )
 from hailports.clip.run import lookup_query
 from hailports.clip.scene import plain_reply
