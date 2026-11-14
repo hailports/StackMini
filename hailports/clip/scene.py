@@ -26,6 +26,20 @@ _CLOSE = {
 }
 _LINK_ONLY = re.compile(r"(?is)^\s*(available at\s+)?https?://\S+\s*$")
 _PROMISE = re.compile(r"(?i)\b(i'll|i will|i am going to|i'm going to)\b|\blet me (?!know\b)")
+# A promise is fine when it answers the ask. An invented deadline is not.
+_WHEN = re.compile(
+    r"(?i)\b(?:by|before|on|until|end of|eod|eow|cob)\s+(?:the\s+)?(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\b"
+    r"|\b(?:by|before|until)\s+(?:tomorrow|tonight|next week|end of (?:day|week)|eod|eow|cob|\d)"
+    r"|\b(?:tomorrow|tonight|next week)\b|\b\d{1,2}(?::\d{2})?\s?(?:am|pm)\b"
+)
+# Meta narration about the message instead of a reply to it.
+_META = re.compile(
+    r"(?i)\bi see (?:the|your) (?:request|message|email|note|ask)\b"
+    r"|\bthe (?:message|email|text|thread|note|request|window|screen)\s+(?:mentions|says|does not|doesn't|did not|didn't|is asking|asks)\b"
+    r"|\b(?:it|this|they) (?:does not|doesn't) (?:list|say|specify|mention|include)\b"
+    r"|\bnot (?:listed|specified|mentioned) (?:in|on) (?:the|this)\b"
+    r"|\bbased on (?:the|this) (?:message|email|text|screen|window)\b"
+)
 _STEPS = re.compile(r"(?im)(?:^|\n)\s*\d+[.)]\s+(?:open|go to|click|navigate|select|step)\b")
 _WORD = re.compile(r"[A-Za-z0-9']{4,}")
 _SKIP_DIR = {".git", "node_modules", ".obsidian"}
@@ -272,7 +286,9 @@ def trim_overreach(text: str, sources: str = "") -> str:
         piece = chunk.strip()
         if not piece:
             continue
-        if _PROMISE.search(piece):
+        if _META.search(piece):
+            continue
+        if _PROMISE.search(piece) and _invented_when(piece, sources):
             continue
         if _STEPS.search(piece) and not _STEPS.search(sources or ""):
             continue
@@ -280,10 +296,25 @@ def trim_overreach(text: str, sources: str = "") -> str:
     return " ".join(kept).strip()
 
 
+def _invented_when(piece: str, sources: str) -> bool:
+    """A date or time in the reply that is not on screen or in the notes."""
+    low = (sources or "").lower()
+    for match in _WHEN.finditer(piece or ""):
+        if match.group(0).lower() not in low:
+            return True
+    return False
+
+
+def meta_reply(text: str) -> bool:
+    return bool(_META.search(text or ""))
+
+
 def overreach(text: str, sources: str = "") -> bool:
-    """A promise, or a numbered procedure the source did not contain."""
+    """A promise with an invented deadline, meta narration, or a numbered procedure the source did not contain."""
     body = text or ""
-    if _PROMISE.search(body):
+    if _META.search(body):
+        return True
+    if _PROMISE.search(body) and _invented_when(body, sources):
         return True
     return bool(_STEPS.search(body) and not _STEPS.search(sources or ""))
 
@@ -458,6 +489,39 @@ def _excerpt(path: Path, text: str) -> str:
     return text
 
 
+_JUNK_NAME = re.compile(
+    r"(?i)(?:^|[-_ ])(?:readme|license|licence|changelog|history|notice|authors|contributing|"
+    r"code_of_conduct|copying|patents|security|third[-_ ]?party)(?:[-_ .]|$)"
+)
+_URLISH = re.compile(r"https?://\S+")
+
+
+def junk_name(name: str) -> bool:
+    """Package docs (README, LICENSE, CHANGELOG, HISTORY...) are not the user's notes."""
+    stem = (name or "").rsplit(".", 1)[0]
+    stem = re.sub(r"^\d+[-_ ]", "", stem)
+    return bool(_JUNK_NAME.search(stem))
+
+
+def junk_text(text: str) -> bool:
+    """Cache dumps, captcha/payment URL soup, binary, or license boilerplate."""
+    body = (text or "")[:4000]
+    if not body.strip():
+        return True
+    printable = sum(1 for ch in body if ch.isprintable() or ch in "\n\r\t")
+    if printable / max(1, len(body)) < 0.9:
+        return True
+    urls = _URLISH.findall(body)
+    if urls and sum(len(url) for url in urls) / max(1, len(body)) > 0.35:
+        return True
+    low = body.lower()
+    if "permission is hereby granted" in low or "licensed under the apache license" in low:
+        return True
+    if any(word in low[:600] for word in ("hcaptcha.com", "js.strip" + "e.com", "<!doctype html", "<html")):
+        return True
+    return False
+
+
 def source_dirs(cfg: dict | None) -> list[str]:
     paiste = (cfg or {}).get("paiste") or {}
     found = []
@@ -481,12 +545,16 @@ def folder_hits(folder: Path, query: str, limit: int = 3) -> list[dict]:
             continue
         if any(part in _SKIP_DIR or part.startswith(".") for part in path.parts):
             continue
+        if junk_name(path.name):
+            continue
         seen += 1
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         text = _excerpt(path, text)
+        if junk_text(text):
+            continue
         low = text.lower()
         score = sum(1 for word in words if word in low)
         if score and text.strip():

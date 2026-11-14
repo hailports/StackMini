@@ -783,6 +783,13 @@ def _write_pages(dest: Path, pages: list[tuple[str, str]]) -> list[str]:
     return paths
 
 
+_CACHE_DIRS = {
+    "cache", "code cache", "gpucache", "dawngraphitecache", "dawnwebgpucache", "crashpad",
+    "service worker", "indexeddb", "local storage", "session storage", "blob_storage",
+    "shared_proto_db", "webstorage", "dips", "logs", "node_modules", "resources", "app.asar.unpacked",
+}
+
+
 def _text_files(root: Path, suffixes: set[str], limit: int = 40) -> list[Path]:
     found = []
     if not root.is_dir():
@@ -798,6 +805,11 @@ def _text_files(root: Path, suffixes: set[str], limit: int = 40) -> list[Path]:
         if path.suffix.lower() not in suffixes:
             continue
         if any(word in name for word in ("auth", "token", "cookie", "secret", "password")):
+            continue
+        if any(part.lower() in _CACHE_DIRS for part in path.parts):
+            continue
+        from hailports.clip.scene import junk_name
+        if junk_name(path.name):
             continue
         try:
             if path.stat().st_size <= 0 or path.stat().st_size > 1_000_000:
@@ -951,6 +963,9 @@ def pull_source(name: str, dest: Path, token: str = "", text: str = "", doc: dic
             if kind == "onenote" and path.suffix.lower() == ".html":
                 body = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", body)
                 body = re.sub(r"(?s)<[^>]+>", " ", body)
+            from hailports.clip.scene import junk_text
+            if junk_text(body):
+                continue
             body = " ".join(body.split())
             if body and not _SECRET_NOTE.search(body):
                 pages.append((path.stem[:60], body[:8000]))

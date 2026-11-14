@@ -166,6 +166,13 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
             "Do not invent a fact that is not on screen and not in those.\n\n"
             + rules
         )
+    rules += (
+        "\n\nWrite the reply itself, ready to paste. Never narrate or describe the message "
+        "(no \"I see the request\", no \"the message does not list\"). "
+        "If the screen is thin, still answer every open ask with concrete next steps "
+        "from the notes: who owns it, what I will do, what I need from them. "
+        "Use I, not we. Never invent a date, a time, or a fact."
+    )
     messages = prepared.get("messages") or []
     if messages and messages[0].get("role") == "system":
         messages[0]["content"] = rules
@@ -221,9 +228,10 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
             retry = list(prepared["messages"]) + [
                 {"role": "assistant", "content": text},
                 {"role": "user", "content": (
-                    "Rewrite that reply in the same voice. "
-                    "Do not promise any action. Do not invent steps, times, or facts. "
-                    "If the steps are not in the text, say they are not listed."
+                    "Rewrite that reply in the same voice, as the reply itself. "
+                    "Answer every open ask directly. You may commit to the work that was asked. "
+                    "Do not invent a date, a time, or numbered steps that are not on screen or in the notes. "
+                    "Never describe the message or say what it does not list. No meta commentary."
                 )},
             ]
             text = plain_reply(_complete(route)(retry).strip())

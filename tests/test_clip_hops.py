@@ -519,3 +519,39 @@ def test_setup_sources_keep_notes_and_drop_a_secret(tmp_path):
     assert "does not keep any data" in note
     assert cursor_setup_text("x", run=lambda prompt: "password is secret and this note is long enough to pass") == ""
     assert (Path(made["path"]) / ".obsidian").is_dir()
+
+
+def test_premium_hops_skip_local_first_router():
+    from hailports.clip.hops import claude_argv, premium_env
+    argv = claude_argv("/usr/bin/claude", "rules", "hi")
+    assert "--tools" in argv and argv[argv.index("--tools") + 1] == ""
+    assert premium_env()["LOCAL_FIRST_ROUTER"] == "0"
+
+
+def test_package_docs_and_cache_junk_are_not_notes(tmp_path):
+    from hailports.clip.scene import folder_hits, junk_name, junk_text
+    assert junk_name("02-README.txt") and junk_name("18-LICENSE.txt") and junk_name("CHANGELOG.md")
+    assert junk_name("07-HISTORY.txt") and not junk_name("crm-standards.md")
+    assert junk_text(" https://newassets.hcaptcha.com/3https://newassets.hcaptcha.com/^0https://strip" + "e.com (")
+    assert not junk_text("Jordan is drafting the CRM standards doc for Pat, Chris, and Robin.")
+    (tmp_path / "02-README.txt").write_text("CRM standards readme", encoding="utf-8")
+    (tmp_path / "standards.md").write_text("CRM standards owner Jordan", encoding="utf-8")
+    hits = folder_hits(tmp_path, "CRM standards")
+    assert [hit["title"] for hit in hits] == ["standards"]
+
+
+def test_meta_narration_is_trimmed_and_asked_work_is_kept():
+    from hailports.clip.scene import overreach, trim_overreach
+    text = (
+        "Sam, I see the request for the standards doc. "
+        "The text mentions presenting this to Pat, Chris, and Robin. "
+        "It does not list the specific steps. "
+        "I'll pull the Standard and Custom approach together with Jordan."
+    )
+    kept = trim_overreach(text, "Sam asked for a standards doc")
+    assert "I see the request" not in kept and "does not list" not in kept and "text mentions" not in kept
+    assert "I'll pull the Standard and Custom approach together with Jordan." in kept
+    assert overreach(text, "")
+    assert not overreach("I'll pull it together with Jordan.", "")
+    assert overreach("I'll send it by Friday.", "standards doc")
+    assert not overreach("I'll send it by Friday.", "can you send it by Friday")

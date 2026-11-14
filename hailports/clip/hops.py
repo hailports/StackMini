@@ -149,6 +149,7 @@ def claude_argv(binary: str, system: str, user: str) -> list[str]:
     argv = [
         binary, "-p", "--output-format", "text",
         "--permission-mode", "plan", "--permission-prompts", "none",
+        "--tools", "", "--no-session-persistence",
     ]
     if system:
         argv += ["--system-prompt", system[:6000]]
@@ -215,12 +216,25 @@ def _split_messages(messages: list[dict]) -> tuple[str, str]:
     return system, user
 
 
+def premium_env() -> dict:
+    """A premium hop is premium. The local-first wrapper must not divert it to a local model."""
+    import os
+    env = dict(os.environ)
+    env["LOCAL_FIRST_ROUTER"] = "0"
+    return env
+
+
 def _claude(endpoint: dict, messages: list[dict]) -> str:
     binary = str(endpoint.get("bin") or "")
     if not _bin_ok(binary):
         raise ModelOffline("claude")
     system, user = _split_messages(messages)
-    done = subprocess.run(claude_argv(binary, system, user), capture_output=True, check=False, timeout=110)
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="paisty-claude-") as quiet:
+        done = subprocess.run(
+            claude_argv(binary, system, user), capture_output=True, check=False,
+            timeout=110, cwd=quiet, env=premium_env(),
+        )
     if done.returncode != 0:
         raise ModelOffline("claude hop failed")
     return (done.stdout or b"").decode("utf-8", "replace").strip()
@@ -242,6 +256,7 @@ def _codex(endpoint: dict, messages: list[dict]) -> str:
             capture_output=True,
             check=False,
             timeout=110,
+            env=premium_env(),
         )
         if done.returncode != 0:
             raise ModelOffline("codex hop failed")
