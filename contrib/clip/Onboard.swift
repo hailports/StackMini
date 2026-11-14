@@ -63,6 +63,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             defer: false
         )
         window.title = "paisty"
+        window.appearance = NSAppearance(named: .aqua)
         window.isReleasedWhenClosed = false
         super.init()
         window.delegate = self
@@ -80,6 +81,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
 
     func buildChrome() {
         guard let content = window.contentView else { return }
+        content.appearance = NSAppearance(named: .aqua)
         content.wantsLayer = true
         content.layer?.backgroundColor = NSColor(srgbRed: 0.953, green: 0.937, blue: 0.902, alpha: 1).cgColor
         let stack = NSStackView()
@@ -90,6 +92,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         titleField.font = NSFont.systemFont(ofSize: 22, weight: .semibold)
         titleField.textColor = NSColor(srgbRed: 0.16, green: 0.13, blue: 0.10, alpha: 1)
         body.font = NSFont.systemFont(ofSize: 13)
+        body.textColor = NSColor(srgbRed: 0.16, green: 0.13, blue: 0.10, alpha: 1)
         body.preferredMaxLayoutWidth = 480
         body.maximumNumberOfLines = 12
         footer.font = NSFont.systemFont(ofSize: 12, weight: .medium)
