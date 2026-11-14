@@ -792,6 +792,8 @@ def build_parser() -> argparse.ArgumentParser:
     paiste_p.add_argument("--connect", default="", help="Check Claude, Codex, or Cursor login. No window text is sent.")
     paiste_p.add_argument("--login", default="", help="Open the browser sign-in when the app is not already signed in.")
     paiste_p.add_argument("--use", default="", help="Use the signed-in Claude, Codex, or Cursor app for a click.")
+    paiste_p.add_argument("--scan", action="store_true", help="What this Mac already has. Names only, no keys.")
+    paiste_p.add_argument("--auto", action="store_true", help="Apply the scan suggestion in one step. Nothing is sent.")
     acct_p = sub.add_parser("accounts", help="Edge sessions. The selected model configures read and draft. Nothing is sent.")
     acct_p.add_argument("action", choices=["plan", "open", "adapt", "tick"])
     acct_p.add_argument("--page", default="", help="JSON object of account label to visible page text.")

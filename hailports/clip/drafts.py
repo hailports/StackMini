@@ -10,6 +10,8 @@ from pathlib import Path
 
 KEEP = 30
 MENU = 12
+SCENE_CAP = 16 * 1024
+LISTED = ("id", "at", "preview", "app", "hop", "text")
 
 
 def drafts_path() -> Path:
@@ -20,6 +22,32 @@ def drafts_path() -> Path:
 def _preview(text: str, width: int = 80) -> str:
     line = " ".join(str(text or "").split())
     return line if len(line) <= width else line[: width - 1].rstrip() + "…"
+
+
+def _shrink(value, width: int):
+    if isinstance(value, str):
+        return value if len(value) <= width else value[-width:]
+    if isinstance(value, list):
+        return [_shrink(item, width) for item in value[-60:]]
+    if isinstance(value, dict):
+        return {key: _shrink(item, width) for key, item in value.items()}
+    return value
+
+
+def cap_scene(scene, cap: int = SCENE_CAP) -> dict | None:
+    """Keep the scene for a real redo. Long text keeps its tail, where the ask usually is."""
+    if not isinstance(scene, dict) or not scene:
+        return None
+    try:
+        if len(json.dumps(scene, ensure_ascii=False)) <= cap:
+            return scene
+        for width in (6000, 3000, 1500, 800, 400, 200):
+            small = _shrink(scene, width)
+            if len(json.dumps(small, ensure_ascii=False)) <= cap:
+                return small
+    except (TypeError, ValueError):
+        return None
+    return None
 
 
 def load(path: Path | None = None) -> list[dict]:
@@ -42,7 +70,8 @@ def load(path: Path | None = None) -> list[dict]:
     return rows
 
 
-def append(text: str, hop: str = "", app: str = "", path: Path | None = None, keep: int = KEEP) -> dict | None:
+def append(text: str, hop: str = "", app: str = "", path: Path | None = None, keep: int = KEEP,
+           scene: dict | None = None) -> dict | None:
     text = str(text or "").strip()
     if not text:
         return None
@@ -51,6 +80,9 @@ def append(text: str, hop: str = "", app: str = "", path: Path | None = None, ke
     digest = hashlib.sha1((at + "\n" + text).encode("utf-8")).hexdigest()[:10]
     row = {"id": at.replace(":", "").replace("+0000", "Z") + "-" + digest, "at": at, "text": text,
            "hop": str(hop or ""), "app": str(app or ""), "preview": _preview(text)}
+    kept = cap_scene(scene)
+    if kept is not None:
+        row["scene"] = kept
     rows = (load(path) + [row])[-keep:]
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
@@ -74,18 +106,31 @@ def find(draft_id: str, path: Path | None = None) -> dict | None:
     return None
 
 
-def cmd(action: str, args) -> int:
-    """`drafts` prints newest-first JSON. `redo --id X` reprints that draft."""
+def listed(rows: list[dict]) -> list[dict]:
+    """The menu list. The scene stays in the file."""
+    return [{key: row.get(key, "") for key in LISTED} for row in rows]
+
+
+def cmd(action: str, args, cfg: dict | None = None) -> int:
+    """`drafts` prints newest-first JSON. `redo --id X` writes a new draft from that row's scene."""
     if action == "drafts":
-        print(json.dumps(recent(), ensure_ascii=False))
+        print(json.dumps(listed(recent()), ensure_ascii=False))
         return 0
     draft_id = str(getattr(args, "id", "") or "").strip()
     row = find(draft_id) if draft_id else (recent(1) or [None])[0]
     if not row:
         print("no draft")
         return 2
-    if getattr(args, "copy", False):
-        from hailports.clip.scene import copy_text
-        copy_text(row["text"])
-    print(row["text"])
-    return 0
+    scene = row.get("scene")
+    if not isinstance(scene, dict) or not scene:
+        print("no scene")
+        return 2
+    from hailports.clip import run as clip_run
+    llm = (cfg or {}).get("llm") or {}
+    return clip_run.draft_scene(
+        dict(scene),
+        str(llm.get("base_url") or ""),
+        str(llm.get("model") or "local"),
+        bool(getattr(args, "copy", False)),
+        cfg,
+    )
