@@ -109,8 +109,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
 
     func remember() {
         guard !busy, AXIsProcessTrusted() else { return }
-        if let front = NSWorkspace.shared.frontmostApplication,
-           front.bundleIdentifier != "com.hailports.paiste" {
+        if let front = NSWorkspace.shared.frontmostApplication, !Self.skipsFront(front) {
             frontPID = front.processIdentifier
         }
         guard frontPID != 0 else { return }
@@ -171,6 +170,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
                 blocked = drafted.blocked
             }
             var captureNote = ""
+            var composer: CGPoint?
             if text.isEmpty && blocked != "license" {
                 if !CGPreflightScreenCaptureAccess() {
                     captureNote = "need-screen-recording"
@@ -185,13 +185,19 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
                     }
                 }
             }
+            if !text.isEmpty && field == nil && pid != 0 && CGPreflightScreenCaptureAccess() {
+                composer = Self.composerPoint(pid: pid)
+            }
             DispatchQueue.main.async {
                 self.stopSpin()
                 if !text.isEmpty {
                     let board = NSPasteboard.general
                     board.clearContents()
                     board.setString(text, forType: .string)
-                    let pasted = field != nil && Self.insert(text, into: field!)
+                    var pasted = field != nil && Self.insert(text, into: field!)
+                    if !pasted, let composer {
+                        pasted = Self.clickPaste(pid: pid, at: composer)
+                    }
                     let outcome = pasted ? "pasted" : "copied"
                     self.item?.button?.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: pasted ? "Pasted" : "Copied")
                     self.item?.button?.toolTip = pasted ? "Pasted" : "Copied"
@@ -217,6 +223,15 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
                 }
             }
         }
+    }
+
+    static func skipsFront(_ app: NSRunningApplication) -> Bool {
+        let name = (app.localizedName ?? "").lowercased()
+        let id = (app.bundleIdentifier ?? "").lowercased()
+        if id == "com.hailports.paiste" { return true }
+        let keys = ["clippy", "maccy", "flycut", "copyclip", "pastebot"]
+        if keys.contains(where: { name.contains($0) || id.contains($0) }) { return true }
+        return name == "paste"
     }
 
     static func focusedInput(pid: pid_t) -> AXUIElement? {
@@ -254,6 +269,93 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         let existing = (str(el, kAXValueAttribute) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if existing.count > 1 { return false }
         return AXUIElementSetAttributeValue(el, kAXValueAttribute as CFString, text as CFString) == .success
+    }
+
+    static func composerPoint(pid: pid_t) -> CGPoint? {
+        let wait = DispatchSemaphore(value: 0)
+        var point: CGPoint?
+        Task {
+            point = await findComposer(pid: pid)
+            wait.signal()
+        }
+        if wait.wait(timeout: .now() + 6) == .timedOut { return nil }
+        return point
+    }
+
+    static func findComposer(pid: pid_t) async -> CGPoint? {
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) else { return nil }
+        let windows = content.windows.filter {
+            $0.owningApplication?.processID == pid && $0.isOnScreen && $0.frame.width > 240 && $0.frame.height > 160
+        }
+        guard let window = windows.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }) else { return nil }
+        guard let bounds = cgBounds(pid: pid, matching: window.frame) else { return nil }
+        let filter = SCContentFilter(desktopIndependentWindow: window)
+        let config = SCStreamConfiguration()
+        config.width = max(1, Int(window.frame.width * 2))
+        config.height = max(1, Int(window.frame.height * 2))
+        config.showsCursor = false
+        config.capturesAudio = false
+        guard let image = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) else { return nil }
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        try? VNImageRequestHandler(cgImage: image).perform([request])
+        let hints = ["write a message", "type a message", "type / for more"]
+        var best: CGRect?
+        for item in request.results ?? [] {
+            guard let text = item.topCandidates(1).first?.string.lowercased() else { continue }
+            guard hints.contains(where: { text.contains($0) }) else { continue }
+            let box = item.boundingBox
+            guard box.midY < 0.4 else { continue }
+            if best == nil || box.midY < best!.midY { best = box }
+        }
+        guard let best else { return nil }
+        return CGPoint(
+            x: bounds.minX + best.midX * bounds.width,
+            y: bounds.minY + (1 - best.midY) * bounds.height
+        )
+    }
+
+    static func cgBounds(pid: pid_t, matching frame: CGRect) -> CGRect? {
+        let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+        var best: CGRect?
+        var score = CGFloat.greatestFiniteMagnitude
+        func num(_ raw: [String: Any], _ key: String) -> CGFloat {
+            if let value = raw[key] as? CGFloat { return value }
+            if let value = raw[key] as? Double { return CGFloat(value) }
+            if let value = raw[key] as? NSNumber { return CGFloat(truncating: value) }
+            return 0
+        }
+        for row in info {
+            let owner = (row[kCGWindowOwnerPID as String] as? NSNumber)?.intValue ?? -1
+            if owner != Int(pid) { continue }
+            guard let raw = row[kCGWindowBounds as String] as? [String: Any] else { continue }
+            let rect = CGRect(x: num(raw, "X"), y: num(raw, "Y"), width: num(raw, "Width"), height: num(raw, "Height"))
+            if rect.width < 200 || rect.height < 160 { continue }
+            let gap = abs(rect.width - frame.width) + abs(rect.height - frame.height)
+            if gap < score {
+                score = gap
+                best = rect
+            }
+        }
+        return best
+    }
+
+    static func clickPaste(pid: pid_t, at point: CGPoint) -> Bool {
+        NSRunningApplication(processIdentifier: pid)?.activate(options: [.activateIgnoringOtherApps])
+        Thread.sleep(forTimeInterval: 0.16)
+        guard let source = CGEventSource(stateID: .combinedSessionState) else { return false }
+        let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)
+        let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)
+        down?.post(tap: .cgSessionEventTap)
+        up?.post(tap: .cgSessionEventTap)
+        Thread.sleep(forTimeInterval: 0.08)
+        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true)
+        keyDown?.flags = .maskCommand
+        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false)
+        keyUp?.flags = .maskCommand
+        keyDown?.post(tap: .cgSessionEventTap)
+        keyUp?.post(tap: .cgSessionEventTap)
+        return keyDown != nil
     }
 
     static func screenScene(_ text: String, pid: pid_t) -> String? {
