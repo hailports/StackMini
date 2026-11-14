@@ -139,7 +139,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
     @objc func click() {
         let event = NSApp.currentEvent
         if event?.type == .rightMouseUp || event?.modifierFlags.contains(.option) == true {
-            openSetup()
+            showMenu()
             return
         }
         if busy { return }
@@ -170,7 +170,6 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
                 blocked = drafted.blocked
             }
             var captureNote = ""
-            var composer: CGPoint?
             if text.isEmpty && blocked != "license" {
                 if !CGPreflightScreenCaptureAccess() {
                     captureNote = "need-screen-recording"
@@ -185,44 +184,286 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
                     }
                 }
             }
-            if !text.isEmpty && field == nil && pid != 0 && CGPreflightScreenCaptureAccess() {
-                composer = Self.composerPoint(pid: pid)
+            if !text.isEmpty {
+                let path = self.deliver(text, pid: pid, field: field)
+                DispatchQueue.main.async {
+                    self.finish(path: path, note: captureNote)
+                }
+                return
             }
             DispatchQueue.main.async {
                 self.stopSpin()
-                if !text.isEmpty {
-                    let board = NSPasteboard.general
-                    board.clearContents()
-                    board.setString(text, forType: .string)
-                    var pasted = field != nil && Self.insert(text, into: field!)
-                    if !pasted, let composer {
-                        pasted = Self.clickPaste(pid: pid, at: composer)
-                    }
-                    let outcome = pasted ? "pasted" : "copied"
-                    self.item?.button?.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: pasted ? "Pasted" : "Copied")
-                    self.item?.button?.toolTip = pasted ? "Pasted" : "Copied"
-                    self.item?.button?.appearsDisabled = false
-                    self.log.error("\(outcome, privacy: .public) \(captureNote, privacy: .public)")
-                    self.busy = false
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                        self.item?.button?.image = self.mark
-                        self.item?.button?.toolTip = "paisty"
-                    }
-                    return
-                } else {
-                    if captureNote == "need-screen-recording" {
-                        CGRequestScreenCaptureAccess()
-                    }
-                    let hint = blocked == "license" ? "Right-click and paste your key" : (captureNote == "need-screen-recording" ? "Allow paisty in Screen Recording" : "Nothing to copy")
-                    self.item?.button?.image = NSImage(systemSymbolName: "questionmark", accessibilityDescription: hint)
-                    self.item?.button?.toolTip = hint
-                    self.item?.button?.appearsDisabled = false
-                    self.log.error("empty \(captureNote, privacy: .public)")
-                    self.busy = false
-                    return
+                if captureNote == "need-screen-recording" {
+                    CGRequestScreenCaptureAccess()
+                }
+                let hint = blocked == "license" ? "Right-click and open setup to paste your key" : (captureNote == "need-screen-recording" ? "Allow paisty in Screen Recording" : "Nothing to copy")
+                self.fail(hint)
+                self.log.error("empty \(captureNote, privacy: .public)")
+            }
+        }
+    }
+
+    /// Puts the text on the clipboard, then tries to place it in the target app's focused field. Call off the main thread. Never presses Return.
+    func deliver(_ text: String, pid: pid_t, field: AXUIElement?) -> String {
+        DispatchQueue.main.sync {
+            let board = NSPasteboard.general
+            board.clearContents()
+            board.setString(text, forType: .string)
+        }
+        let bundle = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? "?"
+        var path = "copied"
+        if pid != 0 {
+            if let field, Self.alive(field, pid: pid), let won = Self.insert(text, into: field, pid: pid) {
+                path = won
+            } else {
+                Self.activate(pid)
+                if let fresh = Self.focusedInput(pid: pid), let won = Self.insert(text, into: fresh, pid: pid) {
+                    path = won
+                } else if CGPreflightScreenCaptureAccess(), let composer = Self.composerPoint(pid: pid),
+                          Self.clickPaste(pid: pid, at: composer) {
+                    path = "ocr-cmdv"
                 }
             }
         }
+        log.error("deliver \(path, privacy: .public) app \(bundle, privacy: .public)")
+        return path
+    }
+
+    func finish(path: String, note: String = "") {
+        stopSpin()
+        let pasted = path != "copied"
+        item?.button?.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: pasted ? "Pasted" : "Copied")
+        item?.button?.toolTip = pasted ? "Pasted" : "Copied"
+        item?.button?.appearsDisabled = false
+        log.error("\(pasted ? "pasted" : "copied", privacy: .public) \(path, privacy: .public) \(note, privacy: .public)")
+        busy = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            self.item?.button?.image = self.mark
+            self.item?.button?.toolTip = "paisty"
+        }
+    }
+
+    func fail(_ hint: String) {
+        stopSpin()
+        item?.button?.image = NSImage(systemSymbolName: "questionmark", accessibilityDescription: hint)
+        item?.button?.toolTip = hint
+        item?.button?.appearsDisabled = false
+        busy = false
+    }
+
+    // MARK: right-click menu
+
+    struct Draft {
+        let id: String
+        let at: String
+        let preview: String
+        let app: String
+        let text: String
+    }
+
+    final class DraftRef: NSObject {
+        let draft: Draft
+        let pid: pid_t
+        let field: AXUIElement?
+        init(_ draft: Draft, pid: pid_t, field: AXUIElement?) {
+            self.draft = draft
+            self.pid = pid
+            self.field = field
+        }
+    }
+
+    func showMenu() {
+        let pid = frontPID
+        let field = (pastePID == pid && Date().timeIntervalSince(pasteAt) < 8) ? pasteTarget : nil
+        DispatchQueue.global(qos: .userInitiated).async {
+            let drafts = Self.loadDrafts()
+            DispatchQueue.main.async {
+                guard let item = self.item, let button = item.button else { return }
+                item.menu = self.buildMenu(drafts, pid: pid, field: field)
+                button.performClick(nil)
+                item.menu = nil
+            }
+        }
+    }
+
+    func buildMenu(_ drafts: [Draft], pid: pid_t, field: AXUIElement?) -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        menu.addItem(header("Recent drafts"))
+        if drafts.isEmpty {
+            menu.addItem(header("No drafts yet — left-click the paperclip to draft"))
+        }
+        for draft in drafts.prefix(8) {
+            let ref = DraftRef(draft, pid: pid, field: field)
+            let row = NSMenuItem(title: "", action: #selector(pasteDraft(_:)), keyEquivalent: "")
+            row.target = self
+            row.representedObject = ref
+            row.attributedTitle = Self.rowTitle(draft)
+            row.isEnabled = !busy
+            let sub = NSMenu()
+            sub.autoenablesItems = false
+            let paste = NSMenuItem(title: "Paste this draft", action: #selector(pasteDraft(_:)), keyEquivalent: "")
+            paste.target = self
+            paste.representedObject = ref
+            sub.addItem(paste)
+            let redo = NSMenuItem(title: "Redo", action: #selector(redoDraft(_:)), keyEquivalent: "")
+            redo.target = self
+            redo.representedObject = ref
+            sub.addItem(redo)
+            row.submenu = sub
+            menu.addItem(row)
+        }
+        menu.addItem(.separator())
+        menu.addItem(header("Setup"))
+        let setup = NSMenuItem(title: "Open setup…", action: #selector(openSetup), keyEquivalent: "")
+        setup.target = self
+        menu.addItem(setup)
+        let scan = NSMenuItem(title: "Scan this Mac for AI…", action: #selector(openSetup), keyEquivalent: "")
+        scan.target = self
+        menu.addItem(scan)
+        menu.addItem(.separator())
+        let quit = NSMenuItem(title: "Quit paisty", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
+        quit.target = NSApp
+        menu.addItem(quit)
+        return menu
+    }
+
+    func header(_ title: String) -> NSMenuItem {
+        let row = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        row.isEnabled = false
+        return row
+    }
+
+    static func rowTitle(_ draft: Draft) -> NSAttributedString {
+        var preview = draft.preview.isEmpty ? draft.text : draft.preview
+        preview = preview.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        if preview.count > 60 { preview = String(preview.prefix(59)) + "…" }
+        let title = NSMutableAttributedString(string: preview.isEmpty ? "(empty draft)" : preview, attributes: [.font: NSFont.menuFont(ofSize: 0)])
+        let suffix = [draft.app, ago(draft.at)].filter { !$0.isEmpty }.joined(separator: " · ")
+        if !suffix.isEmpty {
+            title.append(NSAttributedString(string: "  " + suffix, attributes: [
+                .font: NSFont.menuFont(ofSize: NSFont.smallSystemFontSize),
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ]))
+        }
+        return title
+    }
+
+    static func ago(_ at: String) -> String {
+        var date: Date?
+        if let seconds = Double(at) {
+            date = Date(timeIntervalSince1970: seconds > 1e12 ? seconds / 1000 : seconds)
+        } else {
+            let iso = ISO8601DateFormatter()
+            date = iso.date(from: at)
+            if date == nil {
+                iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                date = iso.date(from: at)
+            }
+        }
+        guard let date else { return String(at.prefix(16)) }
+        let gap = Date().timeIntervalSince(date)
+        if gap < 60 { return "now" }
+        if gap < 3600 { return "\(Int(gap / 60))m" }
+        if gap < 86400 { return "\(Int(gap / 3600))h" }
+        let shown = DateFormatter()
+        shown.dateFormat = "MMM d"
+        return shown.string(from: date)
+    }
+
+    static func loadDrafts() -> [Draft] {
+        let run = runPaiste(["drafts"], timeout: 3)
+        guard run.status == 0, let data = run.out.data(using: .utf8),
+              let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        func text(_ row: [String: Any], _ key: String) -> String {
+            switch row[key] {
+            case let value as String: return value
+            case let value as NSNumber: return value.stringValue
+            default: return ""
+            }
+        }
+        return rows.compactMap { row in
+            let id = text(row, "id")
+            if id.isEmpty { return nil }
+            return Draft(id: id, at: text(row, "at"), preview: text(row, "preview"), app: text(row, "app"), text: text(row, "text"))
+        }
+    }
+
+    @objc func pasteDraft(_ sender: NSMenuItem) {
+        guard let ref = sender.representedObject as? DraftRef, !busy else { return }
+        busy = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            var text = ref.draft.text
+            if text.isEmpty {
+                let run = Self.runPaiste(["show", "--id", ref.draft.id], timeout: 5)
+                text = run.status == 0 ? run.out : ""
+            }
+            if text.isEmpty {
+                DispatchQueue.main.async { self.fail("That draft is empty") }
+                return
+            }
+            let path = self.deliver(text, pid: ref.pid, field: ref.field)
+            DispatchQueue.main.async { self.finish(path: path, note: "menu-paste") }
+        }
+    }
+
+    @objc func redoDraft(_ sender: NSMenuItem) {
+        guard let ref = sender.representedObject as? DraftRef, !busy else { return }
+        busy = true
+        startSpin()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let run = Self.runPaiste(["redo", "--id", ref.draft.id], timeout: 90)
+            guard run.status == 0, !run.out.isEmpty else {
+                DispatchQueue.main.async {
+                    self.fail(run.status == 2 ? "Redo found nothing to draft" : "Redo failed")
+                    self.log.error("redo failed \(run.status, privacy: .public)")
+                }
+                return
+            }
+            let path = self.deliver(run.out, pid: ref.pid, field: ref.field)
+            DispatchQueue.main.async { self.finish(path: path, note: "menu-redo") }
+        }
+    }
+
+    static func paisteProcess(_ args: [String]) -> Process {
+        let task = Process()
+        let script = paisteCommand()
+        if script == "hailports" {
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            task.arguments = ["hailports", "paiste"] + args
+        } else if script.hasSuffix("/hailports") {
+            task.executableURL = URL(fileURLWithPath: script)
+            task.arguments = ["paiste"] + args
+        } else {
+            task.executableURL = URL(fileURLWithPath: script)
+            task.arguments = args
+        }
+        return task
+    }
+
+    /// Runs the paiste CLI, kills it after `timeout` seconds. Returns trimmed stdout and exit status (-1 on launch failure or timeout).
+    static func runPaiste(_ args: [String], timeout: TimeInterval) -> (out: String, status: Int32) {
+        let task = paisteProcess(args)
+        let out = Pipe()
+        task.standardOutput = out
+        task.standardError = FileHandle.nullDevice
+        let done = DispatchSemaphore(value: 0)
+        task.terminationHandler = { _ in done.signal() }
+        do { try task.run() } catch { return ("", -1) }
+        var data = Data()
+        let read = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .utility).async {
+            data = out.fileHandleForReading.readDataToEndOfFile()
+            read.signal()
+        }
+        if done.wait(timeout: .now() + timeout) == .timedOut {
+            task.terminate()
+            _ = read.wait(timeout: .now() + 1)
+            return ("", -1)
+        }
+        _ = read.wait(timeout: .now() + 2)
+        let text = (String(data: data, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return (text, task.terminationStatus)
     }
 
     static func skipsFront(_ app: NSRunningApplication) -> Bool {
@@ -234,41 +475,140 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         return name == "paste"
     }
 
+    static var manualAX = Set<pid_t>()
+    static let manualAXLock = NSLock()
+
     static func focusedInput(pid: pid_t) -> AXUIElement? {
         let app = AXUIElementCreateApplication(pid)
-        var focused: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
-              let raw = focused else { return nil }
-        let element = raw as! AXUIElement
-        return isEditable(element) ? element : nil
+        manualAXLock.lock()
+        let fresh = manualAX.insert(pid).inserted
+        manualAXLock.unlock()
+        if fresh {
+            // Electron (Slack, Teams) only exposes its text fields once this is set.
+            AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        }
+        var candidates: [AXUIElement] = []
+        if let el = element(app, kAXFocusedUIElementAttribute) { candidates.append(el) }
+        if let window = element(app, kAXFocusedWindowAttribute), let el = element(window, kAXFocusedUIElementAttribute) {
+            candidates.append(el)
+        }
+        for el in candidates {
+            if let target = editableTarget(el) { return target }
+        }
+        return nil
+    }
+
+    static func element(_ el: AXUIElement, _ attr: String) -> AXUIElement? {
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(el, attr as CFString, &raw) == .success, let raw,
+              CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
+        return (raw as! AXUIElement)
+    }
+
+    static func settable(_ el: AXUIElement, _ attr: String) -> Bool {
+        var flag = DarwinBoolean(false)
+        return AXUIElementIsAttributeSettable(el, attr as CFString, &flag) == .success && flag.boolValue
+    }
+
+    static func excluded(_ el: AXUIElement) -> Bool {
+        let role = (str(el, kAXRoleAttribute) ?? "").lowercased()
+        let sub = (str(el, kAXSubroleAttribute) ?? "").lowercased()
+        return role.contains("secure") || sub.contains("search") || sub.contains("secure")
+    }
+
+    /// The element to paste into: the focused element itself when it takes text, else its editable ancestor (web contenteditable).
+    static func editableTarget(_ el: AXUIElement) -> AXUIElement? {
+        if excluded(el) { return nil }
+        if isEditable(el) { return el }
+        for attr in ["AXEditableAncestor", "AXHighestEditableAncestor"] {
+            if let up = element(el, attr), !excluded(up), settable(up, kAXSelectedTextAttribute) {
+                return up
+            }
+        }
+        if element(el, "AXEditableAncestor") != nil || element(el, "AXHighestEditableAncestor") != nil {
+            return el
+        }
+        return nil
     }
 
     static func isEditable(_ el: AXUIElement) -> Bool {
+        if excluded(el) { return false }
         let role = (str(el, kAXRoleAttribute) ?? "")
-        let sub = (str(el, kAXSubroleAttribute) ?? "").lowercased()
-        if role != "AXTextArea" && role != "AXTextField" { return false }
-        if role.localizedCaseInsensitiveContains("secure") || sub.contains("search") || sub.contains("secure") {
-            return false
+        if role == "AXTextArea" || role == "AXTextField" {
+            return settable(el, kAXSelectedTextAttribute) || settable(el, kAXValueAttribute)
         }
-        var settable = DarwinBoolean(false)
-        if AXUIElementIsAttributeSettable(el, kAXSelectedTextAttribute as CFString, &settable) == .success, settable.boolValue {
+        if element(el, "AXEditableAncestor") != nil || element(el, "AXHighestEditableAncestor") != nil {
             return true
         }
-        settable = DarwinBoolean(false)
-        if AXUIElementIsAttributeSettable(el, kAXValueAttribute as CFString, &settable) == .success, settable.boolValue {
-            return true
+        if role == "AXWebArea" || role == "AXGroup" {
+            return settable(el, kAXSelectedTextAttribute)
         }
         return false
     }
 
-    static func insert(_ text: String, into el: AXUIElement) -> Bool {
+    /// The focused element still exists and belongs to the target app.
+    static func alive(_ el: AXUIElement, pid: pid_t) -> Bool {
+        var owner: pid_t = 0
+        guard AXUIElementGetPid(el, &owner) == .success, owner == pid else { return false }
+        return str(el, kAXRoleAttribute) != nil
+    }
+
+    static func activate(_ pid: pid_t) {
+        guard let app = NSRunningApplication(processIdentifier: pid) else { return }
+        if !app.isActive {
+            app.activate(options: [.activateIgnoringOtherApps])
+            Thread.sleep(forTimeInterval: 0.18)
+        }
+    }
+
+    /// A snapshot used to tell whether an AX write changed anything.
+    static func signature(_ el: AXUIElement) -> String {
+        var parts: [String] = []
+        parts.append(str(el, kAXValueAttribute) ?? "-")
+        for attr in [kAXNumberOfCharactersAttribute, kAXSelectedTextRangeAttribute] {
+            var raw: CFTypeRef?
+            if AXUIElementCopyAttributeValue(el, attr as CFString, &raw) == .success, let raw {
+                parts.append(String(describing: raw))
+            } else {
+                parts.append("-")
+            }
+        }
+        return parts.joined(separator: "|")
+    }
+
+    /// Returns "ax-insert" or "ax-cmdv" on success, nil when the field would not take the text. Never presses Return.
+    static func insert(_ text: String, into el: AXUIElement, pid: pid_t) -> String? {
+        let before = signature(el)
         AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, kCFBooleanTrue)
         if AXUIElementSetAttributeValue(el, kAXSelectedTextAttribute as CFString, text as CFString) == .success {
-            return true
+            Thread.sleep(forTimeInterval: 0.12)
+            if signature(el) != before { return "ax-insert" }
+        } else {
+            let role = str(el, kAXRoleAttribute) ?? ""
+            if role == "AXTextArea" || role == "AXTextField" {
+                let existing = (str(el, kAXValueAttribute) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if existing.count <= 1,
+                   AXUIElementSetAttributeValue(el, kAXValueAttribute as CFString, text as CFString) == .success {
+                    return "ax-insert"
+                }
+            }
         }
-        let existing = (str(el, kAXValueAttribute) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if existing.count > 1 { return false }
-        return AXUIElementSetAttributeValue(el, kAXValueAttribute as CFString, text as CFString) == .success
+        guard isEditable(el) || editableTarget(el) != nil else { return nil }
+        activate(pid)
+        AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        return commandV() ? "ax-cmdv" : nil
+    }
+
+    /// Cmd-V into the frontmost app. Only Cmd-V; no Return.
+    static func commandV() -> Bool {
+        guard let source = CGEventSource(stateID: .combinedSessionState) else { return false }
+        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true)
+        keyDown?.flags = .maskCommand
+        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false)
+        keyUp?.flags = .maskCommand
+        keyDown?.post(tap: .cgSessionEventTap)
+        keyUp?.post(tap: .cgSessionEventTap)
+        return keyDown != nil
     }
 
     static func composerPoint(pid: pid_t) -> CGPoint? {
@@ -299,12 +639,18 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         try? VNImageRequestHandler(cgImage: image).perform([request])
+        let outlook = (NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? "").lowercased().hasPrefix("com.microsoft.outlook")
         var best: CGRect?
         for item in request.results ?? [] {
             guard let text = item.topCandidates(1).first?.string.lowercased() else { continue }
-            guard isComposerLabel(text) else { continue }
             let box = item.boundingBox
-            guard box.midY < 0.4 else { continue }
+            if isComposerLabel(text) {
+                guard box.midY < 0.4 else { continue }
+            } else if outlook && isOutlookBodyLabel(text) {
+                guard box.midY < 0.6 else { continue }
+            } else {
+                continue
+            }
             if best == nil || box.midY < best!.midY { best = box }
         }
         guard let best else { return nil }
@@ -324,6 +670,16 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         ]
         if hints.contains(where: { line.contains($0) }) { return true }
         return line.count < 48 && line.hasPrefix("message ")
+    }
+
+    /// New Outlook compose body placeholders. The subject line is not a body.
+    static func isOutlookBodyLabel(_ text: String) -> Bool {
+        let line = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if line.contains("subject") { return false }
+        let buttons: Set<String> = ["reply", "reply all", "forward", "compose", "new mail", "new message"]
+        if buttons.contains(line) { return false }
+        let hints = ["type /", "write your message", "compose", "reply"]
+        return line.count < 80 && hints.contains(where: { line.contains($0) })
     }
 
     static func cgBounds(pid: pid_t, matching frame: CGRect) -> CGRect? {
@@ -360,13 +716,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         down?.post(tap: .cgSessionEventTap)
         up?.post(tap: .cgSessionEventTap)
         Thread.sleep(forTimeInterval: 0.08)
-        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true)
-        keyDown?.flags = .maskCommand
-        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false)
-        keyUp?.flags = .maskCommand
-        keyDown?.post(tap: .cgSessionEventTap)
-        keyUp?.post(tap: .cgSessionEventTap)
-        return keyDown != nil
+        return commandV()
     }
 
     static func screenScene(_ text: String, pid: pid_t) -> String? {
@@ -471,15 +821,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("paiste-scene.json")
         try? scene.data(using: .utf8)?.write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
-        let task = Process()
-        let script = paisteCommand()
-        if script == "hailports" {
-            task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            task.arguments = ["hailports", "paiste", "draft", "--scene", url.path]
-        } else {
-            task.executableURL = URL(fileURLWithPath: script)
-            task.arguments = ["draft", "--scene", url.path]
-        }
+        let task = paisteProcess(["draft", "--scene", url.path])
         let out = Pipe()
         let err = Pipe()
         task.standardOutput = out
