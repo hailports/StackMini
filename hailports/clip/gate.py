@@ -97,7 +97,7 @@ def allowed(cfg: dict | None = None, urlopen=None) -> bool:
         req = urllib.request.Request(
             url,
             data=json.dumps({"token": token}).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "User-Agent": "paisty/1"},
             method="POST",
         )
         with opener(req, timeout=6) as resp:
