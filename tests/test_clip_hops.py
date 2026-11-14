@@ -5,7 +5,7 @@ from pathlib import Path
 from hailports.llm import ModelOffline
 from hailports.clip.board import (
     BoardError, apple_note_pages, apply_board, code_phrases, cursor_setup_text, discover, guide, ingest_files, latest_from_other, make_notes, server_setup_text,
-    misses_points, model_ids, monday_pages, open_points, parse_hop, probe_model, pull_source,
+    machine_context, misses_points, model_ids, monday_pages, open_points, parse_hop, probe_model, pull_source,
     scan_models, show_board, ssh_host_names, store_api_key, thin_reply,
 )
 from hailports.clip.run import lookup_query
@@ -354,6 +354,24 @@ def test_setup_puts_the_premium_login_ahead_of_an_optional_local():
     assert local["ssh_host"] == "brain"
     assert local["remote_url"] == "http://127.0.0.1:8080/v1"
     assert saved["models"]["cursor"]["via"] == "cursor"
+
+
+def test_setup_turns_on_mail_chat_littlebird_and_a_vault(tmp_path):
+    vault = tmp_path / "Desk"
+    (vault / ".obsidian").mkdir(parents=True)
+    found = machine_context(tmp_path, present=["Outlook", "Zoom", "Littlebird"])
+    assert found["mail"] == "front"
+    assert found["mail_apps"] == ["Outlook"]
+    assert found["chat"] == "front"
+    assert found["chat_apps"] == ["Zoom", "Littlebird"]
+    assert found["littlebird"] is True
+    assert found["notes"] == "folder"
+    assert found["notes_path"] == str(vault)
+    empty = machine_context(tmp_path / "bare", present=[])
+    assert empty["mail"] == "off"
+    assert empty["chat"] == "off"
+    assert empty["notes"] == "off"
+    assert empty["littlebird"] is False
 
 
 def test_guide_says_the_model_holds_the_data():

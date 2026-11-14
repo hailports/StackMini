@@ -267,26 +267,66 @@ def _vaults(root: Path) -> list[str]:
     return found[:6]
 
 
-def _mail_apps() -> list[str]:
-    names = []
-    pairs = (
-        ("Mail", ("/System/Applications/Mail.app", "/Applications/Mail.app")),
-        ("Outlook", ("/Applications/Microsoft Outlook.app",)),
-        ("Spark", ("/Applications/Spark.app",)),
-    )
+_CONTEXT_APPS = (
+    ("Mail", ("/System/Applications/Mail.app", "/Applications/Mail.app")),
+    ("Outlook", ("/Applications/Microsoft Outlook.app",)),
+    ("Spark", ("/Applications/Spark.app",)),
+    ("Zoom", ("/Applications/zoom.us.app",)),
+    ("Messages", ("/System/Applications/Messages.app",)),
+    ("Slack", ("/Applications/Slack.app",)),
+    ("Teams", ("/Applications/Microsoft Teams.app",)),
+    ("Littlebird", ("/Applications/Littlebird.app",)),
+)
+
+
+def _installed(pairs=_CONTEXT_APPS) -> list[str]:
+    home_apps = Path.home() / "Applications"
+    found = []
     for label, paths in pairs:
-        if any(Path(path).exists() for path in paths):
-            names.append(label)
-    return names
+        checked = list(paths)
+        if paths:
+            checked.append(str(home_apps / Path(paths[-1]).name))
+        if any(Path(path).exists() for path in checked):
+            found.append(label)
+    return found
+
+
+def machine_context(home: Path | None = None, present: list[str] | None = None) -> dict:
+    """Turn on mail, chat, Littlebird, and an Obsidian vault that are already on this Mac.
+
+    A click reads the open window. Nothing is signed in and no note text is copied here.
+    """
+    root = Path(home) if home is not None else Path.home()
+    installed = list(present) if present is not None else _installed()
+    vaults = _vaults(root)
+    mail = [name for name in ("Mail", "Outlook", "Spark") if name in installed]
+    chat = [name for name in ("Zoom", "Messages", "Slack", "Teams", "Littlebird") if name in installed]
+    return {
+        "mail_apps": mail,
+        "chat_apps": chat,
+        "vaults": vaults,
+        "mail": "front" if mail else "off",
+        "chat": "front" if chat else "off",
+        "notes": "folder" if vaults else "off",
+        "notes_path": vaults[0] if vaults else "",
+        "littlebird": "Littlebird" in installed,
+    }
 
 
 def scan_setup(home: Path | None = None, read_local=None, hosts=None, read_ssh=None) -> dict:
     """What the setup window can offer. No mail text, no key, no model list dumped raw."""
     root = Path(home) if home is not None else Path.home()
     picked_hosts = hosts if hosts is not None else _hosts_from_ssh(root)
+    found = machine_context(root)
     return {
-        "mail_apps": _mail_apps(),
-        "vaults": _vaults(root),
+        "mail_apps": found["mail_apps"],
+        "chat_apps": found["chat_apps"],
+        "vaults": found["vaults"],
+        "mail": found["mail"],
+        "chat": found["chat"],
+        "notes": found["notes"],
+        "notes_path": found["notes_path"],
+        "littlebird": found["littlebird"],
         "apps": [
             {"name": name, "installed": bool(app_bin(name))}
             for name in ("claude", "codex", "cursor")
