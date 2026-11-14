@@ -1,16 +1,21 @@
-"""Recent Paiste drafts. The menu lists them on right-click. Nothing is sent."""
+"""Recent Paiste drafts. The menu lists them on right-click. Nothing is sent.
+
+The window text behind a draft is kept on this Mac for 7 days so Redo can rewrite it.
+A scene that looks like it holds a secret is not kept.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 KEEP = 30
 MENU = 12
 SCENE_CAP = 16 * 1024
+SCENE_DAYS = 7
 LISTED = ("id", "at", "preview", "app", "hop", "text")
 
 
@@ -50,9 +55,42 @@ def cap_scene(scene, cap: int = SCENE_CAP) -> dict | None:
     return None
 
 
+def _strings(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, list):
+        for item in value:
+            yield from _strings(item)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield str(key)
+            yield from _strings(item)
+
+
+def scene_secret(scene) -> bool:
+    """True when any scene text trips the existing secret checks."""
+    from hailports.chat_badge import secret_hold
+    from hailports.clip.board import _SECRET_NOTE
+    for text in _strings(scene):
+        if text and (_SECRET_NOTE.search(text) or secret_hold(text)):
+            return True
+    return False
+
+
+def _expired(row: dict, now: datetime) -> bool:
+    try:
+        at = datetime.fromisoformat(str(row.get("at") or ""))
+    except ValueError:
+        return True
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=timezone.utc)
+    return now - at > timedelta(days=SCENE_DAYS)
+
+
 def load(path: Path | None = None) -> list[dict]:
     path = path or drafts_path()
     rows: list[dict] = []
+    now = datetime.now(timezone.utc)
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -66,6 +104,8 @@ def load(path: Path | None = None) -> list[dict]:
         except json.JSONDecodeError:
             continue
         if isinstance(row, dict) and row.get("id") and isinstance(row.get("text"), str):
+            if "scene" in row and _expired(row, now):
+                row.pop("scene", None)
             rows.append(row)
     return rows
 
@@ -80,7 +120,7 @@ def append(text: str, hop: str = "", app: str = "", path: Path | None = None, ke
     digest = hashlib.sha1((at + "\n" + text).encode("utf-8")).hexdigest()[:10]
     row = {"id": at.replace(":", "").replace("+0000", "Z") + "-" + digest, "at": at, "text": text,
            "hop": str(hop or ""), "app": str(app or ""), "preview": _preview(text)}
-    kept = cap_scene(scene)
+    kept = None if scene_secret(scene) else cap_scene(scene)
     if kept is not None:
         row["scene"] = kept
     rows = (load(path) + [row])[-keep:]

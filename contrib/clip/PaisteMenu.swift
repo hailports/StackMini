@@ -141,6 +141,10 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
             lastGoodAt = Date()
             lastPID = frontPID
         }
+        guard glowOn else {
+            stopGlow()
+            return
+        }
         updateGlow(scene: scene, usable: ok, pid: frontPID)
     }
 
@@ -150,6 +154,10 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
 
     /// Reuses the scene the poll already read. No network, no capture.
     func updateGlow(scene: String, usable: Bool, pid: pid_t) {
+        guard glowOn else {
+            stopGlow()
+            return
+        }
         let doc = Self.sceneDoc(scene)
         let app = NSRunningApplication(processIdentifier: pid)
         let name = app?.localizedName ?? (doc["app"] as? String ?? "")
@@ -178,12 +186,11 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         let low = title.lowercased()
         let mail = ["mail", "outlook", "spark"]
         let chat = ["slack", "teams", "messages", "workplace", "workchat", "zoom", "discord", "whatsapp", "telegram"]
-        let browsers = ["safari", "chrome", "edge", "firefox", "arc", "brave", "opera", "vivaldi", "orion"]
         let pages = ["jira", "atlassian.net", "dev.azure.com", "visualstudio.com", "azure devops", "monday.com",
                      "gmail", "outlook", "slack", "microsoft teams", "teams"]
         let isMail = mail.contains { name == $0 || name.hasPrefix($0 + " ") || name.contains("microsoft " + $0) } || id == "com.apple.mail"
         let isChat = chat.contains { name.contains($0) } || id.contains("slack") || id.contains("teams") || id == "com.apple.mobilesms"
-        let isBrowser = browsers.contains { name.contains($0) } || id.contains("safari") || id.contains("chrome") || id.contains("firefox")
+        let isBrowser = isBrowserBundle(id)
         guard isMail || isChat || (isBrowser && pages.contains { low.contains($0) }) else { return false }
         let mine = (doc["field_text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !(doc["selection"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
@@ -196,6 +203,15 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
             if other >= 40 { return true }
         }
         return false
+    }
+
+    /// Browsers by bundle id. A name like "Edge Notes" or "Archive Utility" is not a browser.
+    static func isBrowserBundle(_ bundle: String) -> Bool {
+        let id = bundle.lowercased()
+        let exact = ["com.apple.safari", "org.mozilla.firefox", "company.thebrowser.browser"]
+        let prefixes = ["com.google.chrome", "com.microsoft.edgemac", "com.brave.browser",
+                        "com.operasoftware.", "com.vivaldi.", "com.kagi.kimei"]
+        return exact.contains(id) || prefixes.contains { id.hasPrefix($0) }
     }
 
     static func sceneDoc(_ scene: String) -> [String: Any] {

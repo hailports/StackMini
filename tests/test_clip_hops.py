@@ -159,7 +159,8 @@ def test_board_keeps_the_model_choice_and_not_the_key(tmp_path):
         "calendar": "folder",
         "calendar_path": "/tmp/cal",
     })
-    assert both["order"] == ["local", "api"]
+    # Premium-first: the API leads, the local is the fallback.
+    assert both["order"] == ["api", "local"]
     assert both["mail"] == "front"
     assert both["chat"] == "front"
     assert both["calendar_dir"] == "/tmp/cal"
@@ -234,7 +235,10 @@ def test_several_models_keep_the_remote_path(tmp_path):
         "notes": "off",
         "calendar": "off",
     })
-    assert saved["order"][0] == "brain"
+    # Premium-first: a configured API leads; the local brain hop is the fallback behind it.
+    assert saved["models"][saved["order"][0]]["base_url"] == "https://api.openai.com/v1"
+    assert Path(saved["models"][saved["order"][0]]["key_file"]).read_text(encoding="utf-8").strip() == "sk-one"
+    assert "brain" in saved["order"]
     assert saved["models"]["brain"]["ssh_host"] == "brain"
     assert saved["models"]["brain"]["remote_url"] == "http://127.0.0.1:8080/v1"
     assert saved["models"]["brain"]["model"] == "desk-model"
@@ -253,8 +257,8 @@ def test_several_models_keep_the_remote_path(tmp_path):
         "calendar": "off",
     })
     assert kept["models"]["brain"]["remote_url"] == "http://127.0.0.1:8080/v1"
-    assert kept["order"][0] == "brain"
-    assert Path(kept["models"][kept["order"][2]]["key_file"]).read_text(encoding="utf-8").strip() == "sk-one"
+    assert kept["models"][kept["order"][0]]["base_url"] == "https://api.openai.com/v1"
+    assert Path(kept["models"][kept["order"][0]]["key_file"]).read_text(encoding="utf-8").strip() == "sk-one"
     blank = probe_model("ssh nope", "sk-secret-value")
     missed = probe_model("http://127.0.0.1:1/v1", "sk-secret-value")
     assert "sk-secret" not in blank
@@ -262,7 +266,7 @@ def test_several_models_keep_the_remote_path(tmp_path):
     assert missed == "Not reachable."
 
 
-def test_local_keeps_a_connected_premium():
+def test_connected_premium_leads_the_local():
     saved = apply_board({
         "order": ["cursor"],
         "models": {"cursor": {
@@ -278,9 +282,11 @@ def test_local_keeps_a_connected_premium():
         "notes": "off",
         "calendar": "off",
     })
-    assert saved["order"][-1] == "cursor"
+    # Premium-first: the already-connected premium leads, the added local is the fallback.
+    assert saved["order"][0] == "cursor"
     assert saved["models"]["cursor"]["via"] == "cursor"
-    assert saved["order"][0] != "cursor"
+    assert saved["order"][-1] != "cursor"
+    assert "cursor" in saved["order"]
 
 
 def test_login_choice_stores_the_app_and_not_a_key():

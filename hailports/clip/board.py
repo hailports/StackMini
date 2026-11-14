@@ -479,8 +479,9 @@ def auto_setup(current: dict | None, scan: dict, key_dir: Path, notes_dir: Path,
             needs.append("paste an API key")
     mail = list(scan.get("mail_apps") or [])
     chat = list(scan.get("chat_apps") or [])
-    _one_surface(out, "mail", "email_dir", "front" if mail else "off", "")
-    _one_surface(out, "chat", "chat_dir", "front" if chat else "off", "")
+    for key, path_key, found_apps in (("mail", "email_dir", mail), ("chat", "chat_dir", chat)):
+        if str(out.get(key) or "off").strip().lower() == "off":
+            _one_surface(out, key, path_key, "front" if found_apps else "off", "")
     notes = suggest.get("notes") or {}
     path = ""
     if notes.get("kind") == "vault" and notes.get("path"):
@@ -488,7 +489,8 @@ def auto_setup(current: dict | None, scan: dict, key_dir: Path, notes_dir: Path,
         path = str(out.get("notes_dir") or "")
     if not path:
         app = picked if picked in _APP_NAMES else ""
-        body = setup_text(bool(mail), app) if setup_text is not None else ""
+        fresh = not (Path(notes_dir) / "Paisty.md").exists()
+        body = setup_text(bool(mail), app) if setup_text is not None and fresh else ""
         made = make_notes(Path(notes_dir), mail=bool(mail), body=body or "")
         out["notes"] = "folder"
         out["notes_dir"] = made["path"]
@@ -1604,7 +1606,7 @@ def _prefer_connected_app(current: dict, order: list, models: dict, answers: dic
 
 
 def _premium_after_local(current: dict, order: list, models: dict) -> tuple[list, dict]:
-    """Locals first. A premium hop that is already connected still runs after them."""
+    """Premium first. A configured premium API or app leads; a local hop is the optional fallback behind it."""
     locals_first = []
     premiums = []
     rest = []
@@ -1633,7 +1635,7 @@ def _premium_after_local(current: dict, order: list, models: dict) -> tuple[list
             models[slot] = dict(spec)
             premiums.append(slot)
             seen.add(key)
-    return locals_first + rest + premiums, models
+    return premiums + rest + locals_first, models
 
 
 def use_app(current: dict, name: str, binary: str = "") -> dict:
