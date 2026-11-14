@@ -483,7 +483,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         var y = CGFloat(0)
         let paths = notePaths()
         if paths.isEmpty {
-            y = tagButton("Set up my notes", #selector(makeNotes(_:)), 0, y)
+            y = tagButton("Create my notes folder", #selector(makeNotes(_:)), 0, y)
         }
         for (i, path) in paths.enumerated() {
             let name = URL(fileURLWithPath: path).lastPathComponent
