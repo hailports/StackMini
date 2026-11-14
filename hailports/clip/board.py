@@ -313,11 +313,91 @@ def machine_context(home: Path | None = None, present: list[str] | None = None) 
     }
 
 
-def scan_setup(home: Path | None = None, read_local=None, hosts=None, read_ssh=None) -> dict:
+# Premium providers that speak the OpenAI chat route. Key names only; values never leave os.environ.
+API_PROVIDERS = (
+    ("openai", "OpenAI", ("OPENAI_API_KEY",), "https://api.openai.com/v1", "gpt-4.1-mini"),
+    ("anthropic", "Anthropic", ("ANTHROPIC_API_KEY",), "https://api.anthropic.com/v1", "claude-sonnet-5-5"),
+    ("xai", "xAI Grok", ("XAI_API_KEY",), "https://api.x.ai/v1", "grok-4"),
+    ("gemini", "Google Gemini", ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+     "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.5-flash"),
+    ("openrouter", "OpenRouter", ("OPENROUTER_API_KEY",), "https://openrouter.ai/api/v1", "openrouter/auto"),
+    ("groq", "Groq", ("GROQ_API_KEY",), "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile"),
+    ("mistral", "Mistral", ("MISTRAL_API_KEY",), "https://api.mistral.ai/v1", "mistral-large-latest"),
+    ("deepseek", "DeepSeek", ("DEEPSEEK_API_KEY",), "https://api.deepseek.com/v1", "deepseek-chat"),
+)
+_APP_LABELS = {"claude": "Claude", "codex": "Codex", "cursor": "Cursor", "grok": "Grok"}
+
+
+def env_keys(env=None) -> list[dict]:
+    """Which premium keys are set. Name only. The value is never returned."""
+    import os
+    source = os.environ if env is None else env
+    found = []
+    for pid, label, names, url, model in API_PROVIDERS:
+        for name in names:
+            if str(source.get(name) or "").strip():
+                found.append({"provider": pid, "label": label, "env": name, "url": url, "model": model})
+                break
+    return found
+
+
+def _apple_notes(present=None) -> bool:
+    if present is not None:
+        return bool(present)
+    return any(Path(p).exists() for p in ("/System/Applications/Notes.app", "/Applications/Notes.app"))
+
+
+def suggest_setup(apps: list[dict], keys: list[dict], models: list[dict], vaults: list[str], apple_notes: bool) -> dict:
+    """One AI and one notes pick, each with a plain reason."""
+    ai = {"kind": "none", "name": "", "reason": "Nothing is set up yet. Sign in to Claude, Codex, or Cursor, or paste an API key."}
+    by_name = {row.get("name"): row for row in apps}
+    picked = next((name for name in _APP_NAMES if (by_name.get(name) or {}).get("status") == "signed-in"), "")
+    if picked:
+        ai = {"kind": "app", "name": picked, "reason": _APP_LABELS[picked] + " is signed in on this Mac."}
+    elif keys:
+        first = keys[0]
+        ai = {"kind": "api", "name": first["provider"], "env": first["env"], "url": first["url"], "model": first["model"],
+              "reason": "Your " + first["label"] + " key is already on this Mac."}
+    elif models:
+        first = models[0]
+        ai = {"kind": "local", "name": str(first.get("model") or "local"), "url": str(first.get("url") or ""),
+              "host": str(first.get("host") or ""),
+              "reason": "A model is running on " + ("this Mac." if not first.get("host") else str(first.get("host")) + ".")}
+    if vaults:
+        notes = {"kind": "vault", "path": vaults[0], "reason": "Your Obsidian notes are here."}
+    elif apple_notes:
+        notes = {"kind": "apple-notes", "path": "", "reason": "Apple Notes is on this Mac. A notes folder is made too."}
+    else:
+        notes = {"kind": "folder", "path": "", "reason": "A small notes folder is made for you."}
+    return {"ai": ai, "notes": notes}
+
+
+def _app_rows(status=None, find_bin=None) -> list[dict]:
+    from concurrent.futures import ThreadPoolExecutor
+    check = status or app_status
+    where = find_bin or app_bin
+    names = list(_APP_NAMES)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        states = list(pool.map(check, names))
+    rows = []
+    for name, state in zip(names, states):
+        rows.append({"name": name, "installed": state != "missing", "status": state, "drives": True})
+    grok = where("grok")
+    # hops.py cannot drive a grok CLI yet. Reported, never routed.
+    rows.append({"name": "grok", "installed": bool(grok), "status": "installed" if grok else "missing", "drives": False})
+    return rows
+
+
+def scan_setup(home: Path | None = None, read_local=None, hosts=None, read_ssh=None,
+               status=None, find_bin=None, env=None, apple_notes=None) -> dict:
     """What the setup window can offer. No mail text, no key, no model list dumped raw."""
     root = Path(home) if home is not None else Path.home()
     picked_hosts = hosts if hosts is not None else _hosts_from_ssh(root)
     found = machine_context(root)
+    apps = _app_rows(status, find_bin)
+    keys = env_keys(env)
+    models = scan_models(read_local=read_local, hosts=picked_hosts, read_ssh=read_ssh)
+    has_notes = _apple_notes(apple_notes)
     return {
         "mail_apps": found["mail_apps"],
         "chat_apps": found["chat_apps"],
@@ -327,12 +407,97 @@ def scan_setup(home: Path | None = None, read_local=None, hosts=None, read_ssh=N
         "notes": found["notes"],
         "notes_path": found["notes_path"],
         "littlebird": found["littlebird"],
-        "apps": [
-            {"name": name, "installed": bool(app_bin(name))}
-            for name in ("claude", "codex", "cursor")
-        ],
-        "models": scan_models(read_local=read_local, hosts=picked_hosts, read_ssh=read_ssh),
+        "apple_notes": has_notes,
+        "apps": apps,
+        "keys": [{"provider": row["provider"], "label": row["label"], "env": row["env"]} for row in keys],
+        "models": models,
+        "suggest": suggest_setup(apps, keys, models, found["vaults"], has_notes),
     }
+
+
+def _use_hop(current: dict, name: str, spec: dict) -> dict:
+    """Add one API or local hop. Other premium and local hops stay. Locals still run first."""
+    out = dict(current or {})
+    old_models = current.get("models") if isinstance(current.get("models"), dict) else {}
+    models = {}
+    order = []
+    for hop in current.get("order") or []:
+        old = old_models.get(hop)
+        if isinstance(old, dict) and hop != name:
+            order.append(hop)
+            models[hop] = old
+    models[name] = spec
+    order.append(name)
+    order, models = _premium_after_local(current, order, models)
+    out["enabled"] = True
+    out["copy"] = True
+    out["order"] = order
+    out["models"] = models
+    return out
+
+
+def auto_setup(current: dict | None, scan: dict, key_dir: Path, notes_dir: Path,
+               setup_text=None, env=None, binary: str = "") -> tuple[dict, dict]:
+    """Apply the scan suggestion. Returns the new settings and a short summary. Prints nothing secret."""
+    import os
+    source = os.environ if env is None else env
+    out = dict(current or {})
+    suggest = scan.get("suggest") or {}
+    ai = suggest.get("ai") or {}
+    needs: list[str] = []
+    picked = ""
+    kind = ai.get("kind")
+    if kind == "app":
+        out = use_app(out, str(ai.get("name")), binary)
+        picked = str(ai.get("name"))
+    elif kind == "api":
+        secret = str(source.get(str(ai.get("env") or "")) or "").strip()
+        try:
+            key_file = store_api_key(key_dir, secret, str(ai.get("name") or "api")) if secret else ""
+        except BoardError:
+            key_file = ""
+        if key_file:
+            spec = {"via": "http", "base_url": str(ai.get("url")), "model": str(ai.get("model")),
+                    "ssh_host": "", "remote_url": "", "key_file": key_file}
+            out = _use_hop(out, str(ai.get("name")), spec)
+            picked = str(ai.get("name"))
+        else:
+            needs.append("paste an API key")
+    elif kind == "local":
+        line = ("ssh " + str(ai.get("host")) + " " + str(ai.get("url"))) if ai.get("host") else str(ai.get("url") or "")
+        hop = parse_hop(line, 0) if line else None
+        if hop:
+            if _model_ok(str(ai.get("name") or "")):
+                hop["spec"]["model"] = str(ai.get("name"))
+            out = _use_hop(out, hop["name"], hop["spec"])
+            picked = "local"
+    if not picked:
+        waiting = [row["name"] for row in scan.get("apps") or [] if row.get("drives") and row.get("status") == "login"]
+        if waiting:
+            needs.append("sign in to " + _APP_LABELS.get(waiting[0], waiting[0]))
+        elif "paste an API key" not in needs:
+            needs.append("paste an API key")
+    mail = list(scan.get("mail_apps") or [])
+    chat = list(scan.get("chat_apps") or [])
+    _one_surface(out, "mail", "email_dir", "front" if mail else "off", "")
+    _one_surface(out, "chat", "chat_dir", "front" if chat else "off", "")
+    notes = suggest.get("notes") or {}
+    path = ""
+    if notes.get("kind") == "vault" and notes.get("path"):
+        _one_surface(out, "notes", "notes_dir", "folder", str(notes.get("path")))
+        path = str(out.get("notes_dir") or "")
+    if not path:
+        app = picked if picked in _APP_NAMES else ""
+        body = setup_text(bool(mail), app) if setup_text is not None else ""
+        made = make_notes(Path(notes_dir), mail=bool(mail), body=body or "")
+        out["notes"] = "folder"
+        out["notes_dir"] = made["path"]
+        path = made["path"]
+        if notes.get("kind") == "apple-notes":
+            needs.append("bring in Apple Notes (Customize, then Notes)")
+    out.setdefault("obsidian_vault", "")
+    summary = {"ai": picked, "notes": path, "mail": mail, "chat": chat, "needs": needs}
+    return out, summary
 
 
 _INGEST_OK = {".md", ".txt", ".markdown", ".eml", ".ics", ".pdf", ".csv"}

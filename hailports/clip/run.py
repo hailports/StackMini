@@ -238,7 +238,7 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
         return 2
     try:
         from hailports.clip.drafts import append as remember_draft
-        remember_draft(text, hop=str(hop or ""), app=str(doc.get("app") or ""))
+        remember_draft(text, hop=str(hop or ""), app=str(doc.get("app") or ""), scene=doc)
     except OSError:
         pass
     if copy and text:
@@ -253,6 +253,40 @@ def _route_dest(args):
     if not raw or raw == ".":
         raw = os.environ.get("PAISTE_ROUTE") or str(Path.home() / ".config" / "paiste" / "route.yaml")
     return Path(raw)
+
+
+def _onboard_auto(args, cfg, scan: dict | None = None) -> int:
+    """One click. Apply what the scan found. Keys go to 0600 files and are never printed."""
+    from hailports.config import save_file
+    from hailports.clip.board import auto_setup, scan_setup, server_setup_text, tie_notes
+    from hailports.clip.gate import read_token
+    dest = _route_dest(args)
+    found = scan if scan is not None else scan_setup()
+    license_url = str((cfg.get("paiste") or {}).get("license_url") or "https://www.paisty.com/api/license")
+    setup_url = license_url.rsplit("/", 1)[0] + "/setup"
+
+    def setup_text(mail_on: bool, app: str) -> str:
+        return server_setup_text(mail_on, False, app, read_token(cfg), setup_url)
+
+    updated, summary = auto_setup(
+        cfg.get("paiste") or {},
+        found,
+        dest.parent,
+        Path.home() / "Documents" / "paisty-notes",
+        setup_text=setup_text,
+    )
+    route = dict(cfg)
+    route["paiste"] = updated
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    save_file(dest, route)
+    try:
+        dest.chmod(0o600)
+    except OSError:
+        pass
+    app = summary["ai"] if summary["ai"] in {"claude", "codex", "cursor"} else ""
+    tie_notes(summary["notes"], app, "local" if summary["ai"] == "local" else "")
+    print(json.dumps(summary))
+    return 0
 
 
 def cmd_onboard(args, cfg) -> int:
@@ -285,6 +319,8 @@ def cmd_onboard(args, cfg) -> int:
     if getattr(args, "hint", False):
         print(setup_hint() or "")
         return 0
+    if getattr(args, "auto", False):
+        return _onboard_auto(args, cfg)
     if getattr(args, "scan", False):
         from hailports.clip.board import scan_setup
         print(json.dumps(scan_setup()))
@@ -442,7 +478,7 @@ def cmd_paiste(args, cfg, state: Path) -> int:
         return cmd_onboard(args, cfg)
     if action in {"drafts", "redo"}:
         from hailports.clip.drafts import cmd as drafts_cmd
-        return drafts_cmd(action, args)
+        return drafts_cmd(action, args, cfg)
     if action == "setup":
         from hailports.config import save_file
         from hailports.clip.board import discover, guide
