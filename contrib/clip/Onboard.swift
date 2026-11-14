@@ -430,7 +430,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
 
     func notesCopy() -> String {
         if foundVaults.isEmpty && obsidian.isEmpty {
-            return "No notes folder yet. One click uses Cursor, only for this setup, to write a starter from the mail and calendar you just connected. Cursor does not edit files. A click then searches that folder."
+            return "No notes folder yet. One click asks the setup assist, which is not your Cursor key and is not stored in the app. It writes a starter from the mail and calendar you just connected. A click then searches that folder."
         }
         return "A notes folder is already on this Mac. One click uses it and remembers the mail and calendar from the last steps."
     }
@@ -724,7 +724,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             render()
             return
         }
-        statusField.stringValue = "Cursor is writing the starter. It does not edit files. paisty does not keep it."
+        statusField.stringValue = "Writing the starter. The model key stays off this app. paisty does not keep it."
         DispatchQueue.global(qos: .userInitiated).async {
             let done = SetupBoard.run(["onboard", "--pull", "notes", "--answers", url.path])
             try? FileManager.default.removeItem(at: url)
