@@ -45,6 +45,8 @@ final class SetupBoard: NSObject, NSWindowDelegate {
     var foundModels: [[String: String]] = []
     var foundVaults: [String] = []
     var mailApps: [String] = []
+    var chatApps: [String] = []
+    var littlebirdOn = false
     var scanning = true
     var scanned = false
     var showManualLocal = false
@@ -268,7 +270,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
 
     @objc func forward() {
         capture()
-        if page < 6 {
+        if page < 3 {
             page += 1
             statusField.stringValue = ""
             render()
@@ -395,30 +397,18 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         linkControl = nil
         extra.subviews.forEach { $0.removeFromSuperview() }
         backButton.isHidden = page == 0
-        nextButton.title = page == 6 ? "Save on this Mac" : "Next"
+        nextButton.title = page == 3 ? "Save on this Mac" : "Next"
         switch page {
         case 0:
-            titleField.stringValue = "Step 1. Connect your mail."
-            body.stringValue = "Open the mail sign-in inside your AI and finish it in the browser. A later click asks that AI to search all of your mail, not a sample.\n\npaisty does not see the password and does not keep the mail."
-            mailPage()
+            titleField.stringValue = "Already on this Mac."
+            body.stringValue = "Mail, chat, Littlebird, and an Obsidian vault are turned on when they are already here. A click reads the open window. paisty does not sign in."
+            foundPage()
         case 1:
-            titleField.stringValue = "Step 2. Connect your calendar."
-            body.stringValue = "Use the same AI and turn on the calendar there. A click asks it to search all of the events it can see.\n\npaisty does not accept invites and does not keep them."
-            calendarPage()
-        case 2:
-            titleField.stringValue = "Step 3. Connect notes."
-            body.stringValue = notesCopy()
-            notesPage()
-        case 3:
-            titleField.stringValue = "Step 4. Add what the click can search."
-            body.stringValue = "Add the notes and call notes a click should search. Apple Notes, OneNote, Monday, Littlebird, and Zoom. A copy stays on this Mac. paisty does not keep the password."
-            feedPage()
-        case 4:
-            titleField.stringValue = "Step 5. Connect your AI to paisty."
+            titleField.stringValue = "Connect your AI to paisty."
             body.stringValue = "One click checks the app on this Mac. If it is not signed in, the browser opens and signs this Mac into that account. A local model is uncommon. The help for that is on this screen."
             aiPage()
-        case 5:
-            titleField.stringValue = "Step 6. A local model is optional."
+        case 2:
+            titleField.stringValue = "A local model is optional."
             body.stringValue = "Most people already finished on the last screen. Next keeps that AI. This page is only if you still want a local model."
             localPage()
         default:
@@ -602,7 +592,16 @@ final class SetupBoard: NSObject, NSWindowDelegate {
 
     func applyScan(_ doc: [String: Any]) {
         mailApps = doc["mail_apps"] as? [String] ?? []
+        chatApps = doc["chat_apps"] as? [String] ?? []
+        littlebirdOn = (doc["littlebird"] as? Bool) ?? chatApps.contains("Littlebird")
         foundVaults = doc["vaults"] as? [String] ?? []
+        if !mailApps.isEmpty { mailFront = true }
+        if !chatApps.isEmpty { chatFront = true }
+        if notesPath.isEmpty, let vault = foundVaults.first, !vault.isEmpty {
+            notesOn = true
+            notesPath = vault
+            obsidian = vault
+        }
         var rows: [[String: String]] = []
         if let found = doc["models"] as? [[String: Any]] {
             for row in found {
@@ -822,6 +821,34 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         capture()
         showManualLocal = true
         render()
+    }
+
+    func foundPage() {
+        var y = CGFloat(0)
+        if scanning && !scanned {
+            y = caption("Looking at this Mac.", y)
+        } else if mailApps.isEmpty && chatApps.isEmpty && foundVaults.isEmpty {
+            y = caption("Nothing already here could be turned on. Next connects an AI.", y)
+        } else {
+            if !mailApps.isEmpty {
+                y = caption("Mail is on: " + mailApps.joined(separator: ", ") + ". A click reads the open window.", y)
+            }
+            let chats = chatApps.filter { $0 != "Littlebird" }
+            if !chats.isEmpty {
+                y = caption("Chat is on: " + chats.joined(separator: ", ") + ". A click reads the open window.", y)
+            }
+            if littlebirdOn {
+                y = caption("Littlebird is on this Mac. A click reads that window. paisty does not sign in.", y)
+            }
+            if notesOn, let vault = foundVaults.first, !vault.isEmpty {
+                let name = URL(fileURLWithPath: vault).lastPathComponent
+                y = caption("Obsidian vault " + name + " is the notes folder.", y)
+            }
+        }
+        if foundVaults.isEmpty {
+            y = tagButton("Create my notes folder", #selector(makeNotes(_:)), 0, y)
+        }
+        extraHeight = y + 8
     }
 
     func feedPage() {
