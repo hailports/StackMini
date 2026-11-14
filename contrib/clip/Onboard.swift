@@ -422,12 +422,15 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             extra.addSubview(saveKey)
             extraHeight = 84
         }
+        if !body.stringValue.contains("does not keep any data") {
+            body.stringValue += "\n\npaisty does not keep any data."
+        }
         extra.frame = NSRect(x: 0, y: 0, width: 484, height: max(extraHeight, 40))
     }
 
     func notesCopy() -> String {
         if foundVaults.isEmpty && obsidian.isEmpty {
-            return "No notes folder yet. One click makes one from the mail and calendar you just connected. A click searches that folder, so the reply is not a guess."
+            return "No notes folder yet. One click uses Cursor, only for this setup, to write a starter from the mail and calendar you just connected. Cursor does not edit files. A click then searches that folder."
         }
         return "A notes folder is already on this Mac. One click uses it and remembers the mail and calendar from the last steps."
     }
@@ -709,7 +712,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
 
     func seedNotes(path: String) {
         capture()
-        var payload: [String: Any] = ["mail": mailFront, "calendar": calendarOn]
+        var payload: [String: Any] = ["mail": mailFront, "calendar": calendarOn, "app": pickedApp]
         if !path.isEmpty { payload["path"] = path }
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("paisty-notes.json")
@@ -721,7 +724,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             render()
             return
         }
-        statusField.stringValue = "Setting up notes."
+        statusField.stringValue = "Cursor is writing the starter. It does not edit files. paisty does not keep it."
         DispatchQueue.global(qos: .userInitiated).async {
             let done = SetupBoard.run(["onboard", "--pull", "notes", "--answers", url.path])
             try? FileManager.default.removeItem(at: url)
