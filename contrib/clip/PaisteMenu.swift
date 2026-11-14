@@ -15,7 +15,7 @@ func paisteCommand() -> String {
     return "hailports"
 }
 
-/// One click on the menu-bar paperclip. The reply is copied. Nothing is typed or sent.
+/// One click on the menu-bar paperclip. The reply is pasted into the focused text field when that field can take it. Otherwise it stays on the clipboard. Nothing is sent.
 final class PaisteApp: NSObject, NSApplicationDelegate {
     var item: NSStatusItem?
     var board: SetupBoard?
@@ -24,6 +24,9 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
     var lastGoodAt = Date.distantPast
     var lastPID: pid_t = 0
     var frontPID: pid_t = 0
+    var pasteTarget: AXUIElement?
+    var pastePID: pid_t = 0
+    var pasteAt = Date.distantPast
     let mark = PaisteApp.paperclip()
     var spinTimer: Timer?
     var spinAngle: CGFloat = 0
@@ -105,12 +108,20 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
     }
 
     func remember() {
-        guard AXIsProcessTrusted() else { return }
+        guard !busy, AXIsProcessTrusted() else { return }
         if let front = NSWorkspace.shared.frontmostApplication,
            front.bundleIdentifier != "com.hailports.paiste" {
             frontPID = front.processIdentifier
         }
         guard frontPID != 0 else { return }
+        if let field = Self.focusedInput(pid: frontPID) {
+            pasteTarget = field
+            pastePID = frontPID
+            pasteAt = Date()
+        } else if pastePID != frontPID {
+            pasteTarget = nil
+            pastePID = 0
+        }
         let scene = Self.scene(of: frontPID)
         if Self.usable(scene) {
             lastGood = scene
@@ -146,6 +157,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         let cachedAt = lastGoodAt
         let cachedPID = lastPID
         let pid = frontPID
+        let field = (pastePID == pid && Date().timeIntervalSince(pasteAt) < 8) ? pasteTarget : nil
         DispatchQueue.global(qos: .userInitiated).async {
             var scene = pid == 0 ? "{}" : Self.scene(of: pid)
             if pid == cachedPID, Date().timeIntervalSince(cachedAt) < 8 {
@@ -173,15 +185,24 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
                     }
                 }
             }
-            let outcome = text.isEmpty ? "empty" : "copied"
             DispatchQueue.main.async {
                 self.stopSpin()
                 if !text.isEmpty {
                     let board = NSPasteboard.general
                     board.clearContents()
                     board.setString(text, forType: .string)
-                    self.item?.button?.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: "Copied")
-                    self.item?.button?.toolTip = "Copied"
+                    let pasted = field != nil && Self.insert(text, into: field!)
+                    let outcome = pasted ? "pasted" : "copied"
+                    self.item?.button?.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: pasted ? "Pasted" : "Copied")
+                    self.item?.button?.toolTip = pasted ? "Pasted" : "Copied"
+                    self.item?.button?.appearsDisabled = false
+                    self.log.error("\(outcome, privacy: .public) \(captureNote, privacy: .public)")
+                    self.busy = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                        self.item?.button?.image = self.mark
+                        self.item?.button?.toolTip = "paisty"
+                    }
+                    return
                 } else {
                     if captureNote == "need-screen-recording" {
                         CGRequestScreenCaptureAccess()
@@ -190,19 +211,49 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
                     self.item?.button?.image = NSImage(systemSymbolName: "questionmark", accessibilityDescription: hint)
                     self.item?.button?.toolTip = hint
                     self.item?.button?.appearsDisabled = false
-                    self.log.error("\(outcome, privacy: .public) \(captureNote, privacy: .public)")
+                    self.log.error("empty \(captureNote, privacy: .public)")
                     self.busy = false
                     return
                 }
-                self.item?.button?.appearsDisabled = false
-                self.log.error("\(outcome, privacy: .public) \(captureNote, privacy: .public)")
-                self.busy = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                    self.item?.button?.image = self.mark
-                    self.item?.button?.toolTip = "paisty"
-                }
             }
         }
+    }
+
+    static func focusedInput(pid: pid_t) -> AXUIElement? {
+        let app = AXUIElementCreateApplication(pid)
+        var focused: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
+              let raw = focused else { return nil }
+        let element = raw as! AXUIElement
+        return isEditable(element) ? element : nil
+    }
+
+    static func isEditable(_ el: AXUIElement) -> Bool {
+        let role = (str(el, kAXRoleAttribute) ?? "")
+        let sub = (str(el, kAXSubroleAttribute) ?? "").lowercased()
+        if role != "AXTextArea" && role != "AXTextField" { return false }
+        if role.localizedCaseInsensitiveContains("secure") || sub.contains("search") || sub.contains("secure") {
+            return false
+        }
+        var settable = DarwinBoolean(false)
+        if AXUIElementIsAttributeSettable(el, kAXSelectedTextAttribute as CFString, &settable) == .success, settable.boolValue {
+            return true
+        }
+        settable = DarwinBoolean(false)
+        if AXUIElementIsAttributeSettable(el, kAXValueAttribute as CFString, &settable) == .success, settable.boolValue {
+            return true
+        }
+        return false
+    }
+
+    static func insert(_ text: String, into el: AXUIElement) -> Bool {
+        AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        if AXUIElementSetAttributeValue(el, kAXSelectedTextAttribute as CFString, text as CFString) == .success {
+            return true
+        }
+        let existing = (str(el, kAXValueAttribute) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if existing.count > 1 { return false }
+        return AXUIElementSetAttributeValue(el, kAXValueAttribute as CFString, text as CFString) == .success
     }
 
     static func screenScene(_ text: String, pid: pid_t) -> String? {
