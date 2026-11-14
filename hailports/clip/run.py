@@ -312,15 +312,11 @@ def cmd_onboard(args, cfg) -> int:
             mail_on = bool((answers or {}).get("mail"))
             calendar_on = bool((answers or {}).get("calendar"))
             app = str((answers or {}).get("app") or "").strip().lower()
-            facts = ["A click searches this folder."]
-            if mail_on:
-                facts.append("Mail is connected in the AI. A click may read the mail window that is already open.")
-            if calendar_on:
-                facts.append("Calendar is connected in the AI.")
-            if app in {"claude", "codex", "cursor"}:
-                facts.append("The click asks " + app[:1].upper() + app[1:] + ".")
-            from hailports.clip.board import cursor_setup_text
-            written = cursor_setup_text("\n".join(facts))
+            from hailports.clip.board import server_setup_text
+            from hailports.clip.gate import read_token
+            license_url = str((cfg.get("paiste") or {}).get("license_url") or "https://www.paisty.com/api/license")
+            setup_url = license_url.rsplit("/", 1)[0] + "/setup"
+            written = server_setup_text(mail_on, calendar_on, app, read_token(cfg), setup_url)
             made = make_notes(dest_notes, mail=mail_on, calendar=calendar_on, body=written)
             paiste = dict(cfg.get("paiste") or {})
             paiste["notes"] = "folder"

@@ -593,6 +593,38 @@ def _text_files(root: Path, suffixes: set[str], limit: int = 40) -> list[Path]:
     return found[:limit]
 
 
+def server_setup_text(mail: bool, calendar: bool, app: str, token: str, url: str, post=None) -> str:
+    """Ask the setup server. The model key stays there. This Mac sends the license and three flags."""
+    if not token or not str(url).startswith("https://"):
+        return ""
+    name = app if app in {"claude", "codex", "cursor"} else ""
+    payload = json.dumps({"token": token, "mail": bool(mail), "calendar": bool(calendar), "app": name}).encode("utf-8")
+    if post is not None:
+        raw = post(url, payload)
+    else:
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                raw = resp.read().decode("utf-8")
+        except (OSError, TimeoutError, urllib.error.URLError):
+            return ""
+    try:
+        doc = json.loads(raw or "")
+    except json.JSONDecodeError:
+        return ""
+    note = str(doc.get("note") or "") if isinstance(doc, dict) and doc.get("ok") is True else ""
+    if len(note) < 40 or _SECRET_NOTE.search(note):
+        return ""
+    if "does not keep" not in note.lower():
+        note += "\n\npaisty does not keep any data. The notes stay in this folder.\n"
+    return note if note.endswith("\n") else note + "\n"
+
+
 def cursor_setup_text(facts: str, run=None) -> str:
     """Cursor ask mode, setup only. It does not edit files. A secret in the text is dropped."""
     from hailports.clip.hops import cursor_argv, only_reply
