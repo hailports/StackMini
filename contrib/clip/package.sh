@@ -37,7 +37,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
-swiftc -O -framework Cocoa -framework ApplicationServices -framework ScreenCaptureKit -framework Vision -o "$APP/Contents/MacOS/paisty" "$HERE/PaisteMenu.swift" "$HERE/PastePath.swift" "$HERE/Onboard.swift"
+swiftc -O -framework Cocoa -framework ApplicationServices -framework ScreenCaptureKit -framework Vision -o "$APP/Contents/MacOS/paisty" "$HERE/PaisteMenu.swift" "$HERE/PastePath.swift" "$HERE/ReplyHint.swift" "$HERE/Onboard.swift"
 sh "$HERE/icon.sh" "$APP"
 cp "$ROOT/hailports/__init__.py" "$ROOT/hailports/llm.py" "$ROOT/hailports/chat_badge.py" "$ROOT/hailports/config.py" "$ROOT/hailports/promptui.py" "$APP/Contents/Resources/py/hailports/"
 cp "$ROOT/hailports/clip/"*.py "$APP/Contents/Resources/py/hailports/clip/"

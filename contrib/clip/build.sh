@@ -23,6 +23,6 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
-swiftc -O -framework Cocoa -framework ApplicationServices -framework ScreenCaptureKit -framework Vision -o "$APP/Contents/MacOS/paisty" "$HERE/PaisteMenu.swift" "$HERE/PastePath.swift" "$HERE/Onboard.swift"
+swiftc -O -framework Cocoa -framework ApplicationServices -framework ScreenCaptureKit -framework Vision -o "$APP/Contents/MacOS/paisty" "$HERE/PaisteMenu.swift" "$HERE/PastePath.swift" "$HERE/ReplyHint.swift" "$HERE/Onboard.swift"
 sh "$HERE/icon.sh" "$APP"
 echo "built $APP"

@@ -192,18 +192,23 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         let isChat = chat.contains { name.contains($0) } || id.contains("slack") || id.contains("teams") || id == "com.apple.mobilesms"
         let isBrowser = isBrowserBundle(id)
         guard exxxxx || isChat || (isBrowser && pages.contains { low.contains($0) }) else { return false }
-        let mine = (doc["field_text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !(doc["selection"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
-        let blocks = doc["blocks"] as? [[String: Any]] ?? []
-        var other = 0
-        for row in blocks {
-            let text = (row["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if text.isEmpty || text == mine || chrome(text) { continue }
-            other += text.count
-            if other >= 40 { return true }
-        }
-        return false
+        // Only when the newest message on screen is someone else's and asks something.
+        // Tab titles, my own item, and an already-answered thread do not glow.
+        return ReplyHint.waiting(
+            fieldText: doc["field_text"] as? String ?? "",
+            blocks: doc["blocks"] as? [[String: Any]] ?? [],
+            title: title,
+            me: meNames,
+            newestFirst: ReplyHint.newestFirst(title: title, bundle: bundle)
+        )
     }
+
+    static let meNames: [String] = {
+        let route = ProcessInfo.processInfo.environment["PAISTE_ROUTE"] ?? (NSHomeDirectory() + "/.config/paiste/route.yaml")
+        let text = (try? String(contentsOfFile: route, encoding: .utf8)) ?? ""
+        return ReplyHint.meNames(routeText: text, fullName: NSFullUserName())
+    }()
 
     /// Browsers by bundle id. A name like "Edge Notes" or "Archive Utility" is not a browser.
     static func isBrowserBundle(_ bundle: String) -> Bool {

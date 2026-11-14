@@ -150,6 +150,8 @@ def claude_argv(binary: str, system: str, user: str) -> list[str]:
         binary, "-p", "--output-format", "text",
         "--permission-mode", "plan", "--permission-prompts", "none",
         "--tools", "", "--no-session-persistence",
+        # No MCP servers, claude.ai connectors, skills, or Chrome: the hop drafts text only.
+        "--strict-mcp-config", "--disable-slash-commands", "--no-chrome",
     ]
     if system:
         argv += ["--system-prompt", system[:6000]]

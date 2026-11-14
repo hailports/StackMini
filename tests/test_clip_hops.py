@@ -525,6 +525,8 @@ def test_premium_hops_skip_local_first_router():
     from hailports.clip.hops import claude_argv, premium_env
     argv = claude_argv("/usr/bin/claude", "rules", "hi")
     assert "--tools" in argv and argv[argv.index("--tools") + 1] == ""
+    assert "--strict-mcp-config" in argv and "--mcp-config" not in argv
+    assert "--disable-slash-commands" in argv and "--no-chrome" in argv
     assert premium_env()["LOCAL_FIRST_ROUTER"] == "0"
 
 
