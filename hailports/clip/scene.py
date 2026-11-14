@@ -506,9 +506,89 @@ def source_notes(reading: Reading, hits: list[dict]) -> list[str]:
     return notes
 
 
+_SCAFFOLD_TAG = re.compile(
+    r"(?is)<\s*/?\s*(?:tool_call|tool_calls|function_call|function_calls|tool|function|"
+    r"thinking|think|scratchpad|reasoning|reflection|search|read|lookup|query|plan|"
+    r"antml:[a-z_]+)\b[^>]*>"
+)
+_SCAFFOLD_FENCE = re.compile(r"(?s)```[A-Za-z0-9_-]*\n?(.*?)```")
+_TOOL_JSON = re.compile(
+    r'(?is)\{[^{}]*"(?:name|tool|tool_name|function|arguments|parameters|action|'
+    r'action_input|tool_call|query|recipient|search|read)"\s*:[^{}]*\}'
+)
+_DROP_PREFIX = re.compile(
+    r"(?i)^\s*(?:search|read|tool(?:[ _]call)?|function(?:[ _]call)?|action(?:[ _]input)?|"
+    r"observation|thoughts?|reasoning|reflection|plan(?:ning)?|lookup|query|fetching|"
+    r"searching|reading|retrieving|gathering|assistant|system|user)\s*[:\-\u2013]"
+)
+_UNWRAP_PREFIX = re.compile(
+    r"(?i)^\s*(?:final answer|answer|draft|reply|response|output|"
+    r"here'?s (?:the|your|a) (?:reply|draft|response))\s*[:\-\u2013]\s*"
+)
+_META_NARRATION = re.compile(
+    r"(?i)(?:^|(?<=[.!?\n]))\s*(?:first,?\s+|now,?\s+|ok(?:ay)?,?\s+)?"
+    r"(?:i'?ll|i will|i'?m going to|i am going to|let me|allow me to|i need to|i should|i'?m gonna)\s+"
+    r"(?:pull up|pull|search|look up|look through|look at|go through|dig through|read through|"
+    r"retrieve|fetch|gather|scan|review|read|check|open|access|load|bring up|skim|find|locate)\b"
+    r"[^.!?\n]*?\b(?:message|messages|thread|threads|history|conversation|conversations|inbox|"
+    r"mail|email|emails|note|notes|context|record|records|document|documents|chat|backlog|"
+    r"above|below|full|rest of|earlier|previous)\b[^.!?\n]*[.!?]?"
+)
+_BRACKETS_ONLY = re.compile(r"^[\[\]{}(),]+$")
+_BARE_LABEL = {
+    "tool", "tool_call", "tool call", "function", "function_call", "assistant",
+    "system", "user", "search", "read", "observation", "thought", "thoughts",
+    "reasoning", "plan", "planning", "final answer", "answer",
+}
+
+
+def _unfence(match: "re.Match") -> str:
+    inner = match.group(1)
+    if (
+        _TOOL_JSON.search(inner)
+        or re.search(r'(?i)"(?:name|arguments|tool|function|query)"\s*:', inner)
+        or re.search(r"(?i)\b(?:tool_call|function_call)\b", inner)
+    ):
+        return ""
+    return inner
+
+
+def strip_scaffold(text: str) -> str:
+    """Strip tool-call wrappers, hop labels, reasoning, and search/read markers.
+
+    The clipboard and the compose box only ever get human prose. A model that
+    leaks its own tool calls, a Search:/Read: blob, or "I'll pull up the full
+    message history" never reaches the reply.
+    """
+    body = text or ""
+    body = _SCAFFOLD_FENCE.sub(_unfence, body)
+    body = _SCAFFOLD_TAG.sub("", body)
+    body = _TOOL_JSON.sub("", body)
+    body = _META_NARRATION.sub(" ", body)
+    kept: list[str] = []
+    for raw in body.splitlines():
+        line = raw.rstrip()
+        probe = line.strip().lower().rstrip(":")
+        if probe in _BARE_LABEL:
+            continue
+        if _DROP_PREFIX.match(line):
+            continue
+        if line.strip() and _BRACKETS_ONLY.match(line.strip()):
+            continue
+        kept.append(_UNWRAP_PREFIX.sub("", line))
+    out = "\n".join(kept)
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    out = re.sub(r"[ \t]{2,}", " ", out).strip()
+    if out:
+        return out
+    # Over-eager line drop: fall back to the tag/json/meta-stripped body only.
+    fb = _META_NARRATION.sub(" ", _TOOL_JSON.sub("", _SCAFFOLD_TAG.sub("", _SCAFFOLD_FENCE.sub(_unfence, text or ""))))
+    return re.sub(r"\n{3,}", "\n\n", fb).strip()
+
+
 def plain_reply(text: str) -> str:
     """Drop a trailing thanks and markdown. The reply is what they paste."""
-    body = strip_signoff(text or "").replace("**", "").replace("__", "")
+    body = strip_signoff(strip_scaffold(text or "")).replace("**", "").replace("__", "")
     body = re.sub(r"(?i)(--\s*)\d+[.)]\s+", r"\1", body)
     body = re.sub(r"(?i)\s*lmk if you need anything else[!?.]*", "", body)
     parts = re.split(r"(?<=[.!?])\s+", body.strip())
@@ -591,7 +671,7 @@ def run_inbox(inbox: Path, outbox: Path, complete, search=None, folders=None, co
         prepared = prepare(doc, search=search, folders=folders)
         item = {"file": path.name, "ok": bool(prepared.get("ok")), "reason": prepared.get("reason") or "", "sent": False}
         if prepared.get("ok"):
-            text = str(complete(prepared["messages"]) or "").strip()
+            text = plain_reply(str(complete(prepared["messages"]) or ""))
             item["text"] = text
             digest = hashlib.sha256(path.name.encode("utf-8")).hexdigest()[:12]
             (outbox / f"{path.stem}-{digest}.json").write_text(
