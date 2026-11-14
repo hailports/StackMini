@@ -819,7 +819,7 @@ def server_setup_text(mail: bool, calendar: bool, app: str, token: str, url: str
         req = urllib.request.Request(
             url,
             data=payload,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "User-Agent": "paisty/1"},
             method="POST",
         )
         try:
