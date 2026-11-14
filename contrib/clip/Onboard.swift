@@ -427,9 +427,9 @@ final class SetupBoard: NSObject, NSWindowDelegate {
 
     func notesCopy() -> String {
         if foundVaults.isEmpty && obsidian.isEmpty {
-            return "No Obsidian vault turned up in the usual places. You can skip this. paisty does not upload notes and does not keep them."
+            return "No notes folder yet. One click makes one from the mail and calendar you just connected. A click searches that folder, so the reply is not a guess."
         }
-        return "We found notes on this Mac. Press the folder, then add that same folder in your AI. paisty does not upload it and does not keep it."
+        return "A notes folder is already on this Mac. One click uses it and remembers the mail and calendar from the last steps."
     }
 
     func reviewCopy() -> String {
@@ -483,17 +483,23 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         var y = CGFloat(0)
         let paths = notePaths()
         if paths.isEmpty {
-            y = caption("You can skip this.", y)
+            y = tagButton("Set up my notes", #selector(makeNotes(_:)), 0, y)
         }
         for (i, path) in paths.enumerated() {
             let name = URL(fileURLWithPath: path).lastPathComponent
-            y = tagButton(name.isEmpty ? "Use this folder" : name, #selector(useVault(_:)), i, y)
+            y = tagButton("Use " + (name.isEmpty ? "this folder" : name), #selector(useVault(_:)), i, y)
+        }
+        if !paths.isEmpty {
+            y = tagButton("Start a new notes folder", #selector(makeNotes(_:)), 0, y)
         }
         if !notesPath.isEmpty {
-            y = caption("Folder ready: " + URL(fileURLWithPath: notesPath).lastPathComponent, y)
+            y = caption("Ready. A click searches " + URL(fileURLWithPath: notesPath).lastPathComponent + ".", y)
         }
-        toggle("notes", "Read that folder when a click needs it", notesOn, y)
-        extraHeight = y + 36
+        let done = [mailFront ? "mail" : "", calendarOn ? "calendar" : ""].filter { !$0.isEmpty }
+        if !done.isEmpty {
+            y = caption("From the last steps: " + done.joined(separator: " and ") + ".", y)
+        }
+        extraHeight = y + 8
     }
 
     func aiPage() {
@@ -697,13 +703,58 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         return obsidian.isEmpty ? [] : [obsidian]
     }
 
+    @objc func makeNotes(_ sender: NSButton) {
+        seedNotes(path: "")
+    }
+
+    func seedNotes(path: String) {
+        capture()
+        var payload: [String: Any] = ["mail": mailFront, "calendar": calendarOn]
+        if !path.isEmpty { payload["path"] = path }
+        guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("paisty-notes.json")
+        do {
+            try data.write(to: url, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        } catch {
+            feedNote = "The notes folder was not created."
+            render()
+            return
+        }
+        statusField.stringValue = "Setting up notes."
+        DispatchQueue.global(qos: .userInitiated).async {
+            let done = SetupBoard.run(["onboard", "--pull", "notes", "--answers", url.path])
+            try? FileManager.default.removeItem(at: url)
+            let lines = done.out.split(separator: "\n").map { String($0) }
+            let folder = lines.first { $0.hasPrefix("path ") }.map { String($0.dropFirst(5)) } ?? ""
+            DispatchQueue.main.async {
+                if folder.isEmpty || done.code != 0 {
+                    self.feedNote = "The notes folder was not created."
+                    self.statusField.stringValue = self.feedNote
+                    self.render()
+                    return
+                }
+                self.notesOn = true
+                self.notesPath = folder
+                self.feedNote = "Notes are ready."
+                self.statusField.stringValue = "A click searches that folder."
+                let app = "/Applications/Obsidian.app"
+                if FileManager.default.fileExists(atPath: app) {
+                    NSWorkspace.shared.open(
+                        [URL(fileURLWithPath: folder)],
+                        withApplicationAt: URL(fileURLWithPath: app),
+                        configuration: NSWorkspace.OpenConfiguration()
+                    )
+                }
+                self.render()
+            }
+        }
+    }
+
     @objc func useVault(_ sender: NSButton) {
         let paths = notePaths()
         guard paths.indices.contains(sender.tag) else { return }
-        notesOn = true
-        notesPath = paths[sender.tag]
-        statusField.stringValue = "That folder stays on this Mac. Add it in your AI too. paisty does not upload it."
-        render()
+        seedNotes(path: paths[sender.tag])
     }
 
     @objc func useFoundModel(_ sender: NSButton) {

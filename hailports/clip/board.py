@@ -593,6 +593,22 @@ def _text_files(root: Path, suffixes: set[str], limit: int = 40) -> list[Path]:
     return found[:limit]
 
 
+def make_notes(dest: Path, mail: bool = False, calendar: bool = False) -> dict:
+    """One folder a click can search. Does not overwrite a note that is already there."""
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / ".obsidian").mkdir(exist_ok=True)
+    note = dest / "Paisty.md"
+    if not note.is_file():
+        lines = ["# Notes", ""]
+        if mail:
+            lines.append("Mail is connected in the AI. A click may read the mail window that is already open.")
+        if calendar:
+            lines.append("Calendar is connected in the AI.")
+        lines.append("A click searches this folder. It does not invent a fact that is not written here.")
+        note.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return {"added": 1, "path": str(dest), "need": ""}
+
+
 def pull_source(name: str, dest: Path, token: str = "", text: str = "", doc: dict | None = None,
                 folder: Path | None = None, hook: Path | None = None) -> dict:
     """Turn one setup source into text files. The password is not kept."""

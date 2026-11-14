@@ -305,6 +305,30 @@ def cmd_onboard(args, cfg) -> int:
         text = ""
         doc = None
         folder = None
+        if kind == "notes":
+            from hailports.clip.board import make_notes
+            chosen = str((answers or {}).get("path") or "").strip()
+            dest_notes = Path(chosen) if chosen and Path(chosen).is_dir() else home / "Documents" / "paisty-notes"
+            made = make_notes(
+                dest_notes,
+                mail=bool((answers or {}).get("mail")),
+                calendar=bool((answers or {}).get("calendar")),
+            )
+            paiste = dict(cfg.get("paiste") or {})
+            paiste["notes"] = "folder"
+            paiste["notes_dir"] = made["path"]
+            route = dict(cfg)
+            route["paiste"] = paiste
+            dest = _route_dest(args)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            save_file(dest, route)
+            try:
+                dest.chmod(0o600)
+            except OSError:
+                pass
+            print("added 1")
+            print("path " + made["path"])
+            return 0
         if kind == "apple-notes":
             text = apple_notes_text()
         elif kind == "monday":
