@@ -1,0 +1,181 @@
+import Cocoa
+import ApplicationServices
+
+/// Paste-path helpers shared by the menu app and its harness test.
+/// Nothing here presses Return or sends anything. Cmd-V only lands in the app
+/// that owns the remembered field, and only when that app is frontmost.
+enum PastePath {
+    // MARK: debug log (~/.config/paiste/paste-debug.log, 0600, capped)
+
+    static let logPath = NSHomeDirectory() + "/.config/paiste/paste-debug.log"
+    static let logLock = NSLock()
+
+    static func note(_ line: String) {
+        logLock.lock()
+        defer { logLock.unlock() }
+        let fm = FileManager.default
+        if let attrs = try? fm.attributesOfItem(atPath: logPath),
+           let size = attrs[.size] as? NSNumber, size.intValue > 256_000 {
+            try? fm.removeItem(atPath: logPath)
+        }
+        if !fm.fileExists(atPath: logPath) {
+            fm.createFile(atPath: logPath, contents: nil, attributes: [.posixPermissions: 0o600])
+        }
+        guard let handle = FileHandle(forWritingAtPath: logPath) else { return }
+        defer { handle.closeFile() }
+        handle.seekToEndOfFile()
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        if let data = (stamp + " " + line + "\n").data(using: .utf8) { handle.write(data) }
+    }
+
+    // MARK: AX reads
+
+    static func str(_ el: AXUIElement, _ attr: String) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(el, attr as CFString, &value) == .success else { return nil }
+        return value as? String
+    }
+
+    static func element(_ el: AXUIElement, _ attr: String) -> AXUIElement? {
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(el, attr as CFString, &raw) == .success, let raw,
+              CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
+        return (raw as! AXUIElement)
+    }
+
+    static func size(_ el: AXUIElement) -> CGSize {
+        var raw: CFTypeRef?
+        var out = CGSize.zero
+        if AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &raw) == .success, let raw {
+            AXValueGetValue(raw as! AXValue, .cgSize, &out)
+        }
+        return out
+    }
+
+    /// Role, subrole, size, web flag. No field contents.
+    static func describe(_ el: AXUIElement?) -> String {
+        guard let el else { return "none" }
+        let dims = size(el)
+        return "\(str(el, kAXRoleAttribute) ?? "?")/\(str(el, kAXSubroleAttribute) ?? "-") \(Int(dims.width))x\(Int(dims.height)) web=\(isWebText(el))"
+    }
+
+    /// A WebKit/Electron contenteditable (New Outlook body, Gmail, Teams, Slack).
+    /// Their AXSelectedText setter reports success but often inserts nothing.
+    static func isWebText(_ el: AXUIElement) -> Bool {
+        var names: CFArray?
+        if AXUIElementCopyAttributeNames(el, &names) == .success, let list = names as? [String] {
+            if list.contains("AXStartTextMarker") || list.contains("AXEditableAncestor") || list.contains("AXDOMIdentifier") {
+                return true
+            }
+        }
+        var node = el
+        for _ in 0..<4 {
+            guard let up = element(node, kAXParentAttribute) else { break }
+            if str(up, kAXRoleAttribute) == "AXWebArea" { return true }
+            node = up
+        }
+        return false
+    }
+
+    // MARK: verification
+
+    static func squash(_ text: String) -> String {
+        text.lowercased().unicodeScalars
+            .filter { CharacterSet.alphanumerics.contains($0) }
+            .map(String.init).joined()
+    }
+
+    /// A short fingerprint of the draft's opening words.
+    static func probe(_ text: String) -> String {
+        String(squash(text).prefix(28))
+    }
+
+    static func hits(_ probe: String, in el: AXUIElement) -> Int {
+        guard !probe.isEmpty, let value = str(el, kAXValueAttribute) else { return 0 }
+        return squash(value).components(separatedBy: probe).count - 1
+    }
+
+    // MARK: front app + keys
+
+    static func frontPID() -> pid_t {
+        NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
+    }
+
+    /// Bring the target app forward and wait until it really is frontmost.
+    static func ensureFront(_ pid: pid_t) -> Bool {
+        if frontPID() == pid { return true }
+        guard let app = NSRunningApplication(processIdentifier: pid) else { return false }
+        app.activate(options: [.activateIgnoringOtherApps])
+        for _ in 0..<12 {
+            Thread.sleep(forTimeInterval: 0.08)
+            if frontPID() == pid { return true }
+        }
+        return frontPID() == pid
+    }
+
+    /// Cmd-V only. No Return, no other keys.
+    static func commandV() -> Bool {
+        guard let source = CGEventSource(stateID: .combinedSessionState),
+              let down = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false) else { return false }
+        down.flags = .maskCommand
+        up.flags = .maskCommand
+        down.post(tap: .cgSessionEventTap)
+        Thread.sleep(forTimeInterval: 0.02)
+        up.post(tap: .cgSessionEventTap)
+        return true
+    }
+
+    /// Place text in a field the user already had open. Returns the path that
+    /// landed ("ax-insert", "ax-value", "cmdv"), "cmdv-unverified" when the
+    /// keystroke went to the right app but AX could not confirm it, or nil when
+    /// nothing was attempted that could have landed. The caller has already put
+    /// the text on the clipboard.
+    static func insert(_ text: String, into el: AXUIElement, pid: pid_t) -> String? {
+        let role = str(el, kAXRoleAttribute) ?? ""
+        let web = isWebText(el)
+        let mark = probe(text)
+        let before = hits(mark, in: el)
+        note("insert target \(describe(el)) front=\(frontPID() == pid)")
+        if !web {
+            AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+            let rc = AXUIElementSetAttributeValue(el, kAXSelectedTextAttribute as CFString, text as CFString)
+            Thread.sleep(forTimeInterval: 0.12)
+            let landed = hits(mark, in: el) > before
+            note("  ax-selectedtext rc=\(rc.rawValue) landed=\(landed)")
+            if landed { return "ax-insert" }
+            if role == "AXTextArea" || role == "AXTextField" {
+                let existing = (str(el, kAXValueAttribute) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if existing.count <= 1 {
+                    let vrc = AXUIElementSetAttributeValue(el, kAXValueAttribute as CFString, text as CFString)
+                    Thread.sleep(forTimeInterval: 0.12)
+                    let ok = hits(mark, in: el) > before
+                    note("  ax-value rc=\(vrc.rawValue) landed=\(ok)")
+                    if ok { return "ax-value" }
+                }
+            }
+        } else {
+            note("  web field: skip AX text set (no-op on WebKit), use Cmd-V")
+        }
+        // Last resort: Cmd-V into the remembered app, only when it is frontmost.
+        guard ensureFront(pid) else {
+            note("  cmdv skipped: target app not frontmost")
+            return nil
+        }
+        AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        Thread.sleep(forTimeInterval: 0.08)
+        guard frontPID() == pid, commandV() else {
+            note("  cmdv skipped: focus moved")
+            return nil
+        }
+        for _ in 0..<10 {
+            Thread.sleep(forTimeInterval: 0.1)
+            if hits(mark, in: el) > before {
+                note("  cmdv landed")
+                return "cmdv"
+            }
+        }
+        note("  cmdv sent, not confirmed by AX")
+        return "cmdv-unverified"
+    }
+}

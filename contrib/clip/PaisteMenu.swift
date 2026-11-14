@@ -359,19 +359,28 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         }
         let bundle = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? "?"
         var path = "copied"
+        PastePath.note("deliver app=\(bundle) chars=\(text.count) remembered=\(PastePath.describe(field)) front=\(PastePath.frontPID() == pid)")
         if pid != 0 {
-            if let field, Self.alive(field, pid: pid), let won = Self.insert(text, into: field, pid: pid) {
-                path = won
-            } else {
+            var remembered: AXUIElement?
+            if let field, Self.alive(field, pid: pid) {
+                remembered = field
+                if let won = Self.insert(text, into: field, pid: pid) { path = won }
+            }
+            if path == "copied" {
                 Self.activate(pid)
-                if let fresh = Self.focusedInput(pid: pid, deep: true), let won = Self.insert(text, into: fresh, pid: pid) {
+                let fresh = Self.focusedInput(pid: pid, deep: true)
+                PastePath.note("  deep target \(PastePath.describe(fresh))")
+                if let fresh, remembered == nil || !CFEqual(fresh, remembered!),
+                   let won = Self.insert(text, into: fresh, pid: pid) {
                     path = won
-                } else if CGPreflightScreenCaptureAccess(), let composer = Self.composerPoint(pid: pid),
-                          Self.clickPaste(pid: pid, at: composer) {
-                    path = "ocr-cmdv"
                 }
             }
+            if path == "copied", CGPreflightScreenCaptureAccess(), PastePath.ensureFront(pid),
+               let composer = Self.composerPoint(pid: pid), Self.clickPaste(pid: pid, at: composer) {
+                path = "ocr-cmdv"
+            }
         }
+        PastePath.note("  final path=\(path)")
         log.error("deliver \(path, privacy: .public) app \(bundle, privacy: .public)")
         return path
     }
@@ -380,8 +389,9 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         stopSpin()
         markHandled(draftSig)
         let pasted = path != "copied"
-        item?.button?.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: pasted ? "Pasted" : "Copied")
-        item?.button?.toolTip = pasted ? "Pasted" : "Copied"
+        let tip = path == "cmdv-unverified" ? "Pasted. If it is not there, press Cmd-V" : (pasted ? "Pasted" : "Copied. Click in the message box and press Cmd-V")
+        item?.button?.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: tip)
+        item?.button?.toolTip = tip
         item?.button?.appearsDisabled = false
         log.error("\(pasted ? "pasted" : "copied", privacy: .public) \(path, privacy: .public) \(note, privacy: .public)")
         busy = false
@@ -774,39 +784,14 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         return parts.joined(separator: "|")
     }
 
-    /// Returns "ax-insert" or "ax-cmdv" on success, nil when the field would not take the text. Never presses Return.
+    /// Returns the path that landed, or nil when the field would not take the text. Never presses Return.
     static func insert(_ text: String, into el: AXUIElement, pid: pid_t) -> String? {
-        let before = signature(el)
-        AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-        if AXUIElementSetAttributeValue(el, kAXSelectedTextAttribute as CFString, text as CFString) == .success {
-            Thread.sleep(forTimeInterval: 0.12)
-            if signature(el) != before { return "ax-insert" }
-        } else {
-            let role = str(el, kAXRoleAttribute) ?? ""
-            if role == "AXTextArea" || role == "AXTextField" {
-                let existing = (str(el, kAXValueAttribute) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                if existing.count <= 1,
-                   AXUIElementSetAttributeValue(el, kAXValueAttribute as CFString, text as CFString) == .success {
-                    return "ax-insert"
-                }
-            }
-        }
-        guard isEditable(el) || editableTarget(el) != nil else { return nil }
-        activate(pid)
-        AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-        return commandV() ? "ax-cmdv" : nil
+        PastePath.insert(text, into: el, pid: pid)
     }
 
     /// Cmd-V into the frontmost app. Only Cmd-V; no Return.
     static func commandV() -> Bool {
-        guard let source = CGEventSource(stateID: .combinedSessionState) else { return false }
-        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true)
-        keyDown?.flags = .maskCommand
-        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false)
-        keyUp?.flags = .maskCommand
-        keyDown?.post(tap: .cgSessionEventTap)
-        keyUp?.post(tap: .cgSessionEventTap)
-        return keyDown != nil
+        PastePath.commandV()
     }
 
     static func composerPoint(pid: pid_t) -> CGPoint? {
