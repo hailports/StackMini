@@ -279,21 +279,30 @@ def as_writer(text: str, names: list[str] | None = None) -> str:
 
 
 def trim_overreach(text: str, sources: str = "") -> str:
-    """Drop sentences that promise work or invent a numbered procedure."""
-    chunks = re.split(r"(?<=[.!?])\s+|\n+", (text or "").strip())
-    kept = []
-    for chunk in chunks:
-        piece = chunk.strip()
-        if not piece:
+    """Drop meta narration, promises with an invented deadline, and invented numbered procedures. Keeps line breaks."""
+    out_lines = []
+    for line in (text or "").strip().splitlines():
+        if not line.strip():
+            if out_lines and out_lines[-1] != "":
+                out_lines.append("")
             continue
-        if _META.search(piece):
-            continue
-        if _PROMISE.search(piece) and _invented_when(piece, sources):
-            continue
-        if _STEPS.search(piece) and not _STEPS.search(sources or ""):
-            continue
-        kept.append(piece)
-    return " ".join(kept).strip()
+        kept = []
+        for chunk in re.split(r"(?<=[.!?])\s+", line.strip()):
+            piece = chunk.strip()
+            if not piece:
+                continue
+            if _META.search(piece):
+                continue
+            if _PROMISE.search(piece) and _invented_when(piece, sources):
+                continue
+            if _STEPS.search(piece) and not _STEPS.search(sources or ""):
+                continue
+            kept.append(piece)
+        if kept:
+            out_lines.append(" ".join(kept))
+    while out_lines and out_lines[-1] == "":
+        out_lines.pop()
+    return "\n".join(out_lines).strip()
 
 
 def _invented_when(piece: str, sources: str) -> bool:
@@ -688,10 +697,13 @@ def plain_reply(text: str) -> str:
     body = strip_signoff(strip_scaffold(text or "")).replace("**", "").replace("__", "")
     body = re.sub(r"(?i)(--\s*)\d+[.)]\s+", r"\1", body)
     body = re.sub(r"(?i)\s*lmk if you need anything else[!?.]*", "", body)
-    parts = re.split(r"(?<=[.!?])\s+", body.strip())
-    while parts and re.match(r"(?i)^thanks\b", parts[-1].strip()):
-        parts.pop()
-    return " ".join(parts).strip()
+    body = re.sub(r"[ \t]*\n[ \t]*\n[\s]*", "\n\n", body.strip())
+    while True:
+        cut = re.search(r"(?is)(?:^|(?<=[.!?])\s+|\n+)thanks\b[^.!?\n]*[.!?]*\s*$", body)
+        if not cut or cut.start() == 0 and len(body) > 60:
+            break
+        body = body[:cut.start()].rstrip()
+    return body.strip()
 
 
 def runner_context(messages: list[dict], note: str) -> list[dict]:
