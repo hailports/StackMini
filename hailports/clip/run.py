@@ -117,7 +117,8 @@ def _with_points(messages: list[dict], points: list[str]) -> list[dict]:
     if not points:
         return messages
     lines = [
-        "Reply only to what they just said. If they already answered an older question, do not answer it again.",
+        "Cover every point below that is still open. Do not answer only the last line.",
+        "One short line for each point. Use I, not we.",
         "Do not turn their update into a new rule they did not say.",
         "Do not start with a number. Do not end with lmk.",
     ]
@@ -193,8 +194,8 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
         from hailports.clip.scene import runner_context
         prepared["messages"] = runner_context(prepared.get("messages") or [], note)
     sources = "\n".join(prepared.get("sources") or [])
-    from hailports.clip.board import latest_from_other, misses_points, open_points, thin_reply
-    points = latest_from_other(sources) or open_points(sources)
+    from hailports.clip.board import misses_points, thin_reply, thread_points
+    points = thread_points(sources)
     prepared["messages"] = _with_points(prepared.get("messages") or [], points)
     try:
         hops = endpoints_from(route)

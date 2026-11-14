@@ -5,7 +5,7 @@ from pathlib import Path
 from hailports.llm import ModelOffline
 from hailports.clip.board import (
     BoardError, apple_note_pages, apply_board, code_phrases, cursor_setup_text, discover, guide, ingest_files, latest_from_other, make_notes, server_setup_text,
-    machine_context, misses_points, model_ids, monday_pages, open_points, parse_hop, probe_model, pull_source,
+    machine_context, misses_points, model_ids, monday_pages, open_points, parse_hop, probe_model, pull_source, thread_points,
     scan_models, show_board, ssh_host_names, store_api_key, thin_reply,
 )
 from hailports.clip.run import lookup_query
@@ -476,6 +476,17 @@ Ramana to lead the team, and change dealer portal like SP portal in the next 6 m
     assert thin_reply(vague, notes)
     assert not thin_reply("add it on valmontSalesOrdersListView next to Search orders", notes)
     assert misses_points("the button goes on that list.", points)
+    screen_thread = """
+Ada, Kim
+1. Ship the standards note to the leads.
+2. Wait for the guidebook before the next review.
+Ada, Kim
+The budget changes only if they are small enough to fit.
+"""
+    both = thread_points(screen_thread)
+    assert any("standards" in line.lower() for line in both)
+    assert any("budget" in line.lower() for line in both)
+    assert misses_points("noted on the budget changes.", both)
 
 
 def test_setup_sources_keep_notes_and_drop_a_secret(tmp_path):

@@ -530,6 +530,15 @@ def open_points(text: str) -> list[str]:
     return unique[:8]
 
 
+def thread_points(text: str) -> list[str]:
+    """Numbered asks and the latest lines. An older open item stays on the list."""
+    found = []
+    for point in open_points(text) + latest_from_other(text):
+        if point not in found:
+            found.append(point)
+    return found[:6]
+
+
 def misses_points(reply: str, points: list[str]) -> bool:
     """True when two or more asks are on screen and the reply skips one."""
     if len(points) < 2:
