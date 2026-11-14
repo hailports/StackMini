@@ -364,7 +364,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
                 path = won
             } else {
                 Self.activate(pid)
-                if let fresh = Self.focusedInput(pid: pid), let won = Self.insert(text, into: fresh, pid: pid) {
+                if let fresh = Self.focusedInput(pid: pid, deep: true), let won = Self.insert(text, into: fresh, pid: pid) {
                     path = won
                 } else if CGPreflightScreenCaptureAccess(), let composer = Self.composerPoint(pid: pid),
                           Self.clickPaste(pid: pid, at: composer) {
@@ -636,7 +636,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
     static var manualAX = Set<pid_t>()
     static let manualAXLock = NSLock()
 
-    static func focusedInput(pid: pid_t) -> AXUIElement? {
+    static func focusedInput(pid: pid_t, deep: Bool = false) -> AXUIElement? {
         let app = AXUIElementCreateApplication(pid)
         manualAXLock.lock()
         let fresh = manualAX.insert(pid).inserted
@@ -653,7 +653,47 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         for el in candidates {
             if let target = editableTarget(el) { return target }
         }
+        // New Outlook and other web-backed composers expose a real AXTextArea for the
+        // message body that is not the app-level focused element, so the probes above
+        // miss it. Only on the paste path (deep), and only after they return nothing,
+        // search the window for the body field. This cannot change an app that already
+        // resolved a target above.
+        if deep,
+           let window = element(app, kAXFocusedWindowAttribute) ?? element(app, kAXMainWindowAttribute),
+           let found = bestEditable(in: window) {
+            return found
+        }
         return nil
+    }
+
+    /// Depth- and breadth-bounded search for the largest editable text box in a window.
+    /// Prefers an AXTextArea (a message body) over a one-line AXTextField (a search box).
+    static func bestEditable(in root: AXUIElement) -> AXUIElement? {
+        var queue: [(AXUIElement, Int)] = [(root, 0)]
+        var scanned = 0
+        var best: AXUIElement?
+        var bestScore: Double = -1
+        while !queue.isEmpty, scanned < 1600 {
+            let (node, depth) = queue.removeFirst()
+            scanned += 1
+            if depth > 0, !excluded(node), isEditable(node) {
+                let role = str(node, kAXRoleAttribute) ?? ""
+                let dims = box(node)
+                let area = (dims["w"] ?? 0) * (dims["h"] ?? 0)
+                var score = area
+                if role == "AXTextArea" { score += 5_000_000 }
+                if role == "AXTextArea" || area >= 6000 {
+                    if score > bestScore { bestScore = score; best = node }
+                }
+            }
+            if depth >= 12 { continue }
+            var kids: CFTypeRef?
+            if AXUIElementCopyAttributeValue(node, kAXChildrenAttribute as CFString, &kids) == .success,
+               let list = kids as? [AXUIElement] {
+                for child in list.prefix(60) { queue.append((child, depth + 1)) }
+            }
+        }
+        return best
     }
 
     static func element(_ el: AXUIElement, _ attr: String) -> AXUIElement? {
