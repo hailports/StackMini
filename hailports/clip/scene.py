@@ -516,6 +516,35 @@ _TOOL_JSON = re.compile(
     r'(?is)\{[^{}]*"(?:name|tool|tool_name|function|arguments|parameters|action|'
     r'action_input|tool_call|query|recipient|search|read)"\s*:[^{}]*\}'
 )
+_TOOL_KEY = re.compile(
+    r'"(?:name|tool|tool_name|function|arguments|parameters|action|action_input|'
+    r'tool_call|query|recipient|search|read)"\s*:'
+)
+
+
+def _strip_tool_objects(body: str) -> str:
+    """Remove a balanced {...} JSON object that holds a tool-call key, nesting and all."""
+    out: list[str] = []
+    i, n = 0, len(body)
+    while i < n:
+        if body[i] == "{":
+            depth, j = 0, i
+            while j < n:
+                if body[j] == "{":
+                    depth += 1
+                elif body[j] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            if depth == 0 and j < n and _TOOL_KEY.search(body[i : j + 1]):
+                i = j + 1
+                continue
+        out.append(body[i])
+        i += 1
+    return "".join(out)
+
+
 _DROP_PREFIX = re.compile(
     r"(?i)^\s*(?:search|read|tool(?:[ _]call)?|function(?:[ _]call)?|action(?:[ _]input)?|"
     r"observation|thoughts?|reasoning|reflection|plan(?:ning)?|lookup|query|fetching|"
@@ -546,7 +575,7 @@ def _unfence(match: "re.Match") -> str:
     inner = match.group(1)
     if (
         _TOOL_JSON.search(inner)
-        or re.search(r'(?i)"(?:name|arguments|tool|function|query)"\s*:', inner)
+        or _TOOL_KEY.search(inner)
         or re.search(r"(?i)\b(?:tool_call|function_call)\b", inner)
     ):
         return ""
@@ -563,7 +592,7 @@ def strip_scaffold(text: str) -> str:
     body = text or ""
     body = _SCAFFOLD_FENCE.sub(_unfence, body)
     body = _SCAFFOLD_TAG.sub("", body)
-    body = _TOOL_JSON.sub("", body)
+    body = _strip_tool_objects(body)
     body = _META_NARRATION.sub(" ", body)
     kept: list[str] = []
     for raw in body.splitlines():
@@ -582,7 +611,7 @@ def strip_scaffold(text: str) -> str:
     if out:
         return out
     # Over-eager line drop: fall back to the tag/json/meta-stripped body only.
-    fb = _META_NARRATION.sub(" ", _TOOL_JSON.sub("", _SCAFFOLD_TAG.sub("", _SCAFFOLD_FENCE.sub(_unfence, text or ""))))
+    fb = _META_NARRATION.sub(" ", _strip_tool_objects(_SCAFFOLD_TAG.sub("", _SCAFFOLD_FENCE.sub(_unfence, text or ""))))
     return re.sub(r"\n{3,}", "\n\n", fb).strip()
 
 
