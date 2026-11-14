@@ -309,11 +309,19 @@ def cmd_onboard(args, cfg) -> int:
             from hailports.clip.board import make_notes
             chosen = str((answers or {}).get("path") or "").strip()
             dest_notes = Path(chosen) if chosen and Path(chosen).is_dir() else home / "Documents" / "paisty-notes"
-            made = make_notes(
-                dest_notes,
-                mail=bool((answers or {}).get("mail")),
-                calendar=bool((answers or {}).get("calendar")),
-            )
+            mail_on = bool((answers or {}).get("mail"))
+            calendar_on = bool((answers or {}).get("calendar"))
+            app = str((answers or {}).get("app") or "").strip().lower()
+            facts = ["A click searches this folder."]
+            if mail_on:
+                facts.append("Mail is connected in the AI. A click may read the mail window that is already open.")
+            if calendar_on:
+                facts.append("Calendar is connected in the AI.")
+            if app in {"claude", "codex", "cursor"}:
+                facts.append("The click asks " + app[:1].upper() + app[1:] + ".")
+            from hailports.clip.board import cursor_setup_text
+            written = cursor_setup_text("\n".join(facts))
+            made = make_notes(dest_notes, mail=mail_on, calendar=calendar_on, body=written)
             paiste = dict(cfg.get("paiste") or {})
             paiste["notes"] = "folder"
             paiste["notes_dir"] = made["path"]
@@ -414,6 +422,11 @@ def cmd_onboard(args, cfg) -> int:
         dest.chmod(0o600)
     except OSError:
         pass
+    from hailports.clip.board import tie_notes
+    order = list(updated.get("order") or [])
+    app = next((name for name in order if name in {"claude", "codex", "cursor"}), "")
+    local = next((name for name in order if name not in {"claude", "codex", "cursor"}), "")
+    tie_notes(str(updated.get("notes_dir") or ""), app, local)
     print(str(dest))
     print("sent false")
     return 0

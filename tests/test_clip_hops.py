@@ -4,7 +4,7 @@ from pathlib import Path
 
 from hailports.llm import ModelOffline
 from hailports.clip.board import (
-    BoardError, apple_note_pages, apply_board, code_phrases, discover, guide, ingest_files, latest_from_other, make_notes,
+    BoardError, apple_note_pages, apply_board, code_phrases, cursor_setup_text, discover, guide, ingest_files, latest_from_other, make_notes,
     misses_points, model_ids, monday_pages, open_points, parse_hop, probe_model, pull_source,
     scan_models, show_board, ssh_host_names, store_api_key, thin_reply,
 )
@@ -461,4 +461,7 @@ def test_setup_sources_keep_notes_and_drop_a_secret(tmp_path):
     body = (Path(made["path"]) / "Paisty.md").read_text(encoding="utf-8")
     assert "Mail is connected" in body
     assert "Calendar is connected" not in body
+    note = cursor_setup_text("Mail is connected.", run=lambda prompt: "Mail is connected in the AI. A click searches this folder and does not invent a fact.")
+    assert "does not keep any data" in note
+    assert cursor_setup_text("x", run=lambda prompt: "password is secret and this note is long enough to pass") == ""
     assert (Path(made["path"]) / ".obsidian").is_dir()

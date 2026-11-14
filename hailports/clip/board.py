@@ -593,18 +593,82 @@ def _text_files(root: Path, suffixes: set[str], limit: int = 40) -> list[Path]:
     return found[:limit]
 
 
-def make_notes(dest: Path, mail: bool = False, calendar: bool = False) -> dict:
+def cursor_setup_text(facts: str, run=None) -> str:
+    """Cursor ask mode, setup only. It does not edit files. A secret in the text is dropped."""
+    from hailports.clip.hops import cursor_argv, only_reply
+    prompt = (
+        "Write a short markdown note for a notes folder on this Mac. "
+        "Use only the facts below. Do not invent messages, accounts, or passwords. "
+        "No code fence. Do not mention Cursor.\n\n"
+        + (facts or "").strip()
+        + "\n\npaisty does not keep any data. The notes stay in this folder."
+    )
+    if run is not None:
+        raw = run(prompt) or ""
+    else:
+        if app_status("cursor") != "signed-in":
+            return ""
+        binary = app_bin("cursor")
+        if not binary:
+            return ""
+        try:
+            done = subprocess.run(
+                cursor_argv(binary, prompt),
+                cwd=str(Path.home()),
+                capture_output=True,
+                check=False,
+                timeout=90,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
+        if done.returncode != 0:
+            return ""
+        raw = (done.stdout or b"").decode("utf-8", "replace")
+    text = only_reply(str(raw))
+    if len(text) < 40 or _SECRET_NOTE.search(text):
+        return ""
+    if "does not keep" not in text.lower():
+        text += "\n\npaisty does not keep any data. The notes stay in this folder."
+    return text.strip() + "\n"
+
+
+def tie_notes(path: str, app: str = "", local: str = "") -> None:
+    """Name the model in the notes folder. Does not overwrite the rest of the note."""
+    note = Path(path or "") / "Paisty.md"
+    if not note.is_file():
+        return
+    try:
+        text = note.read_text(encoding="utf-8")
+    except OSError:
+        return
+    extra = []
+    if app in {"claude", "codex", "cursor"}:
+        line = "The click asks " + app[:1].upper() + app[1:] + "."
+        if line not in text:
+            extra.append(line)
+    if local and "local model" not in text.lower():
+        extra.append("A local model on this Mac is tried first.")
+    if "does not keep any data" not in text.lower():
+        extra.append("paisty does not keep any data. The notes stay in this folder.")
+    if extra:
+        note.write_text(text.rstrip() + "\n" + "\n".join(extra) + "\n", encoding="utf-8")
+
+
+def make_notes(dest: Path, mail: bool = False, calendar: bool = False, body: str = "") -> dict:
     """One folder a click can search. Does not overwrite a note that is already there."""
     dest.mkdir(parents=True, exist_ok=True)
     (dest / ".obsidian").mkdir(exist_ok=True)
     note = dest / "Paisty.md"
-    if not note.is_file():
+    if body.strip():
+        note.write_text(body if body.endswith("\n") else body + "\n", encoding="utf-8")
+    elif not note.is_file():
         lines = ["# Notes", ""]
         if mail:
             lines.append("Mail is connected in the AI. A click may read the mail window that is already open.")
         if calendar:
             lines.append("Calendar is connected in the AI.")
         lines.append("A click searches this folder. It does not invent a fact that is not written here.")
+        lines.append("paisty does not keep any data. The notes stay in this folder.")
         note.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return {"added": 1, "path": str(dest), "need": ""}
 
