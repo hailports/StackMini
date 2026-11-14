@@ -197,6 +197,7 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
     from hailports.clip.board import misses_points, thin_reply, thread_points
     points = thread_points(sources)
     prepared["messages"] = _with_points(prepared.get("messages") or [], points)
+    hop = ""
     try:
         hops = endpoints_from(route)
         text, hop = complete(hops, prepared["messages"])
@@ -235,6 +236,11 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
     if not reply_ok(text):
         print("empty")
         return 2
+    try:
+        from hailports.clip.drafts import append as remember_draft
+        remember_draft(text, hop=str(hop or ""), app=str(doc.get("app") or ""))
+    except OSError:
+        pass
     if copy and text:
         copy_text(text)
     print(text)
@@ -434,6 +440,9 @@ def cmd_paiste(args, cfg, state: Path) -> int:
     action = args.action or "draft"
     if action == "onboard":
         return cmd_onboard(args, cfg)
+    if action in {"drafts", "redo"}:
+        from hailports.clip.drafts import cmd as drafts_cmd
+        return drafts_cmd(action, args)
     if action == "setup":
         from hailports.config import save_file
         from hailports.clip.board import discover, guide

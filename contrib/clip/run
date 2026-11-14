@@ -36,7 +36,8 @@ def _cfg(path: str, base_url: str, model: str) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="paiste", description="Draft from the text near the cursor. Nothing is sent.")
-    parser.add_argument("action", nargs="?", default="draft", choices=["draft", "auto", "menu", "check", "onboard"])
+    parser.add_argument("action", nargs="?", default="draft", choices=["draft", "auto", "menu", "check", "onboard", "drafts", "redo"])
+    parser.add_argument("--id", default="")
     parser.add_argument("--scene", default="")
     parser.add_argument("--inbox", default="")
     parser.add_argument("--outbox", default="")
@@ -59,6 +60,9 @@ def main(argv: list[str] | None = None) -> int:
     cfg = _cfg(args.route, args.base_url, args.model)
     if args.action == "onboard":
         return cmd_onboard(args, cfg)
+    if args.action in {"drafts", "redo"}:
+        from hailports.clip.drafts import cmd as drafts_cmd
+        return drafts_cmd(args.action, args)
     if args.action == "menu":
         print("Build contrib/paiste/build.sh and open Paiste.app. The menu title is Paiste.")
         return 0
