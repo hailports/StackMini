@@ -438,7 +438,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
                 body.stringValue = "Click the paperclip in any reply box."
             } else {
                 titleField.stringValue = "Set up paisty."
-                body.stringValue = "paisty looked at this Mac. One click sets it up. Nothing is sent."
+                body.stringValue = "paisty looked at this Mac. One click sets it up. Only your license is checked with paisty.com. No mail or notes leave this Mac."
             }
             autoPage()
         case 1:
@@ -1007,7 +1007,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             return
         }
         autoRunning = true
-        statusField.stringValue = "Setting up on this Mac. Nothing is sent."
+        statusField.stringValue = "Setting up on this Mac. Only your license is checked with paisty.com. No mail or notes leave this Mac."
         render()
         let route = ProcessInfo.processInfo.environment["PAISTE_ROUTE"] ?? ""
         DispatchQueue.global(qos: .userInitiated).async {

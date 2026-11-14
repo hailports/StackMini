@@ -258,7 +258,7 @@ def _route_dest(args):
 def _onboard_auto(args, cfg, scan: dict | None = None) -> int:
     """One click. Apply what the scan found. Keys go to 0600 files and are never printed."""
     from hailports.config import save_file
-    from hailports.clip.board import auto_setup, scan_setup, server_setup_text, tie_notes
+    from hailports.clip.board import BoardError, auto_setup, scan_setup, server_setup_text, tie_notes
     from hailports.clip.gate import read_token
     dest = _route_dest(args)
     found = scan if scan is not None else scan_setup()
@@ -268,29 +268,34 @@ def _onboard_auto(args, cfg, scan: dict | None = None) -> int:
     def setup_text(mail_on: bool, app: str) -> str:
         return server_setup_text(mail_on, False, app, read_token(cfg), setup_url)
 
-    updated, summary = auto_setup(
-        cfg.get("paiste") or {},
-        found,
-        dest.parent,
-        Path.home() / "Documents" / "paisty-notes",
-        setup_text=setup_text,
-    )
-    route = dict(cfg)
-    route["paiste"] = updated
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    save_file(dest, route)
     try:
-        dest.chmod(0o600)
-    except OSError:
-        pass
-    app = summary["ai"] if summary["ai"] in {"claude", "codex", "cursor"} else ""
-    tie_notes(summary["notes"], app, "local" if summary["ai"] == "local" else "")
+        updated, summary = auto_setup(
+            cfg.get("paiste") or {},
+            found,
+            dest.parent,
+            Path.home() / "Documents" / "paisty-notes",
+            setup_text=setup_text,
+        )
+        route = dict(cfg)
+        route["paiste"] = updated
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        save_file(dest, route)
+        try:
+            dest.chmod(0o600)
+        except OSError:
+            pass
+        app = summary["ai"] if summary["ai"] in {"claude", "codex", "cursor"} else ""
+        tie_notes(summary["notes"], app, "local" if summary["ai"] == "local" else "")
+    except (BoardError, OSError) as exc:
+        reason = "could not write settings" if isinstance(exc, OSError) else (str(exc).splitlines() or ["setup stopped"])[0][:120]
+        print(json.dumps({"ai": "", "notes": "", "mail": "", "chat": "", "needs": [reason]}))
+        return 2
     print(json.dumps(summary))
     return 0
 
 
 def cmd_onboard(args, cfg) -> int:
-    """Write the model choice. The window text is not saved and nothing is sent."""
+    """Write the model choice. Nothing is sent. Window text for a draft is kept on this Mac for 7 days so Redo can rewrite it."""
     from hailports.config import save_file
     from hailports.clip.board import BoardError, app_status, apply_board, attach_keys, discover, probe_model, setup_hint, show_board, start_login, use_app
     if getattr(args, "login", ""):
