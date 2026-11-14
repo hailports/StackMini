@@ -1373,8 +1373,10 @@ def show_board(paiste: dict | None = None, found: dict | None = None) -> dict:
         link = "both"
     elif api_url:
         link = "api"
-    else:
+    elif local:
         link = "local"
+    else:
+        link = "api"
 
     def mode(key: str) -> str:
         value = str(current.get(key) or "off")

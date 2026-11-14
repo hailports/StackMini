@@ -31,6 +31,17 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
     var spinTimer: Timer?
     var spinAngle: CGFloat = 0
     let log = Logger(subsystem: "com.hailports.paiste", category: "click")
+    // Reply hint: a soft pulse when the front window likely needs a reply.
+    var glowTimer: Timer?
+    var glowStart = Date()
+    var glowSig = ""
+    var seenSig = ""
+    var seenSince = Date()
+    var seenWants = false
+    var draftSig = ""
+    var handledSigs: [String] = []
+    static let glowKey = "glowHint"
+    lazy var glowMark = PaisteApp.paperclipHalo()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -54,12 +65,14 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         if !FileManager.default.fileExists(atPath: route) {
             openSetup()
         }
+        UserDefaults.standard.register(defaults: [Self.glowKey: true])
         Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
             self?.remember()
         }
     }
 
     func startSpin() {
+        stopGlow()
         spinTimer?.invalidate()
         spinAngle = 0
         item?.button?.appearsDisabled = false
@@ -122,11 +135,118 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
             pastePID = 0
         }
         let scene = Self.scene(of: frontPID)
-        if Self.usable(scene) {
+        let ok = Self.usable(scene)
+        if ok {
             lastGood = scene
             lastGoodAt = Date()
             lastPID = frontPID
         }
+        updateGlow(scene: scene, usable: ok, pid: frontPID)
+    }
+
+    // MARK: reply hint
+
+    var glowOn: Bool { UserDefaults.standard.bool(forKey: Self.glowKey) }
+
+    /// Reuses the scene the poll already read. No network, no capture.
+    func updateGlow(scene: String, usable: Bool, pid: pid_t) {
+        let doc = Self.sceneDoc(scene)
+        let app = NSRunningApplication(processIdentifier: pid)
+        let name = app?.localizedName ?? (doc["app"] as? String ?? "")
+        let title = doc["title"] as? String ?? ""
+        let sig = "\(pid)|" + name + "|" + title
+        let wants = usable && Self.replyLikely(app: name, bundle: app?.bundleIdentifier ?? "", title: title, doc: doc)
+        let now = Date()
+        if sig != seenSig || wants != seenWants {
+            seenSig = sig
+            seenWants = wants
+            seenSince = now
+        }
+        let stable = now.timeIntervalSince(seenSince) >= 1.5
+        if !glowOn || !wants || handledSigs.contains(sig) || busy || spinTimer != nil {
+            stopGlow()
+            return
+        }
+        if glowSig != sig { stopGlow() }
+        if stable && glowTimer == nil { startGlow(sig) }
+    }
+
+    /// Mail, chat, or a work web page, with message text that is not only the reply box.
+    static func replyLikely(app: String, bundle: String, title: String, doc: [String: Any]) -> Bool {
+        let name = app.lowercased()
+        let id = bundle.lowercased()
+        let low = title.lowercased()
+        let mail = ["mail", "outlook", "spark"]
+        let chat = ["slack", "teams", "messages", "workplace", "workchat", "zoom", "discord", "whatsapp", "telegram"]
+        let browsers = ["safari", "chrome", "edge", "firefox", "arc", "brave", "opera", "vivaldi", "orion"]
+        let pages = ["jira", "atlassian.net", "dev.azure.com", "visualstudio.com", "azure devops", "monday.com",
+                     "gmail", "outlook", "slack", "microsoft teams", "teams"]
+        let isMail = mail.contains { name == $0 || name.hasPrefix($0 + " ") || name.contains("microsoft " + $0) } || id == "com.apple.mail"
+        let isChat = chat.contains { name.contains($0) } || id.contains("slack") || id.contains("teams") || id == "com.apple.mobilesms"
+        let isBrowser = browsers.contains { name.contains($0) } || id.contains("safari") || id.contains("chrome") || id.contains("firefox")
+        guard isMail || isChat || (isBrowser && pages.contains { low.contains($0) }) else { return false }
+        let mine = (doc["field_text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !(doc["selection"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+        let blocks = doc["blocks"] as? [[String: Any]] ?? []
+        var other = 0
+        for row in blocks {
+            let text = (row["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if text.isEmpty || text == mine || chrome(text) { continue }
+            other += text.count
+            if other >= 40 { return true }
+        }
+        return false
+    }
+
+    static func sceneDoc(_ scene: String) -> [String: Any] {
+        guard let data = scene.data(using: .utf8),
+              let doc = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        return doc
+    }
+
+    func startGlow(_ sig: String) {
+        guard let button = item?.button else { return }
+        glowSig = sig
+        glowStart = Date()
+        button.image = glowMark
+        button.toolTip = "A reply may be needed — click to draft"
+        glowTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 15.0, repeats: true) { [weak self] _ in
+            guard let self, let button = self.item?.button else { return }
+            if self.busy || self.spinTimer != nil {
+                self.stopGlow()
+                return
+            }
+            let t = Date().timeIntervalSince(self.glowStart)
+            let wave = 0.5 - 0.5 * cos(2 * Double.pi * t / 1.6)
+            button.alphaValue = CGFloat(0.45 + 0.55 * wave)
+        }
+    }
+
+    func stopGlow() {
+        guard glowTimer != nil || !glowSig.isEmpty else { return }
+        glowTimer?.invalidate()
+        glowTimer = nil
+        glowSig = ""
+        if let button = item?.button {
+            button.alphaValue = 1
+            if spinTimer == nil && button.image === glowMark {
+                button.image = mark
+                button.toolTip = "paisty"
+            }
+        }
+    }
+
+    func markHandled(_ sig: String) {
+        guard !sig.isEmpty else { return }
+        if !handledSigs.contains(sig) { handledSigs.append(sig) }
+        if handledSigs.count > 40 { handledSigs.removeFirst(handledSigs.count - 40) }
+        if glowSig == sig { stopGlow() }
+    }
+
+    @objc func toggleGlow(_ sender: NSMenuItem) {
+        let next = !glowOn
+        UserDefaults.standard.set(next, forKey: Self.glowKey)
+        if !next { stopGlow() }
     }
 
     @objc func openSetup() {
@@ -134,6 +254,16 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         board?.show()
+    }
+
+    @objc func setupAutomatically() {
+        openSetup()
+        board?.runAuto()
+    }
+
+    @objc func scanAgain() {
+        openSetup()
+        board?.rescan()
     }
 
     @objc func click() {
@@ -151,6 +281,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
             return
         }
         busy = true
+        draftSig = seenSig
         startSpin()
         let cached = lastGood
         let cachedAt = lastGoodAt
@@ -231,6 +362,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
 
     func finish(path: String, note: String = "") {
         stopSpin()
+        markHandled(draftSig)
         let pasted = path != "copied"
         item?.button?.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: pasted ? "Pasted" : "Copied")
         item?.button?.toolTip = pasted ? "Pasted" : "Copied"
@@ -306,7 +438,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
             paste.target = self
             paste.representedObject = ref
             sub.addItem(paste)
-            let redo = NSMenuItem(title: "Redo", action: #selector(redoDraft(_:)), keyEquivalent: "")
+            let redo = NSMenuItem(title: "Redo (write a new one)", action: #selector(redoDraft(_:)), keyEquivalent: "")
             redo.target = self
             redo.representedObject = ref
             sub.addItem(redo)
@@ -315,12 +447,19 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         }
         menu.addItem(.separator())
         menu.addItem(header("Setup"))
+        let auto = NSMenuItem(title: "Set up automatically", action: #selector(setupAutomatically), keyEquivalent: "")
+        auto.target = self
+        menu.addItem(auto)
         let setup = NSMenuItem(title: "Open setup…", action: #selector(openSetup), keyEquivalent: "")
         setup.target = self
         menu.addItem(setup)
-        let scan = NSMenuItem(title: "Scan this Mac for AI…", action: #selector(openSetup), keyEquivalent: "")
+        let scan = NSMenuItem(title: "Scan this Mac again", action: #selector(scanAgain), keyEquivalent: "")
         scan.target = self
         menu.addItem(scan)
+        let glow = NSMenuItem(title: "Glow when a reply may be needed", action: #selector(toggleGlow(_:)), keyEquivalent: "")
+        glow.target = self
+        glow.state = glowOn ? .on : .off
+        menu.addItem(glow)
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit paisty", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
         quit.target = NSApp
@@ -392,6 +531,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
     @objc func pasteDraft(_ sender: NSMenuItem) {
         guard let ref = sender.representedObject as? DraftRef, !busy else { return }
         busy = true
+        draftSig = seenSig
         DispatchQueue.global(qos: .userInitiated).async {
             var text = ref.draft.text
             if text.isEmpty {
@@ -410,12 +550,14 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
     @objc func redoDraft(_ sender: NSMenuItem) {
         guard let ref = sender.representedObject as? DraftRef, !busy else { return }
         busy = true
+        draftSig = seenSig
         startSpin()
         DispatchQueue.global(qos: .userInitiated).async {
             let run = Self.runPaiste(["redo", "--id", ref.draft.id], timeout: 90)
             guard run.status == 0, !run.out.isEmpty else {
                 DispatchQueue.main.async {
-                    self.fail(run.status == 2 ? "Redo found nothing to draft" : "Redo failed")
+                    let hint = run.out == "no scene" ? "That older draft can't be redone" : (run.status == 2 ? "Redo found nothing to draft" : "Redo failed")
+                    self.fail(hint)
                     self.log.error("redo failed \(run.status, privacy: .public)")
                 }
                 return
@@ -784,6 +926,20 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
                    controlPoint1: NSPoint(x: 8.8, y: 11.2),
                    controlPoint2: NSPoint(x: 10.2, y: 12.6))
         return path
+    }
+
+    /// The paperclip with a small dot: a reply may be needed. Template, so it follows the menu bar.
+    static func paperclipHalo() -> NSImage {
+        let side: CGFloat = 18
+        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in
+            NSColor.black.setStroke()
+            clipPath().stroke()
+            NSColor.black.setFill()
+            NSBezierPath(ovalIn: NSRect(x: 13.2, y: 13.2, width: 4.4, height: 4.4)).fill()
+            return true
+        }
+        image.isTemplate = true
+        return image
     }
 
     static func paperclip() -> NSImage {
