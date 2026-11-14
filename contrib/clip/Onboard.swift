@@ -329,7 +329,16 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         }
         let hasLocal = !localRows.isEmpty
         let hasApi = !apiRows.isEmpty
-        let mode = !hasLocal && !hasApi && !pickedApp.isEmpty ? "app" : (hasApi ? "both" : "local")
+        let mode: String
+        if !pickedApp.isEmpty && !hasApi {
+            mode = "app"
+        } else if hasApi && hasLocal {
+            mode = "both"
+        } else if hasApi {
+            mode = "api"
+        } else {
+            mode = "local"
+        }
         var doc: [String: Any] = [
             "link": mode,
             "locals": localRows,
@@ -442,7 +451,11 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         let model: String
         if !pickedApp.isEmpty {
             let name = ["claude": "Claude", "codex": "Codex", "cursor": "Cursor"][pickedApp] ?? pickedApp
-            model = "\(localCount) local first. If that does not answer, " + name + "."
+            if localCount == 0 {
+                model = name + " is the model a click asks. A local model is optional and was not added."
+            } else {
+                model = name + " is the model a click asks. \(localCount) local " + (localCount == 1 ? "model is" : "models are") + " optional and run after " + name + "."
+            }
         } else if link == "both" {
             model = "\(localCount) local, \(remoteCount) on another Mac, then \(apiCount) paid."
         } else if link == "api" {

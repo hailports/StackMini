@@ -679,7 +679,10 @@ def tie_notes(path: str, app: str = "", local: str = "") -> None:
         if line not in text:
             extra.append(line)
     if local and "local model" not in text.lower():
-        extra.append("A local model on this Mac is tried first.")
+        if app in {"claude", "codex", "cursor"}:
+            extra.append("A local model is optional and runs after " + app[:1].upper() + app[1:] + ".")
+        else:
+            extra.append("A local model on this Mac is tried first.")
     if "does not keep any data" not in text.lower():
         extra.append("paisty does not keep any data. The notes stay in this folder.")
     if extra:
@@ -1233,8 +1236,21 @@ def apply_board(existing: dict | None, answers: dict) -> dict:
         if not binary.startswith("/") or ".." in binary:
             raise BoardError("That app is not on this Mac.")
         swapped = use_app(current, name, binary)
-        out["order"] = swapped["order"]
-        out["models"] = swapped["models"]
+        models = dict(swapped["models"])
+        behind = [hop for hop in swapped["order"] if hop != name]
+        for index, (line, model) in enumerate(_local_rows(answers)):
+            hop = parse_hop(line, index)
+            if not hop:
+                raise BoardError("That local address was not kept. Use a URL, or ssh host and the address on that Mac.")
+            _keep_model(current, hop, model)
+            slot = _unique(_named(current, hop["spec"], hop["name"]), models, hop["name"])
+            models[slot] = hop["spec"]
+            if slot not in behind and slot != name:
+                behind.append(slot)
+        locals_only = [hop for hop in behind if _local_spec(models.get(hop) or {})]
+        rest = [hop for hop in behind if hop not in locals_only]
+        out["order"] = [name] + rest + locals_only
+        out["models"] = models
         return out
     order = []
     models = {}

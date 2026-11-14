@@ -302,7 +302,7 @@ def test_login_choice_stores_the_app_and_not_a_key():
         "notes": "off",
         "calendar": "off",
     })
-    assert saved["order"] == ["brain", "claude"]
+    assert saved["order"] == ["claude", "brain"]
     assert saved["models"]["brain"]["remote_url"] == "http://127.0.0.1:8080/v1"
     assert saved["models"]["claude"]["via"] == "claude"
     assert saved["models"]["claude"]["bin"] == "/usr/bin/claude"
@@ -335,6 +335,25 @@ def test_login_choice_stores_the_app_and_not_a_key():
     }, {})
     assert plain["app"] == ""
     assert plain["locals"][0]["host"] == "brain"
+
+
+def test_setup_puts_the_premium_login_ahead_of_an_optional_local():
+    saved = apply_board({}, {
+        "link": "app",
+        "app": "cursor",
+        "bin": "/usr/bin/agent",
+        "locals": [{"host": "brain", "remote": "http://127.0.0.1:8080/v1", "model": "desk-model"}],
+        "mail": "off",
+        "chat": "off",
+        "notes": "off",
+        "calendar": "off",
+    })
+    assert saved["order"][0] == "cursor"
+    local = saved["models"][saved["order"][-1]]
+    assert local["via"] == "ssh"
+    assert local["ssh_host"] == "brain"
+    assert local["remote_url"] == "http://127.0.0.1:8080/v1"
+    assert saved["models"]["cursor"]["via"] == "cursor"
 
 
 def test_guide_says_the_model_holds_the_data():
