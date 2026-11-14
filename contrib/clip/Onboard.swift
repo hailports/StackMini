@@ -56,6 +56,30 @@ final class SetupBoard: NSObject, NSWindowDelegate {
     var fields: [String: NSTextField] = [:]
     var toggles: [String: NSButton] = [:]
     var extraHeight: CGFloat = 220
+    var linkSaved = false
+    var suggestAI: [String: Any] = [:]
+    var suggestNotes: [String: Any] = [:]
+    var scanApps: [[String: Any]] = []
+    var scanKeys: [[String: Any]] = []
+    var autoRunning = false
+    var autoDone = false
+    var autoNeeds: [String] = []
+    var autoLine = ""
+    var pendingAuto = false
+
+    /// OpenAI-compatible chat services. The address and a starting model fill in; the model stays editable.
+    static let providers: [(id: String, name: String, url: String, model: String)] = [
+        ("openai", "OpenAI", "https://api.openai.com/v1", "gpt-4.1-mini"),
+        ("anthropic", "Anthropic", "https://api.anthropic.com/v1", "claude-sonnet-5-5"),
+        ("xai", "xAI Grok", "https://api.x.ai/v1", "grok-4"),
+        ("gemini", "Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.5-flash"),
+        ("openrouter", "OpenRouter", "https://openrouter.ai/api/v1", "openrouter/auto"),
+        ("groq", "Groq", "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile"),
+        ("mistral", "Mistral", "https://api.mistral.ai/v1", "mistral-large-latest"),
+        ("deepseek", "DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat"),
+        ("together", "Together", "https://api.together.xyz/v1", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
+        ("custom", "Custom (any OpenAI-compatible URL)", "", ""),
+    ]
 
     override init() {
         window = NSWindow(
@@ -174,13 +198,17 @@ final class SetupBoard: NSObject, NSWindowDelegate {
                     self.scanned = true
                 }
                 self.render()
+                if self.pendingAuto {
+                    self.pendingAuto = false
+                    self.runAuto()
+                }
             }
         }
     }
 
     func applyShow(_ doc: [String: Any]) {
-        link = (doc["link"] as? String) ?? "local"
-        if !["local", "api", "both", "app"].contains(link) { link = "local" }
+        link = (doc["link"] as? String) ?? "api"
+        if !["local", "api", "both", "app"].contains(link) { link = "api" }
         pickedApp = doc["app"] as? String ?? ""
         if !["claude", "codex", "cursor"].contains(pickedApp) { pickedApp = "" }
         showCustom = false
@@ -217,6 +245,9 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         calendarOn = (doc["calendar"] as? String) == "folder"
         calendarPath = doc["calendar_path"] as? String ?? ""
         obsidian = doc["obsidian"] as? String ?? ""
+        linkSaved = !pickedApp.isEmpty
+            || apis.contains { !$0.url.isEmpty }
+            || locals.contains { !$0.url.isEmpty || !$0.host.isEmpty }
     }
 
     func capture() {
@@ -263,7 +294,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
 
     @objc func back() {
         capture()
-        if page > 0 { page -= 1 }
+        if page > 0 { page = page == 3 ? 1 : page - 1 }
         statusField.stringValue = ""
         render()
     }
@@ -271,7 +302,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
     @objc func forward() {
         capture()
         if page < 3 {
-            page += 1
+            page = page == 1 ? 3 : page + 1
             statusField.stringValue = ""
             render()
             return
@@ -338,8 +369,10 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             mode = "both"
         } else if hasApi {
             mode = "api"
-        } else {
+        } else if hasLocal {
             mode = "local"
+        } else {
+            mode = "api"
         }
         var doc: [String: Any] = [
             "link": mode,
@@ -397,15 +430,20 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         linkControl = nil
         extra.subviews.forEach { $0.removeFromSuperview() }
         backButton.isHidden = page == 0
-        nextButton.title = page == 3 ? "Save on this Mac" : "Next"
+        nextButton.title = page == 3 ? "Save on this Mac" : (page == 0 ? "Customize" : "Next")
         switch page {
         case 0:
-            titleField.stringValue = "Already on this Mac."
-            body.stringValue = "Mail, chat, Littlebird, and an Obsidian vault are turned on when they are already here. A click reads the open window. paisty does not sign in."
-            foundPage()
+            if autoDone && autoNeeds.isEmpty {
+                titleField.stringValue = "Ready."
+                body.stringValue = "Click the paperclip in any reply box."
+            } else {
+                titleField.stringValue = "Set up paisty."
+                body.stringValue = "paisty looked at this Mac. One click sets it up. Nothing is sent."
+            }
+            autoPage()
         case 1:
-            titleField.stringValue = "Connect your AI to paisty."
-            body.stringValue = "Any AI: Claude, ChatGPT/Codex, Cursor, Grok, or any API key or local model. One click checks the app on this Mac. If it is not signed in, the browser opens and signs this Mac into that account. A local model is optional. The help for that is on this screen."
+            titleField.stringValue = "Pick your AI."
+            body.stringValue = "Use the AI you already pay for: Claude, ChatGPT, or Cursor. Or paste a key from OpenAI, Anthropic, Grok, Gemini, and more. The key stays on this Mac."
             aiPage()
         case 2:
             titleField.stringValue = "A local model is optional."
@@ -509,32 +547,58 @@ final class SetupBoard: NSObject, NSWindowDelegate {
     }
 
     func aiPage() {
-        var y = caption("Any AI: Claude, ChatGPT/Codex, Cursor, Grok, or any API key or local model. A login already on this Mac is used.", 0)
-        y = choiceButton("Connect Claude", "claude", y)
+        var y = choiceButton("Connect Claude", "claude", 0)
         y = choiceButton("Connect ChatGPT / Codex", "codex", y)
         y = choiceButton("Connect Cursor", "cursor", y)
-        y = choiceButton(showCustom ? "API key" : "I have an API key", "custom", y)
+        y = choiceButton(showCustom ? "API key" : "Use an API key", "custom", y)
         if showCustom {
-            y = caption("Paid works anywhere this Mac is online. OpenAI-style /v1.", y)
+            y = caption("Pick the service. The address and model fill in. You can change the model.", y)
             for (i, row) in apis.enumerated() {
-                y = field("api-url-\(i)", "https://api.openai.com/v1", row.url, y)
+                y = providerPopup(i, row.url, y)
+                y = field("api-url-\(i)", "https://…/v1", row.url, y)
                 y = field("api-model-\(i)", "Model name", row.model, y)
                 let placeholder = row.hasKey || !row.key.isEmpty ? "Key already on this Mac. Leave blank to keep it." : "API key. Stays on this Mac."
                 y = field("api-key-\(i)", placeholder, "", y, secure: true)
                 y = rowButtons(probe: 2000 + i, remove: 4000 + i, showRemove: apis.count > 1, y)
             }
             if apis.count < 4 {
-                y = addButton("Add a paid model", #selector(addPaid), y)
+                y = addButton("Add another key", #selector(addPaid), y)
             }
         }
-        y = caption("A local model is uncommon. Most people stop here.", y)
-        if !showLocalAssist {
-            y = tagButton("Help me use a local model", #selector(openLocalHelp(_:)), 0, y)
-            extraHeight = y + 8
-            return
+        y = tagButton(showLocalAssist ? "▾ Hide the local model" : "▸ Use a local model instead", #selector(openLocalHelp(_:)), 0, y)
+        if showLocalAssist {
+            y = localAssist(y)
         }
-        y = localAssist(y)
         extraHeight = y + 8
+    }
+
+    func providerPopup(_ index: Int, _ url: String, _ y: CGFloat) -> CGFloat {
+        let pop = NSPopUpButton(frame: NSRect(x: 0, y: y, width: 320, height: 26), pullsDown: false)
+        pop.addItems(withTitles: Self.providers.map { $0.name })
+        let clean = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        let match = Self.providers.firstIndex { !$0.url.isEmpty && $0.url == clean }
+        pop.selectItem(at: match ?? (clean.isEmpty ? 0 : Self.providers.count - 1))
+        pop.tag = 5000 + index
+        pop.target = self
+        pop.action = #selector(providerPicked(_:))
+        extra.addSubview(pop)
+        return y + 34
+    }
+
+    @objc func providerPicked(_ sender: NSPopUpButton) {
+        capture()
+        let index = sender.tag - 5000
+        let pick = sender.indexOfSelectedItem
+        guard apis.indices.contains(index), Self.providers.indices.contains(pick) else { return }
+        let preset = Self.providers[pick]
+        apis[index].url = preset.url
+        apis[index].model = preset.model
+        render()
+    }
+
+    func presetFromKeys() -> Int {
+        let id = (scanKeys.first?["provider"] as? String) ?? "openai"
+        return Self.providers.firstIndex { $0.id == id } ?? 0
     }
 
     func localPage() {
@@ -616,6 +680,21 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             }
         }
         foundModels = rows
+        scanApps = doc["apps"] as? [[String: Any]] ?? []
+        scanKeys = doc["keys"] as? [[String: Any]] ?? []
+        let suggest = doc["suggest"] as? [String: Any] ?? [:]
+        suggestAI = suggest["ai"] as? [String: Any] ?? [:]
+        suggestNotes = suggest["notes"] as? [String: Any] ?? [:]
+        if !linkSaved {
+            let signedIn = scanApps.contains { ($0["status"] as? String) == "signed-in" && (($0["drives"] as? Bool) ?? true) }
+            link = signedIn ? "app" : "api"
+            showCustom = !signedIn
+            if showCustom && apis.count == 1 && apis[0].url.isEmpty {
+                let preset = Self.providers[presetFromKeys()]
+                apis[0].url = preset.url
+                apis[0].model = preset.model
+            }
+        }
         scanning = false
         scanned = true
     }
@@ -624,7 +703,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
     func choiceButton(_ title: String, _ name: String, _ y: CGFloat) -> CGFloat {
         var label = title
         if name == "custom" && showCustom {
-            label = "Custom"
+            label = "API key"
         } else if pickedApp == name {
             label = title.replacingOccurrences(of: "Connect ", with: "") + ", connected"
         }
@@ -641,6 +720,11 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         if name == "custom" {
             capture()
             showCustom = true
+            if apis.count == 1 && apis[0].url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let preset = Self.providers[presetFromKeys()]
+                apis[0].url = preset.url
+                apis[0].model = preset.model
+            }
             render()
             return
         }
@@ -804,11 +888,21 @@ final class SetupBoard: NSObject, NSWindowDelegate {
                     self.scanned = true
                 }
                 self.render()
+                if self.pendingAuto {
+                    self.pendingAuto = false
+                    self.runAuto()
+                }
             }
         }
     }
 
     @objc func openLocalHelp(_ sender: NSButton) {
+        capture()
+        if showLocalAssist {
+            showLocalAssist = false
+            render()
+            return
+        }
         showLocalAssist = true
         if !scanned {
             lookAgain(sender)
@@ -823,32 +917,148 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         render()
     }
 
-    func foundPage() {
+    static let appLabels = ["claude": "Claude", "codex": "Codex", "cursor": "Cursor", "grok": "Grok"]
+
+    func checklist() -> [String] {
+        var lines: [String] = []
+        let aiKind = suggestAI["kind"] as? String ?? "none"
+        let aiReason = suggestAI["reason"] as? String ?? ""
+        if !aiReason.isEmpty { lines.append((aiKind == "none" ? "○ " : "✓ ") + aiReason) }
+        lines.append(mailApps.isEmpty ? "○ No mail app found." : "✓ Mail: " + mailApps.joined(separator: ", ") + ".")
+        let chats = chatApps.filter { $0 != "Littlebird" }
+        lines.append(chats.isEmpty ? "○ No chat app found." : "✓ Chat: " + chats.joined(separator: ", ") + ".")
+        let notesReason = suggestNotes["reason"] as? String ?? ""
+        if !notesReason.isEmpty { lines.append("✓ " + notesReason) }
+        return lines
+    }
+
+    func autoPage() {
         var y = CGFloat(0)
+        if autoDone && autoNeeds.isEmpty {
+            if !autoLine.isEmpty { y = caption(autoLine, y) }
+            extraHeight = y + 8
+            return
+        }
         if scanning && !scanned {
-            y = caption("Looking at this Mac.", y)
-        } else if mailApps.isEmpty && chatApps.isEmpty && foundVaults.isEmpty {
-            y = caption("Nothing already here could be turned on. Next connects an AI.", y)
+            y = caption("Looking at this Mac…", y)
         } else {
-            if !mailApps.isEmpty {
-                y = caption("Mail is on: " + mailApps.joined(separator: ", ") + ". A click reads the open window.", y)
-            }
-            let chats = chatApps.filter { $0 != "Littlebird" }
-            if !chats.isEmpty {
-                y = caption("Chat is on: " + chats.joined(separator: ", ") + ". A click reads the open window.", y)
-            }
-            if littlebirdOn {
-                y = caption("Littlebird is on this Mac. A click reads that window. paisty does not sign in.", y)
-            }
-            if notesOn, let vault = foundVaults.first, !vault.isEmpty {
-                let name = URL(fileURLWithPath: vault).lastPathComponent
-                y = caption("Obsidian vault " + name + " is the notes folder.", y)
+            for line in checklist() { y = caption(line, y) }
+        }
+        if autoDone {
+            if !autoLine.isEmpty { y = caption(autoLine, y) }
+            y = caption("Still to do:", y)
+            for need in autoNeeds { y = needButton(need, y) }
+            extraHeight = y + 8
+            return
+        }
+        let go = NSButton(title: autoRunning ? "Setting up…" : "Set up automatically", target: self, action: #selector(runAuto))
+        go.frame = NSRect(x: 0, y: y + 4, width: 460, height: 40)
+        go.bezelStyle = .rounded
+        go.controlSize = .large
+        go.keyEquivalent = "\r"
+        go.isEnabled = !autoRunning && !(scanning && !scanned)
+        extra.addSubview(go)
+        extraHeight = y + 56
+    }
+
+    func needButton(_ need: String, _ y: CGFloat) -> CGFloat {
+        let low = need.lowercased()
+        if low.hasPrefix("sign in to ") {
+            let label = String(need.dropFirst("sign in to ".count))
+            let name = Self.appLabels.first { $0.value.lowercased() == label.lowercased() }?.key ?? ""
+            if !name.isEmpty {
+                let button = NSButton(title: "Sign in to " + label, target: self, action: #selector(pickApp(_:)))
+                button.identifier = NSUserInterfaceItemIdentifier(name)
+                button.frame = NSRect(x: 0, y: y, width: 460, height: 36)
+                button.bezelStyle = .rounded
+                extra.addSubview(button)
+                return y + 44
             }
         }
-        if foundVaults.isEmpty {
-            y = tagButton("Create my notes folder", #selector(makeNotes(_:)), 0, y)
+        if low.contains("api key") {
+            return tagButton("Paste an API key", #selector(pasteKey(_:)), 0, y)
         }
-        extraHeight = y + 8
+        if low.contains("apple notes") {
+            return tagButton("Add Apple Notes", #selector(pullSource(_:)), 1, y)
+        }
+        return caption("• " + need, y)
+    }
+
+    @objc func pasteKey(_ sender: NSButton) {
+        showCustom = true
+        page = 1
+        if apis.count == 1 && apis[0].url.isEmpty {
+            let preset = Self.providers[presetFromKeys()]
+            apis[0].url = preset.url
+            apis[0].model = preset.model
+        }
+        render()
+    }
+
+    /// One click: apply what the scan found. The key, when one is used, goes to a 0600 file and is never shown.
+    @objc func runAuto() {
+        if autoRunning { return }
+        page = 0
+        autoDone = false
+        if scanning && !scanned {
+            pendingAuto = true
+            statusField.stringValue = "Looking at this Mac first."
+            render()
+            return
+        }
+        autoRunning = true
+        statusField.stringValue = "Setting up on this Mac. Nothing is sent."
+        render()
+        let route = ProcessInfo.processInfo.environment["PAISTE_ROUTE"] ?? ""
+        DispatchQueue.global(qos: .userInitiated).async {
+            var args = ["onboard", "--auto"]
+            if !route.isEmpty { args += ["--route-out", route] }
+            let done = SetupBoard.run(args)
+            let shown = SetupBoard.run(["onboard", "--show"]).out
+            DispatchQueue.main.async {
+                self.autoRunning = false
+                guard done.code == 0,
+                      let data = done.out.data(using: .utf8),
+                      let doc = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    self.statusField.stringValue = "Setup did not finish. Press Customize to pick by hand."
+                    self.render()
+                    return
+                }
+                if let showData = shown.data(using: .utf8),
+                   let showDoc = try? JSONSerialization.jsonObject(with: showData) as? [String: Any] {
+                    self.applyShow(showDoc)
+                }
+                self.autoDone = true
+                self.autoNeeds = doc["needs"] as? [String] ?? []
+                self.autoLine = SetupBoard.summaryLine(doc)
+                self.statusField.stringValue = ""
+                self.render()
+            }
+        }
+    }
+
+    static func summaryLine(_ doc: [String: Any]) -> String {
+        var parts: [String] = []
+        let ai = doc["ai"] as? String ?? ""
+        if !ai.isEmpty {
+            let name = appLabels[ai] ?? providers.first { $0.id == ai }?.name ?? (ai == "local" ? "a local model" : ai)
+            parts.append("AI: " + name + ".")
+        }
+        let notes = doc["notes"] as? String ?? ""
+        if !notes.isEmpty { parts.append("Notes: " + URL(fileURLWithPath: notes).lastPathComponent + ".") }
+        let mail = doc["mail"] as? [String] ?? []
+        if !mail.isEmpty { parts.append("Mail: " + mail.joined(separator: ", ") + ".") }
+        let chat = (doc["chat"] as? [String] ?? []).filter { $0 != "Littlebird" }
+        if !chat.isEmpty { parts.append("Chat: " + chat.joined(separator: ", ") + ".") }
+        return parts.joined(separator: " ")
+    }
+
+    /// Menu: open setup and look again.
+    func rescan() {
+        page = 0
+        autoDone = false
+        if scanning && !scanned { render(); return }
+        lookAgain(nextButton)
     }
 
     func feedPage() {
