@@ -27,16 +27,19 @@ _CLOSE = {
 _LINK_ONLY = re.compile(r"(?is)^\s*(available at\s+)?https?://\S+\s*$")
 _PROMISE = re.compile(r"(?i)\b(i'll|i will|i am going to|i'm going to)\b|\blet me (?!know\b)")
 # A promise is fine when it answers the ask. An invented deadline is not.
+_DAY = r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues?|wed|thu(?:rs?)?|fri|sat|sun)\b"
 _WHEN = re.compile(
-    r"(?i)\b(?:by|before|on|until|end of|eod|eow|cob)\s+(?:the\s+)?(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\b"
-    r"|\b(?:by|before|until)\s+(?:tomorrow|tonight|next week|end of (?:day|week)|eod|eow|cob|\d)"
-    r"|\b(?:tomorrow|tonight|next week)\b|\b\d{1,2}(?::\d{2})?\s?(?:am|pm)\b"
+    r"(?i)\b(?:by|before|on|until|end of)\s+(?:the\s+)?(?P<day>" + _DAY + r")"
+    r"|\b(?:by|before|until)\s+(?P<rel>tomorrow|tonight|next week|end of (?:day|week)|eod|eow|cob)\b"
+    r"|\b(?P<rel2>tomorrow|tonight|next week)\b"
+    r"|\b(?P<time>\d{1,2}(?::\d{2})?\s?(?:am|pm)|\d{1,2}/\d{1,2})\b"
 )
 # Meta narration about the message instead of a reply to it.
 _META = re.compile(
     r"(?i)\bi see (?:the|your) (?:request|message|email|note|ask)\b"
     r"|\bthe (?:message|email|text|thread|note|request|window|screen)\s+(?:mentions|says|does not|doesn't|did not|didn't|is asking|asks)\b"
-    r"|\b(?:it|this|they) (?:does not|doesn't) (?:list|say|specify|mention|include)\b"
+    r"|\bthe (?:message|email|text|thread|note|request) (?:does not|doesn't) (?:list|say|specify|mention|include)\b"
+    r"|\bit (?:does not|doesn't) (?:list|specify) (?:the|any|who|what|when)\b"
     r"|\bnot (?:listed|specified|mentioned) (?:in|on) (?:the|this)\b"
     r"|\bbased on (?:the|this) (?:message|email|text|screen|window)\b"
 )
@@ -306,10 +309,15 @@ def trim_overreach(text: str, sources: str = "") -> str:
 
 
 def _invented_when(piece: str, sources: str) -> bool:
-    """A date or time in the reply that is not on screen or in the notes."""
+    """A day or time in the reply that is not on screen or in the notes."""
     low = (sources or "").lower()
     for match in _WHEN.finditer(piece or ""):
-        if match.group(0).lower() not in low:
+        token = next((value for value in match.groupdict().values() if value), match.group(0)).lower()
+        if match.group("day"):
+            seen = re.search(r"\b" + re.escape(token[:3]), low) is not None
+        else:
+            seen = token in low
+        if not seen:
             return True
     return False
 
@@ -499,17 +507,17 @@ def _excerpt(path: Path, text: str) -> str:
 
 
 _JUNK_NAME = re.compile(
-    r"(?i)(?:^|[-_ ])(?:readme|license|licence|changelog|history|notice|authors|contributing|"
-    r"code_of_conduct|copying|patents|security|third[-_ ]?party)(?:[-_ .]|$)"
+    r"(?i)^(?:readme|license|licence|changelog|changes|history|notice|authors|contributing|"
+    r"code_of_conduct|copying|patents|security|third[-_ ]?party[-_ ]?notices?)$"
 )
 _URLISH = re.compile(r"https?://\S+")
 
 
 def junk_name(name: str) -> bool:
     """Package docs (README, LICENSE, CHANGELOG, HISTORY...) are not the user's notes."""
-    stem = (name or "").rsplit(".", 1)[0]
+    stem = (name or "").rsplit(".", 1)[0].strip()
     stem = re.sub(r"^\d+[-_ ]", "", stem)
-    return bool(_JUNK_NAME.search(stem))
+    return bool(_JUNK_NAME.match(stem))
 
 
 def junk_text(text: str) -> bool:
@@ -700,7 +708,7 @@ def plain_reply(text: str) -> str:
     body = re.sub(r"[ \t]*\n[ \t]*\n[\s]*", "\n\n", body.strip())
     while True:
         cut = re.search(r"(?is)(?:^|(?<=[.!?])\s+|\n+)thanks\b[^.!?\n]*[.!?]*\s*$", body)
-        if not cut or cut.start() == 0 and len(body) > 60:
+        if not cut or cut.start() == 0:
             break
         body = body[:cut.start()].rstrip()
     return body.strip()

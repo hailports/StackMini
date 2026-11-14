@@ -46,7 +46,8 @@ enum PastePath {
     static func size(_ el: AXUIElement) -> CGSize {
         var raw: CFTypeRef?
         var out = CGSize.zero
-        if AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &raw) == .success, let raw {
+        if AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &raw) == .success, let raw,
+           CFGetTypeID(raw) == AXValueGetTypeID() {
             AXValueGetValue(raw as! AXValue, .cgSize, &out)
         }
         return out
@@ -97,8 +98,28 @@ enum PastePath {
 
     // MARK: front app + keys
 
+    /// The app that owns keyboard focus. AX is live from any thread; NSWorkspace is the fallback.
     static func frontPID() -> pid_t {
-        NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
+        let wide = AXUIElementCreateSystemWide()
+        if let app = element(wide, kAXFocusedApplicationAttribute) {
+            var owner: pid_t = 0
+            if AXUIElementGetPid(app, &owner) == .success, owner != 0 { return owner }
+        }
+        return NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
+    }
+
+    /// A snapshot used when the value cannot be read as text.
+    static func signature(_ el: AXUIElement) -> String {
+        var parts: [String] = []
+        for attr in [kAXValueAttribute, kAXNumberOfCharactersAttribute, kAXSelectedTextRangeAttribute] {
+            var raw: CFTypeRef?
+            if AXUIElementCopyAttributeValue(el, attr as CFString, &raw) == .success, let raw {
+                parts.append(String(describing: raw))
+            } else {
+                parts.append("-")
+            }
+        }
+        return parts.joined(separator: "|")
     }
 
     /// Bring the target app forward and wait until it really is frontmost.
@@ -138,15 +159,24 @@ enum PastePath {
         let before = hits(mark, in: el)
         note("insert target \(describe(el)) front=\(frontPID() == pid)")
         if !web {
+            let readable = !mark.isEmpty && str(el, kAXValueAttribute) != nil
+            let sigBefore = signature(el)
             AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, kCFBooleanTrue)
             let rc = AXUIElementSetAttributeValue(el, kAXSelectedTextAttribute as CFString, text as CFString)
             Thread.sleep(forTimeInterval: 0.12)
-            let landed = hits(mark, in: el) > before
+            if rc == .success && !readable {
+                // Cannot read the text back. A changed field means it landed; an unknown one
+                // must not get a second paste on top.
+                let changed = signature(el) != sigBefore
+                note("  ax-selectedtext rc=0 unreadable changed=\(changed)")
+                return changed ? "ax-insert" : "ax-insert-unverified"
+            }
+            let landed = readable && hits(mark, in: el) > before
             note("  ax-selectedtext rc=\(rc.rawValue) landed=\(landed)")
             if landed { return "ax-insert" }
             if role == "AXTextArea" || role == "AXTextField" {
                 let existing = (str(el, kAXValueAttribute) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                if existing.count <= 1 {
+                if readable && existing.count <= 1 {
                     let vrc = AXUIElementSetAttributeValue(el, kAXValueAttribute as CFString, text as CFString)
                     Thread.sleep(forTimeInterval: 0.12)
                     let ok = hits(mark, in: el) > before

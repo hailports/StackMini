@@ -806,7 +806,11 @@ def _text_files(root: Path, suffixes: set[str], limit: int = 40) -> list[Path]:
             continue
         if any(word in name for word in ("auth", "token", "cookie", "secret", "password")):
             continue
-        if any(part.lower() in _CACHE_DIRS for part in path.parts):
+        try:
+            inner = path.relative_to(root).parts
+        except ValueError:
+            inner = path.parts
+        if any(part.lower() in _CACHE_DIRS for part in inner):
             continue
         from hailports.clip.scene import junk_name
         if junk_name(path.name):

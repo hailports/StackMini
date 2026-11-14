@@ -555,3 +555,15 @@ def test_meta_narration_is_trimmed_and_asked_work_is_kept():
     assert not overreach("I'll pull it together with Jordan.", "")
     assert overreach("I'll send it by Friday.", "standards doc")
     assert not overreach("I'll send it by Friday.", "can you send it by Friday")
+
+
+def test_review_edge_cases_for_cleanup():
+    from hailports.clip.scene import junk_name, overreach, plain_reply, trim_overreach
+    assert not overreach("I'll focus on monitoring the deploy.", "")
+    assert not overreach("I'll cut it by 10%.", "")
+    assert not overreach("I'll send it by Friday.", "Can you have it Friday?")
+    assert overreach("I'll send it tomorrow at 3pm.", "standards doc")
+    assert trim_overreach("Freight is extra. It doesn't include freight.", "") == "Freight is extra. It doesn't include freight."
+    assert plain_reply("Thanks Maria, I'll send the PO today.") == "Thanks Maria, I'll send the PO today."
+    assert not junk_name("Q3 Security Audit.md") and not junk_name("Project history.md")
+    assert junk_name("07-HISTORY.txt") and junk_name("SECURITY.md")
