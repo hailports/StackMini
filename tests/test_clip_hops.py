@@ -4,7 +4,7 @@ from pathlib import Path
 
 from hailports.llm import ModelOffline
 from hailports.clip.board import (
-    BoardError, apple_note_pages, apply_board, code_phrases, discover, guide, ingest_files, latest_from_other,
+    BoardError, apple_note_pages, apply_board, code_phrases, discover, guide, ingest_files, latest_from_other, make_notes,
     misses_points, model_ids, monday_pages, open_points, parse_hop, probe_model, pull_source,
     scan_models, show_board, ssh_host_names, store_api_key, thin_reply,
 )
@@ -457,3 +457,8 @@ def test_setup_sources_keep_notes_and_drop_a_secret(tmp_path):
     screen = "All good as long as we are using Salesforce standard components."
     assert not overreach("1. standard components are fine. we are aligned.", screen)
     assert overreach("1. click Settings and then deploy.", screen)
+    made = make_notes(tmp_path / "notes", mail=True, calendar=False)
+    body = (Path(made["path"]) / "Paisty.md").read_text(encoding="utf-8")
+    assert "Mail is connected" in body
+    assert "Calendar is connected" not in body
+    assert (Path(made["path"]) / ".obsidian").is_dir()
