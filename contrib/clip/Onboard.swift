@@ -405,7 +405,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             foundPage()
         case 1:
             titleField.stringValue = "Connect your AI to paisty."
-            body.stringValue = "One click checks the app on this Mac. If it is not signed in, the browser opens and signs this Mac into that account. A local model is uncommon. The help for that is on this screen."
+            body.stringValue = "Any AI: Claude, ChatGPT/Codex, Cursor, Grok, or any API key or local model. One click checks the app on this Mac. If it is not signed in, the browser opens and signs this Mac into that account. A local model is optional. The help for that is on this screen."
             aiPage()
         case 2:
             titleField.stringValue = "A local model is optional."
@@ -509,9 +509,9 @@ final class SetupBoard: NSObject, NSWindowDelegate {
     }
 
     func aiPage() {
-        var y = caption("Claude, Codex, or Cursor. A login already on this Mac is used.", 0)
+        var y = caption("Any AI: Claude, ChatGPT/Codex, Cursor, Grok, or any API key or local model. A login already on this Mac is used.", 0)
         y = choiceButton("Connect Claude", "claude", y)
-        y = choiceButton("Connect Codex", "codex", y)
+        y = choiceButton("Connect ChatGPT / Codex", "codex", y)
         y = choiceButton("Connect Cursor", "cursor", y)
         y = choiceButton(showCustom ? "API key" : "I have an API key", "custom", y)
         if showCustom {
