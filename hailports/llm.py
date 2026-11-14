@@ -47,7 +47,8 @@ def chat(base_url: str, model: str, prompt: str, timeout: float = 120.0, system:
     messages.append({"role": "user", "content": prompt})
     payload = {"model": model, "messages": messages, "temperature": 0.2}
     data = json.dumps(payload).encode("utf-8")
-    url = root if root.endswith("/v1") else root + "/v1"
+    # A versioned path (/v1, /v1beta/openai, /openai/v1) is used as is. A bare host gets /v1.
+    url = root if re.search(r"/v\d[^/]*(?:/|$)", urlparse(root).path or "") else root + "/v1"
     req = urllib.request.Request(
         url + "/chat/completions",
         data=data,
