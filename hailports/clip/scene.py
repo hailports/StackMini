@@ -421,7 +421,7 @@ def choose(scene: Scene) -> Reading:
     if not page.strip():
         return Reading("empty")
     kind = "selection" if selection and not _chrome(selection) else "above"
-    return Reading(kind, page[:PAGE], "", "Write a short reply to this.", page[:240])
+    return Reading(kind, page[:PAGE], "", "Write the reply. Cover every point that is still open, not only the last line.", page[:240])
 
 
 def _hits_from(search, query: str) -> list[dict]:

@@ -299,11 +299,10 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         try? VNImageRequestHandler(cgImage: image).perform([request])
-        let hints = ["write a message", "type a message", "type / for more"]
         var best: CGRect?
         for item in request.results ?? [] {
             guard let text = item.topCandidates(1).first?.string.lowercased() else { continue }
-            guard hints.contains(where: { text.contains($0) }) else { continue }
+            guard isComposerLabel(text) else { continue }
             let box = item.boundingBox
             guard box.midY < 0.4 else { continue }
             if best == nil || box.midY < best!.midY { best = box }
@@ -313,6 +312,18 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
             x: bounds.minX + best.midX * bounds.width,
             y: bounds.minY + (1 - best.midY) * bounds.height
         )
+    }
+
+    static func isComposerLabel(_ text: String) -> Bool {
+        let line = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let hints = [
+            "write a message", "type a message", "type a new message", "type / for more",
+            "message #", "send a message", "write a reply", "write an email",
+            "start typing", "type here", "add a comment", "shift + return", "shift+return",
+            "imessage", "text message", "compose email",
+        ]
+        if hints.contains(where: { line.contains($0) }) { return true }
+        return line.count < 48 && line.hasPrefix("message ")
     }
 
     static func cgBounds(pid: pid_t, matching frame: CGRect) -> CGRect? {
