@@ -57,5 +57,5 @@ case "$PUSH" in
       [ -n "$GUARD" ] && [ -x "$GUARD" ] || { echo "refuse: hailports-guard missing" >&2; exit 5; }
       "$GUARD" verify origin HEAD || { echo "refuse: hailports-guard blocked the push" >&2; exit 5; }
     fi
-    git push origin HEAD ;;
+    git push --no-follow-tags origin HEAD:refs/heads/main ;;
 esac

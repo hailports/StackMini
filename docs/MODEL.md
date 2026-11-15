@@ -1,5 +1,13 @@
 # Model and server build
 
+## Live chat server on 2026-11-15
+
+A switch to Gemma 4 26B-A4B QAT was attempted and rolled back the same day. The reference process is still the previous server described below: vision projector loaded, and context 32768 when the memory level is 40 or higher at start.
+
+The Gemma file is a 14249047104-byte QAT GGUF. The new server stayed inside `open()` on that file. `stat` succeeded. A direct read of the data fork did not return. The volume that holds the file was full. No weight file was deleted. The previous server was restored on 127.0.0.1 port 18080.
+
+`scripts/gemma_serve.sh` is the serve path for a later try. It listens on 127.0.0.1 port 18080 only, context 8192, text only, no MTP, and no projector. It does not read the extra-flag file used by the vision server. The process name must stay `mlx-qwen-llama-server`. Do not run it at the same time as the vision server. Point its binary flag at llama.cpp build 12412, which is the build that was started for this attempt. `scripts/rollback_main_to_minicpm.sh` points the launch agent back at the previous serve script. `--check` only tests that the previous script, weights, and 32768 context flag are present.
+
 This is the reference stack the appliance was shaped around, plus the builds the installer uses on other machines.
 
 ## Reference machine

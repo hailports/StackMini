@@ -17,3 +17,11 @@ Private terms go in `~/.config/hailports-guard/deny.txt` (substrings) and
 `scripts/stack-change.sh` runs `hailports-guard verify` before it pushes, so
 `--no-verify` does not skip it, and a CI job can run
 `hailports-guard audit` on every push and pull request.
+
+Scoped credential helper for the same GitHub account, without changing which
+`gh` account is active. Point only that URL at the helper in this directory:
+
+    git config --global credential.https://github.com/hailports.helper /path/to/StackMini/contrib/git-guard/git-credential-hailports
+    git config --global credential.https://github.com/hailports.useHttpPath true
+
+The helper answers `get` for that URL only.
