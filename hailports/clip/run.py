@@ -16,6 +16,7 @@ from hailports.clip.scene import (
     bounced_choice,
     copy_text,
     draft_rules,
+    drop_ungrounded,
     ensure_commits,
     missing_commits,
     overreach,
@@ -238,12 +239,12 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
     try:
         hops = endpoints_from(route)
         text, hop = complete(hops, prepared["messages"])
-        text = shape_voice(plain_reply(text), sources, who)
+        text = drop_ungrounded(shape_voice(plain_reply(text), sources, who), sources, who)
         weak = misses_points(text, points) or (bool(re.search(r"\.(?:cls|js|html)\b", found or "")) and thin_reply(text, found))
         if weak and len(hops) > 1:
             try:
                 nxt, nxt_hop = complete(hops[1:], prepared["messages"])
-                nxt = shape_voice(plain_reply(nxt), sources, who)
+                nxt = drop_ungrounded(shape_voice(plain_reply(nxt), sources, who), sources, who)
                 if nxt and not thin_reply(nxt, found) and not misses_points(nxt, points):
                     text, hop = nxt, nxt_hop
             except ModelOffline:
@@ -266,11 +267,11 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
                 {"role": "user", "content": ask},
             ]
             try:
-                text = shape_voice(plain_reply(_complete(route)(retry).strip()), sources, who)
+                text = drop_ungrounded(shape_voice(plain_reply(_complete(route)(retry).strip()), sources, who), sources, who)
             except ModelOffline:
                 # A weak first draft beats nothing. An invented one does not.
                 text = "" if invented else first
-        kept = ensure_commits(as_writer(trim_overreach(text, sources), me), sources)
+        kept = drop_ungrounded(ensure_commits(as_writer(trim_overreach(text, sources), me), sources), sources, who)
         # Cleanup that removes the whole reply must not put the raw text back.
         if reply_ok(kept):
             text = kept

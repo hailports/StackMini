@@ -75,7 +75,9 @@ _CASE_SKIP = {
     "need", "needs", "there", "here", "let", "lets", "thanks", "thank", "dear",
 }
 _ASK_OBJECT = re.compile(
-    r"(?i)\b(?:(?:we|they)\s+)?(?:still\s+)?need\s+(?P<get>[^.?\n]{0,90})"
+    r"(?i)\b(?:we|they)\s+still\s+need\s+(?P<get>[^.?\n]{0,90})"
+    r"|\bstill\s+need\s+(?P<need>[^.?\n]{0,90})"
+    r"|\b(?:we|they)\s+need\s+(?P<get2>[^.?\n]{0,90})"
     r"|\b(?:can|could)\s+you\s+bring\s+(?P<bring>[^.?\n]{0,90})"
     r"|\b(?:can|could)\s+you\s+grab\s+(?P<grab>[^.?\n]{0,90})"
     r"|\b(?:can|could)\s+you\s+get\s+(?P<get2>[^.?\n]{0,90})"
@@ -509,6 +511,33 @@ def missing_commits(reply: str, sources: str) -> list[str]:
     return missing
 
 
+def drop_ungrounded(reply: str, sources: str, addressee: str = "") -> str:
+    """Drop a sentence that names someone the thread never mentions, or fetches an object it never names."""
+    low_src = (sources or "").lower()
+    who = (addressee or "").strip().lower()
+    kept = []
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", (reply or "").strip()):
+        piece = sentence.strip()
+        if not piece:
+            continue
+        grounded = True
+        for word in re.findall(r"[A-Za-z][A-Za-z0-9'’-]*", piece):
+            low = word.lower()
+            head = re.split(r"['’]", low, maxsplit=1)[0]
+            if head in _DAYS or head in _MONTHS or head in {"i", "i'll", "i'm", "i'd", "i've"}:
+                continue
+            titled = word[:1].isupper() or (word.isupper() and len(word) > 2)
+            if titled and head not in low_src and head != who:
+                grounded = False
+                break
+        fetched = re.search(r"(?i)\bi'll (?:get|grab|bring) the ([a-z]{4,})", piece)
+        if fetched and fetched.group(1) not in low_src:
+            grounded = False
+        if grounded:
+            kept.append(piece)
+    return " ".join(kept).strip()
+
+
 def ensure_commits(reply: str, sources: str) -> str:
     """Add a will-line for an asked object the model skipped or replaced with a status."""
     body = (reply or "").strip()
@@ -535,7 +564,9 @@ def draft_rules(addressee: str = "", choice: bool = False) -> str:
         "If they ask yes or no, answer yes or no in the sentence right after the greeting.",
         "If they ask you to bring, grab, cover, swap, check, or change something, say you will. That is the answer, not a new fact, and not a claim the work is already finished.",
         "If they say they still need something, say you will get it. Do not report a status such as sorted, not sorted, ready, or lined up unless those words are in the thread.",
-        "Keep the capitalization of every proper name written in the thread.",
+        "Keep the capitalization of every proper name written in the thread, including a possessive.",
+        "Do not add a person, a company, or a task this thread does not mention.",
+        "A short question still needs yes or no.",
         "Do not answer an action ask with 'I do not have a confirmed update' or 'not a full update'.",
         "If they ask whether something is the cause and the thread does not say, say you do not know yet. Do not name the cause.",
         "Name every object, place, time, and change they brought up. Use their words. Do not answer only the last line.",
@@ -624,6 +655,9 @@ def shape_voice(text: str, sources: str = "", addressee: str = "") -> str:
             return "I" + word[1:]
         if low in named:
             return named[low]
+        for key, canonical in named.items():
+            if low.startswith(key) and len(low) > len(key) and low[len(key)] in {"'", "’"}:
+                return canonical + word[len(key):]
         if addressee and low == addressee.lower():
             return addressee
         if word in protected:
