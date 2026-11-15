@@ -225,8 +225,8 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
         except OSError:
             pass
         invented = overreach(text, sources)
+        first = text
         if invented or (weak and len(hops) <= 1):
-            first = text
             retry = list(prepared["messages"]) + [
                 {"role": "assistant", "content": text},
                 {"role": "user", "content": (
@@ -245,6 +245,10 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
         # Cleanup that removes the whole reply must not put the raw text back.
         if reply_ok(kept):
             text = kept
+        elif weak and not invented and len(hops) <= 1:
+            # Retry returned worse junk; keep the usable first draft.
+            fallback = as_writer(trim_overreach(first, sources), me)
+            text = fallback if reply_ok(fallback) else ""
         else:
             text = ""
     except ModelOffline as exc:

@@ -43,3 +43,41 @@ def test_hop_meta_is_narrow():
         {"role": "user", "content": "Rewrite that reply"},
     ])
     assert len(user) <= 4000 and user.endswith("Rewrite that reply")
+
+
+def test_weak_retry_keeps_first_when_retry_is_meta(tmp_path, monkeypatch, capsys):
+    """A single-hop weak draft must survive a retry that comes back as narration."""
+    import io
+    from hailports.clip import board, hops, run as runmod
+    from hailports.clip import gate
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".config/paiste").mkdir(parents=True)
+    monkeypatch.setattr(gate, "allowed", lambda cfg=None: True)
+    monkeypatch.setattr(runmod, "_instructions", lambda cfg: (
+        "You are viewing a communication on the screen. Write short replies."
+    ))
+    monkeypatch.setattr(board, "misses_points", lambda text, points: True)
+    monkeypatch.setattr(board, "thin_reply", lambda text, found: False)
+    monkeypatch.setattr(board, "thread_points", lambda sources: ["portal"])
+
+    def http(endpoint, messages):
+        blob = "\n".join(str(m.get("content") or "") for m in messages)
+        if "Rewrite that reply" in blob:
+            return "I see the request and based on the message it does not list a date."
+        return "hey Lee -- I can look into the portal access."
+
+    monkeypatch.setattr(hops, "_http", http)
+    doc = {
+        "app": "Mail",
+        "title": "Portal",
+        "blocks": [{"text": "From: Lee\nSubject: Portal\n\nCan you look into the portal access?"}],
+    }
+    route = {"paiste": {"order": ["only"], "models": {
+        "only": {"via": "http", "base_url": "http://127.0.0.1:9/v1", "model": "x"},
+    }}}
+    rc = runmod.draft_scene(doc, "http://127.0.0.1:9/v1", "x", copy=False, cfg=route)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "look into the portal" in out
+    assert "I see the request" not in out
