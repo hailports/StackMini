@@ -2,11 +2,13 @@
 
 ## Live chat server on 2026-11-15
 
-A switch to Gemma 4 26B-A4B QAT was attempted and rolled back the same day. The reference process is still the previous server described below: vision projector loaded, and context 32768 when the memory level is 40 or higher at start.
+The reference chat server is Gemma 4 26B-A4B QAT. It is text only. Context is 8192. There is no MTP and no vision projector. The server reports one alias, `Gemma-4-26B-A4B-it-QAT`. Input modality is text. The process name stays `mlx-qwen-llama-server`. It listens on 127.0.0.1 port 18080 only. Do not start a second chat model beside it.
 
-The Gemma file is a 14249047104-byte QAT GGUF. The new server stayed inside `open()` on that file. `stat` succeeded. A direct read of the data fork did not return. The volume that holds the file was full. No weight file was deleted. The previous server was restored on 127.0.0.1 port 18080.
+An earlier switch the same day was rolled back. The 14249047104-byte QAT GGUF lived on a volume that was full, and the server sat inside `open()` on that file. `stat` succeeded. A direct read of the data fork did not return. Nothing was deleted. The file was then copied onto the internal data volume, the copy was the same size, and a read of the header returned GGUF. Only after that did this server replace the previous one. The original file is still on the other volume.
 
-`scripts/gemma_serve.sh` is the serve path for a later try. It listens on 127.0.0.1 port 18080 only, context 8192, text only, no MTP, and no projector. It does not read the extra-flag file used by the vision server. The process name must stay `mlx-qwen-llama-server`. Do not run it at the same time as the vision server. Point its binary flag at llama.cpp build 12412, which is the build that was started for this attempt. `scripts/rollback_main_to_minicpm.sh` points the launch agent back at the previous serve script. `--check` only tests that the previous script, weights, and 32768 context flag are present.
+`scripts/gemma_serve.sh` is the serve path. Point the model flag at the internal copy. Point the binary flag at llama.cpp build 12412. The script does not read the extra-flag file used by the vision server. The chat client reads the `live_chat_alias` flag and must not keep the previous model's name, a 32768 context, or a vision claim. `scripts/rollback_main_to_minicpm.sh` points the launch agent back at the previous serve script and writes the previous alias back into that flag. `--check` only tests that the previous script, weights, and 32768 context flag are present. Do not run both servers at once.
+
+On the internal copy, a 29-token prompt ran at about 100 tokens/s and the 4-token reply at about 28 tokens/s. A 23-token prompt ran at about 120 tokens/s and a 39-token reply at about 33 tokens/s. The server's context field is 8192. A later isolated short reply had a time to first token of about 3 seconds. One back-to-back call during the same check waited much longer before the first token; the server's own token timing for the completed replies stayed in the range above.
 
 This is the reference stack the appliance was shaped around, plus the builds the installer uses on other machines.
 
@@ -14,11 +16,13 @@ This is the reference stack the appliance was shaped around, plus the builds the
 
 Apple M4, 10 cores (4 performance, 6 efficiency), 24 GB unified memory. No serial number, OS build, or host name belong in this doc.
 
-## Chat model
+## Previous chat model
 
-As of the 2026-11-09 audit the reference machine serves the IQ3_XS file below. The `mix_q3gud_im` file is kept beside it as the fallback, and the installer still picks `mix_q3gud_im` for 20 GB+ machines (that default is unchanged).
+This is the previous vision server. It is the rollback target, and the installer still picks `mix_q3gud_im` for other 20 GB+ machines. It is not the process on port 18080.
 
-| Piece | Running on the reference machine |
+As of the 2026-11-09 audit the reference machine served the IQ3_XS file below. The `mix_q3gud_im` file is kept beside it as the fallback.
+
+| Piece | Previous server |
 | --- | --- |
 | File on disk | `m.gguf`, 14483689408 bytes |
 | Sidecar name | MiniCPM-V-4.7-35B-A3B (IQ3_XS) |
@@ -179,7 +183,7 @@ prune does not remove the projector before the next boot.
 
 ## Chat-server binary check (2026-11-15)
 
-The reference machine is still on the Metal build of commit `f174553` above. A same-day check of newer llama.cpp did not beat that binary on a fixed bench, so it was not adopted.
+The bench below is the previous vision server. The live text server does not use that binary. It uses the native Metal build of llama.cpp `b12412` (commit `73f53317e`). On the previous vision model, a same-day check of newer llama.cpp did not beat commit `f174553`, so that older binary was kept for the vision server.
 
 The bench is three short prompts (plain prose, a Python module, a project status update), 300 tokens each, temperature 0, seed 7, prompt cache off, two rounds. Weighted decode is total tokens divided by the sum of (tokens / tok/s). Baseline on `f174553` was 40.2 to 40.7 tok/s overall and 69.7% draft acceptance (prose about 37, code about 48, work about 38).
 
@@ -195,7 +199,7 @@ Code-prompt draft acceptance also slipped from 195/273 to 193/273 on the newer b
 
 After those results, the launch wrapper was pointed back at the `f174553` binary and the LaunchAgent was started again. A repeat of the same bench was 40.64 and 39.02 tok/s, acceptance 69.7%. The slightly slower second restore run had long wall times from a shared slot, not a lower acceptance count.
 
-The launch wrapper's last-resort path must be a binary that exists. A missing older tree name was changed to the proven `f174553` Metal build. The flag that names the live binary is still that same path. Embeddings were left on the separate v0.6.0 server; they were not moved onto a build that lost the chat bench.
+The launch wrapper's last-resort path must be a binary that exists. A missing older tree name was changed to the proven `f174553` Metal build. The vision server's binary flag still names the `f174553` build. The live text server's binary flag names the `b12412` build. Embeddings were left on the separate v0.6.0 server; they were not moved onto a build that lost the chat bench.
 
 A 32768 context start is safe when the previous server has been stopped and the memory level is 40 or higher. On this check the level rose above 80 within a couple of seconds of the stop. Do not force 32768 while the old process is still resident.
 

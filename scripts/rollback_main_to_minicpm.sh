@@ -32,6 +32,7 @@ fi
 
 log "ROLLBACK_START"
 echo minicpm > "$HOME/claude-stack/data/flags/gd_model_variant"
+printf '%s\n' 'MiniCPM-V-4.7-35B-A3B' > "$HOME/claude-stack/data/flags/live_chat_alias"
 /usr/libexec/PlistBuddy -c "Set :ProgramArguments:1 $SERVE" "$PLIST"
 if [ -f "$BAK/gateway-8787.plist" ]; then cp "$BAK/gateway-8787.plist" "$DOOR_PLIST"; fi
 if [ -f "$BAK/gateway.json" ]; then cp "$BAK/gateway.json" "$HOME/llm-appliance/config/gateway.json"; fi
