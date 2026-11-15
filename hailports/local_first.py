@@ -345,7 +345,7 @@ def _ssh_fetch(cfg: dict, prompt: str, priority: int) -> dict:
         "except Exception as exc:\n"
         "    json.dump({'ok': False, 'error': type(exc).__name__}, sys.stdout)\n"
         "    raise SystemExit(0)\n"
-        "json.dump({'ok': True, 'text': out.get('text') or '', 'elapsed_s': out.get('elapsed_s'), 'usage': out.get('usage') or {}}, sys.stdout)\n"
+        "json.dump({'ok': True, 'text': out.get('text') or '', 'elapsed_s': out.get('elapsed_s'), 'usage': out.get('usage') or {}, 'timings': out.get('timings') or {}}, sys.stdout)\n"
     )
     cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=12", "-o", "StrictHostKeyChecking=accept-new"]
     proxy = str(cfg.get("ssh_proxy_command") or "").strip()
@@ -409,7 +409,38 @@ def _http_fetch(cfg: dict, prompt: str) -> dict:
     text = (msg.get("content") or msg.get("reasoning_content") or "").strip()
     if not text and data.get("error"):
         return {"ok": False, "error": "http_error"}
-    return {"ok": bool(text), "text": text, "usage": data.get("usage") or {}, "error": "" if text else "empty"}
+    return {
+        "ok": bool(text),
+        "text": text,
+        "usage": data.get("usage") or {},
+        "timings": data.get("timings") or {},
+        "error": "" if text else "empty",
+    }
+
+
+def _load_coop():
+    """Return the coop helper module, or None. Never raises."""
+    try:
+        here = str(Path(__file__).resolve().parent)
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import coop_route as coop
+        return coop
+    except Exception:
+        return None
+
+
+def _apply_timings(got: dict) -> dict:
+    if not isinstance(got, dict):
+        return got
+    coop = _load_coop()
+    if coop is None:
+        return got
+    try:
+        got["usage"] = coop.coerce_usage(got.get("usage"), got.get("timings"))
+    except Exception:
+        return got
+    return got
 
 
 def fetch_local(cfg: dict, prompt: str, *, priority: int) -> dict:
@@ -418,15 +449,15 @@ def fetch_local(cfg: dict, prompt: str, *, priority: int) -> dict:
         got = _ssh_fetch(cfg, prompt, priority)
         if got.get("ok"):
             got["backend"] = "mini_8080"
-            return got
+            return _apply_timings(got)
         http = _http_fetch(cfg, prompt)
         if http.get("ok"):
             http["backend"] = "mini_8080_http"
-            return http
+            return _apply_timings(http)
         return {"ok": False, "error": got.get("error") or http.get("error") or "local_unavailable", "backend": "unavailable"}
     got = _http_fetch(cfg, prompt)
     got["backend"] = "mini_8080_http" if got.get("ok") else "unavailable"
-    return got
+    return _apply_timings(got)
 
 
 def _record(cfg: dict, result: dict, task: str) -> None:
@@ -448,6 +479,9 @@ def _record(cfg: dict, result: dict, task: str) -> None:
         "prompt_tokens": usage.get("prompt_tokens"),
         "completion_tokens": usage.get("completion_tokens"),
         "cached_tokens": ((usage.get("prompt_tokens_details") or {}) if isinstance(usage.get("prompt_tokens_details"), dict) else {}).get("cached_tokens"),
+        "coop_pattern": result.get("coop_pattern") or "",
+        "premium_in_saved": int(result.get("premium_in_saved") or 0),
+        "premium_out_saved": int(result.get("premium_out_saved") or 0),
     }
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -527,10 +561,164 @@ def _jev_done(task: str, answer: str, caller: str) -> bool | None:
         return None
 
 
+def _task_key(task: str) -> str:
+    return _sha(split_footer(task)[0])
+
+
+def _jev_action_for(task: str, answer: str, caller: str) -> str | None:
+    try:
+        if os.environ.get("JEV_DISABLE", "") == "1":
+            return None
+        core = str(Path(__file__).resolve().parent)
+        if core not in sys.path:
+            sys.path.insert(0, core)
+        from jev_gates import score_local
+        return score_local(task, answer, caller="coop:" + caller)
+    except Exception:
+        return None
+
+
+def _coop_call(cfg: dict, fetch, prompt: str, priority: int) -> dict | None:
+    """Local coop call. Injected route fetch is not reused, so old tests stay quiet."""
+    coop = _load_coop()
+    if coop is None or not coop.coop_enabled(cfg):
+        return None
+    hook = (cfg or {}).get("coop_fetch")
+    if callable(hook):
+        try:
+            got = hook(prompt)
+        except Exception:
+            return None
+        return got if isinstance(got, dict) else None
+    if fetch is not None:
+        return None
+    transport = str((cfg or {}).get("transport") or "").lower()
+    if transport in {"", "inject"} and not (cfg or {}).get("http_url") and not (cfg or {}).get("ssh_target"):
+        return None
+    try:
+        return fetch_local(cfg, prompt, priority=priority)
+    except Exception:
+        return None
+
+
+def _finish_route(cfg: dict, result: dict, task: str, execute_paid) -> dict:
+    result["paid_invoked"] = False
+    if execute_paid is not None and result.get("decision") == "need_premium" and os.environ.get("LOCAL_FIRST_DRY") != "1":
+        execute_paid(paid_prompt(result, task))
+        result["paid_invoked"] = True
+    _record(cfg, result, task)
+    return result
+
+
+def _remember(cfg: dict, task: str, result: dict, pattern: str) -> None:
+    coop = _load_coop()
+    if coop is None or not coop.coop_enabled(cfg):
+        return
+    if result.get("decision") != "complete_local":
+        return
+    answer = str(result.get("answer") or "").strip()
+    if not answer:
+        return
+    try:
+        coop.annotate_complete(result, split_footer(task)[0], result.get("coop_pattern") or pattern)
+        coop.cache_store(
+            cfg,
+            _task_key(task),
+            answer,
+            int(result.get("premium_in_saved") or 0),
+            int(result.get("premium_out_saved") or 0),
+        )
+    except Exception:
+        return
+
+
+def _skipped_or_coop(task, stakes, stake_why, extra, cfg, fetch, caller) -> dict:
+    """Today's skip, unless a coop pattern accepts or shortens the brief."""
+    coop = _load_coop()
+    priority = 0 if caller in {"grok", "cli", "cursor", "claude", "codex", "cursor-agent", "agent"} else 2
+    body = split_footer(task)[0]
+    if coop and coop.coop_enabled(cfg) and stakes == "unsure" and coop.dig_like(body):
+        local = _coop_call(cfg, fetch, local_user_delta(task, stakes, ""), priority)
+        if local and local.get("ok"):
+            plain = coop.plain_answer(str(local.get("text") or ""))
+            action = _jev_action_for(body, plain, caller)
+            try:
+                allowed = coop.allow_local_finish(body, plain, action)
+            except Exception:
+                allowed = False
+            if allowed:
+                result = policy_decision(task, "", extra_high=extra, backend=str(local.get("backend") or "local"))
+                result["decision"] = "complete_local"
+                result["answer"] = plain
+                result["why"] = "jev_high_confidence" if action == "stop" else "coop_dig_gate"
+                result["confidence"] = max(float(result.get("confidence") or 0), 0.8)
+                result["stakes"] = stakes
+                result["backend"] = str(local.get("backend") or "mini_8080")
+                result["usage"] = local.get("usage") or {}
+                result["caller"] = caller
+                result["brief"] = build_brief(stakes, result["why"], plain)
+                _remember(cfg, task, result, "jev_gate")
+                return result
+    draft = "Local model skipped; stakes are not low."
+    if coop and coop.coop_enabled(cfg) and len(body) >= coop.long_chars(cfg):
+        comp = _coop_call(cfg, fetch, coop.compress_prompt(body), priority)
+        if comp and comp.get("ok"):
+            summary = coop.plain_answer(str(comp.get("text") or ""))
+            try:
+                ok = coop.compression_ok(body, summary, limit=coop.long_chars(cfg))
+            except Exception:
+                ok = False
+            if ok:
+                draft = "Local model skipped; stakes are not low.\n\nCOMPRESSED CONTEXT:\n" + summary
+                result = policy_decision(task, "", extra_high=extra, backend="skipped_stakes")
+                result["why"] = stake_why
+                result["brief"] = build_brief(stakes, stake_why, draft)
+                result["usage"] = comp.get("usage") or {}
+                result["caller"] = caller
+                result["coop_pattern"] = "precompress"
+                result["premium_in_saved"] = max(0, coop.estimate_tokens(body) - coop.estimate_tokens(summary))
+                result["premium_out_saved"] = 0
+                return result
+    result = policy_decision(task, "", extra_high=extra, backend="skipped_stakes")
+    result["why"] = stake_why
+    result["brief"] = build_brief(stakes, stake_why, draft)
+    result["usage"] = {}
+    result["caller"] = caller
+    return result
+
+
 def route_task(task: str, *, caller: str = "cli", fetch=None, config: dict | None = None, execute_paid=None) -> dict:
     cfg = config if config is not None else load_config()
     extra = [str(x) for x in (cfg.get("extra_high_substrings") or [])]
-    stakes, _why = classify_stakes(task, extra)
+    stakes, stake_why = classify_stakes(task, extra)
+    coop = _load_coop()
+    if coop and coop.coop_enabled(cfg) and stakes != "high":
+        try:
+            hit = coop.cache_lookup(cfg, _task_key(task))
+        except Exception:
+            hit = None
+        if isinstance(hit, dict) and str(hit.get("answer") or "").strip():
+            answer = str(hit.get("answer") or "").strip()
+            result = {
+                "schema": SCHEMA,
+                "decision": "complete_local",
+                "why": "cache_hit",
+                "confidence": 0.9,
+                "stakes": stakes,
+                "brief": build_brief(stakes, "cache_hit", answer),
+                "answer": answer,
+                "paid_invoked": False,
+                "backend": "answer_cache",
+                "usage": {},
+                "caller": caller,
+                "coop_pattern": "cache",
+                "premium_in_saved": int(hit.get("premium_in_saved") or coop.estimate_tokens(split_footer(task)[0])),
+                "premium_out_saved": int(hit.get("premium_out_saved") or coop.estimate_tokens(answer)),
+            }
+            return _finish_route(cfg, result, task, execute_paid)
+    if stakes in {"high", "unsure"}:
+        result = _skipped_or_coop(task, stakes, stake_why, extra, cfg, fetch, caller)
+        return _finish_route(cfg, result, task, execute_paid)
     evidence = ""
     if fetch is None and config is None:
         evidence = fetch_prep(cfg, task)
@@ -557,12 +745,8 @@ def route_task(task: str, *, caller: str = "cli", fetch=None, config: dict | Non
         result["elapsed_s"] = local.get("elapsed_s")
         result = _jev_after_local(task, local_text, result, caller)
     result["caller"] = caller
-    result["paid_invoked"] = False
-    if execute_paid is not None and result["decision"] == "need_premium" and os.environ.get("LOCAL_FIRST_DRY") != "1":
-        execute_paid(paid_prompt(result, task))
-        result["paid_invoked"] = True
-    _record(cfg if config is None else (config or {}), result, task)
-    return result
+    _remember(cfg, task, result, "low_local")
+    return _finish_route(cfg, result, task, execute_paid)
 
 
 def before_paid(task: str, caller: str = "paid") -> tuple[str, str]:

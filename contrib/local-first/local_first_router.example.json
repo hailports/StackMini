@@ -1,5 +1,8 @@
 {
   "transport": "http",
   "http_url": "http://127.0.0.1:8080/v1/chat/completions",
-  "model": "local"
+  "model": "local",
+  "coop_mode": true,
+  "coop_long_chars": 1500,
+  "answer_cache_path": ""
 }

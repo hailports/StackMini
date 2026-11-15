@@ -1,0 +1,5 @@
+{"id":"s1","stakes":"low","task":"Summarize this note in one sentence: the queue has 12 waiting and 3 finished.","facts":["12","3"]}
+{"id":"s2","stakes":"unsure","task":"What is the current state of the sample log? waiting 12, finished 3, skipped 40, unsure 7.","facts":["12","40","7"]}
+{"id":"s3","stakes":"unsure","task":"help me with this","facts":[]}
+{"id":"s4","stakes":"high","task":"Draft an email to the customer about the outage. Waiting 12, finished 3.","facts":["12"]}
+{"id":"s5","stakes":"low","task":"Summarize this note in one sentence: the queue has 12 waiting and 3 finished.","facts":["12","3"],"repeat_of":"s1"}
