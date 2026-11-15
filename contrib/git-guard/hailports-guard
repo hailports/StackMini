@@ -58,7 +58,7 @@ check_commit() {
   [ -s "$TMP/em" ] && bad "$short message: email address"
   if [ "$full" = 1 ]; then
     scan_text "$TMP/msg" "$short message"
-    git diff-tree -r -p -U0 --no-color --no-ext-diff --root --no-commit-id "$c" > "$TMP/diff" || { bad "$short: no diff"; return; }
+    git diff-tree -m -r -p -U0 --no-color --no-ext-diff --root --no-commit-id "$c" > "$TMP/diff" || { bad "$short: no diff"; return; }
     grep '^+' "$TMP/diff" | grep -v '^+++ ' > "$TMP/add"
     grep -E '^(\+\+\+|---) ' "$TMP/diff" | grep -v '/dev/null' >> "$TMP/add"
     scan_text "$TMP/add" "$short added lines"
@@ -73,19 +73,6 @@ check_tag() {  # annotated tag object
   scan_text "$TMP/tmsg" "tag message"
 }
 
-# Visibility decides how much content scanning a repo gets. Only a repo the
-# hailports account confirms is private skips the content checks; anything
-# else (public, unknown, offline) gets the full scan.
-repo_is_private() {
-  slug=$(echo "$1" | sed -E -n 's#.*github\.com[:/]hailports/([^/ ]+)$#\1#p' | sed 's/\.git$//')
-  [ -n "$slug" ] || return 1
-  command -v gh >/dev/null 2>&1 || return 1
-  tok=$(gh auth token --user hailports 2>/dev/null) || return 1
-  [ -n "$tok" ] || return 1
-  v=$(GH_TOKEN=$tok gh api "repos/hailports/$slug" --jq .private 2>/dev/null) || return 1
-  [ "$v" = true ]
-}
-
 run_checks() {  # $1 remote, $2 url, stdin ref lines
   remote=$1; url=$2
   case "$url" in
@@ -93,16 +80,25 @@ run_checks() {  # $1 remote, $2 url, stdin ref lines
     *) exit 0 ;;
   esac
   full=1
-  if repo_is_private "$url"; then full=0; say "private repo: identity and secret checks only"; fi
-  if [ "$full" = 1 ] && ! deny_ok; then bad "missing private term list $DENY"; fi
+  if ! deny_ok || [ ! -s "$WORDS" ]; then bad "missing private term list (deny.txt or deny-words.txt)"; fi
   : > "$TMP/commits"
   : > "$TMP/excl"
+  # Commits the server already advertises are public; skip only those.
+  ADV=""
+  for h in $(git ls-remote "$url" 2>/dev/null | cut -f1 | sort -u); do
+    git cat-file -e "$h^{commit}" 2>/dev/null && ADV="$ADV $h"
+  done
   while read -r lref lsha rref rsha; do
     [ -n "${lsha:-}" ] || continue
     [ "$lsha" = "$ZERO" ] && continue
     if [ "$(git cat-file -t "$lsha" 2>/dev/null)" = tag ]; then check_tag "$lsha"; fi
-    ex="--not --remotes=$remote"
-    if [ "${rsha:-$ZERO}" != "$ZERO" ] && git cat-file -e "$rsha^{commit}" 2>/dev/null; then ex="$ex $rsha"; fi
+    # Trust only the server-advertised target, never stale tracking refs.
+    ex=""
+    if [ "${rsha:-$ZERO}" != "$ZERO" ]; then
+      git cat-file -e "$rsha^{commit}" 2>/dev/null && ex="$rsha" || bad "remote base missing: fetch before pushing"
+    fi
+    ex="$ex$ADV"
+    [ -n "$ex" ] && ex="--not $ex"
     git rev-list "$lsha^{commit}" $ex >> "$TMP/commits" || bad "cannot list commits for $lref"
     echo "$lsha^{commit} $ex" >> "$TMP/excl"
   done
@@ -136,8 +132,10 @@ case "$cmd" in
     for r in "$@"; do
       sha=$(git rev-parse --verify "$r") || { say "BLOCKED: bad ref $r"; exit 1; }
       dst=$(git rev-parse --abbrev-ref "$r@{upstream}" 2>/dev/null | sed "s#^$remote/##")
-      rs=$( [ -n "$dst" ] && git rev-parse --verify -q "refs/remotes/$remote/$dst" || echo $ZERO)
-      echo "$r $sha refs/heads/${dst:-x} $rs"
+      [ -n "$dst" ] || dst=$(git symbolic-ref --short -q HEAD || echo x)
+      rs=$(git ls-remote --exit-code "$url" "refs/heads/$dst" 2>/dev/null | cut -f1)
+      [ -n "$rs" ] || rs=$ZERO
+      echo "$r $sha refs/heads/$dst $rs"
     done | run_checks "$remote" "$url" ;;
   audit)
     cd "${1:-.}" || exit 1
