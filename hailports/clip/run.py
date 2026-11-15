@@ -11,15 +11,22 @@ from pathlib import Path
 
 from hailports.llm import ModelOffline
 from hailports.clip.scene import (
+    addressee_first,
     as_writer,
+    bounced_choice,
     copy_text,
+    draft_rules,
     overreach,
+    plain_reply,
     prepare,
+    relevant_notes,
     reply_ok,
+    rewrite_ask,
     run_inbox,
     scene_from,
+    screen_has_choice,
+    shape_voice,
     source_dirs,
-    plain_reply,
     trim_overreach,
 )
 from hailports.clip.hops import complete, endpoints_from
@@ -118,7 +125,7 @@ def _with_points(messages: list[dict], points: list[str]) -> list[dict]:
         return messages
     lines = [
         "Cover every point below that is still open. Do not answer only the last line.",
-        "One short line for each point. Use I, not we.",
+        "One short sentence for each point. Use I, not we. No labels or headers.",
         "Do not turn their update into a new rule they did not say.",
         "Do not start with a number. Do not end with lmk.",
     ]
@@ -128,6 +135,23 @@ def _with_points(messages: list[dict], points: list[str]) -> list[dict]:
     for index in range(len(out) - 1, -1, -1):
         if out[index].get("role") == "user":
             out[index]["content"] = str(out[index].get("content") or "") + "\n\n" + block
+            break
+    return out
+
+
+def _pin_rules(messages: list[dict], rules: str) -> list[dict]:
+    """Hops keep the front of the system prompt and the front of the user turn."""
+    out = [dict(item) for item in messages]
+    brief = " ".join(rules.split())
+    if out and out[0].get("role") == "system":
+        body = str(out[0].get("content") or "")
+        if not body.startswith("These rules win"):
+            out[0]["content"] = brief + "\n\n" + body
+    for item in out:
+        if item.get("role") == "user":
+            cur = str(item.get("content") or "")
+            if not cur.startswith("These rules win"):
+                item["content"] = brief + "\n\n" + cur
             break
     return out
 
@@ -166,17 +190,13 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
             "Do not invent a fact that is not on screen and not in those.\n\n"
             + rules
         )
-    rules += (
-        "\n\nWrite the reply itself, ready to paste. Never narrate or describe the message "
-        "(no \"I see the request\", no \"the message does not list\"). "
-        "If the screen is thin, still answer every open ask with concrete next steps "
-        "from the notes: who owns it, what I will do, what I need from them. "
-        "Use I, not we. Never invent a date, a time, or a fact."
-    )
     messages = prepared.get("messages") or []
     if messages and messages[0].get("role") == "system":
         messages[0]["content"] = rules
     me = [part.strip() for part in str((route.get("paiste") or {}).get("me") or "").split(",") if part.strip()]
+    sources = "\n".join(prepared.get("sources") or [])
+    who = addressee_first(sources, me)
+    choice = screen_has_choice(sources)
     voice = _context_note(route)[:1400]
     parts = []
     if me:
@@ -187,10 +207,11 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
         )
     if voice:
         parts.append(voice)
-    found = _lookup_notes(route, "\n".join(prepared.get("sources") or []))
+    found = relevant_notes(_lookup_notes(route, sources), sources, who)
     if found:
         parts.append(
             "Notes that match this message. Ignore a note that does not match. "
+            "Style samples are tone only. "
             "If a note names a file, a label, or a message, use those words. "
             "Do not replace them with a vague restatement. "
             "Code lines outrank an older note when they disagree. "
@@ -200,20 +221,22 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
     if note:
         from hailports.clip.scene import runner_context
         prepared["messages"] = runner_context(prepared.get("messages") or [], note)
-    sources = "\n".join(prepared.get("sources") or [])
     from hailports.clip.board import misses_points, thin_reply, thread_points
     points = thread_points(sources)
-    prepared["messages"] = _with_points(prepared.get("messages") or [], points)
+    prepared["messages"] = _pin_rules(
+        _with_points(prepared.get("messages") or [], points),
+        draft_rules(who, choice),
+    )
     hop = ""
     try:
         hops = endpoints_from(route)
         text, hop = complete(hops, prepared["messages"])
-        text = plain_reply(text)
+        text = shape_voice(plain_reply(text), sources, who)
         weak = misses_points(text, points) or (bool(re.search(r"\.(?:cls|js|html)\b", found or "")) and thin_reply(text, found))
         if weak and len(hops) > 1:
             try:
                 nxt, nxt_hop = complete(hops[1:], prepared["messages"])
-                nxt = plain_reply(nxt)
+                nxt = shape_voice(plain_reply(nxt), sources, who)
                 if nxt and not thin_reply(nxt, found) and not misses_points(nxt, points):
                     text, hop = nxt, nxt_hop
             except ModelOffline:
@@ -224,20 +247,15 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
             mark.chmod(0o600)
         except OSError:
             pass
-        invented = overreach(text, sources)
+        invented = overreach(text, sources) or bounced_choice(text, sources)
         first = text
         if invented or (weak and len(hops) <= 1):
             retry = list(prepared["messages"]) + [
                 {"role": "assistant", "content": text},
-                {"role": "user", "content": (
-                    "Rewrite that reply in the same voice, as the reply itself. "
-                    "Answer every open ask directly. You may commit to the work that was asked. "
-                    "Do not invent a date, a time, or numbered steps that are not on screen or in the notes. "
-                    "Never describe the message or say what it does not list. No meta commentary."
-                )},
+                {"role": "user", "content": rewrite_ask(who, choice)},
             ]
             try:
-                text = plain_reply(_complete(route)(retry).strip())
+                text = shape_voice(plain_reply(_complete(route)(retry).strip()), sources, who)
             except ModelOffline:
                 # A weak first draft beats nothing. An invented one does not.
                 text = "" if invented else first

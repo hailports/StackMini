@@ -28,6 +28,40 @@ _LINK_ONLY = re.compile(r"(?is)^\s*(available at\s+)?https?://\S+\s*$")
 _PROMISE = re.compile(r"(?i)\b(i'll|i will|i am going to|i'm going to)\b|\blet me (?!know\b)")
 # A promise is fine when it answers the ask. An invented deadline is not.
 _DAY = r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues?|wed|thu(?:rs?)?|fri|sat|sun)\b"
+_DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+_MONTHS = (
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december",
+)
+_WHO = re.compile(
+    r"(?m)^(?:From:\s*([A-Za-z][A-Za-z'’-]*)|"
+    r"([A-Z][A-Za-z'’-]*)(?:\s+[A-Z][A-Za-z'’-]*)?\s+(?:\d{1,2}:\d{2}\s*[AP]M\b|commented\b))"
+)
+_GREET = re.compile(
+    r"(?is)^(?:hey|hi|hello|dear)"
+    r"(?:\s+(?:there|all|y['’]?all|everyone|folks))?"
+    r"(?:\s+[A-Za-z][A-Za-z'’-]*)?"
+    r"\s*(?:--|—|–|,|!)?\s*"
+)
+_LABEL_LINE = re.compile(r"(?m)^(?:[-*]\s*)?[A-Za-z][A-Za-z ]{0,24}:\s+")
+_CHOICE_ASK = re.compile(r"(?i)\b(?:or|either)\b[^\n]{0,120}\?")
+_CHOICE_BOUNCE = re.compile(
+    r"(?i)\b(?:you tell me|up to you|either(?:'s| is) fine|your call|which do you|who do you want|"
+    r"let me know which|you decide|what do you prefer)\b|\?\s*$"
+)
+_INVENTED_CLAIM = re.compile(
+    r"(?i)\b(?:my|our)\s+(?:last\s+|next\s+|own\s+)?(?:meeting|call|appointment|calendar)\b"
+    r"|\bwraps?\s+at\b"
+    r"|\bi(?:'m| am)\s+(?:free|busy|booked|tied up|in a meeting)\b"
+    r"|\b(?:not|aren't|isn'?t|are not|is not)\s+lined\s+up\b"
+)
+_NOTE_STOP = {
+    "about", "after", "again", "being", "could", "every", "first", "their",
+    "there", "these", "thing", "those", "today", "tomorrow", "tonight",
+    "which", "while", "would", "please", "thanks", "thank", "hello",
+    "still", "message", "email", "thread", "subject", "wrote", "write",
+    "reply", "people", "before", "coming", "should",
+}
 _WHEN = re.compile(
     r"(?i)\b(?:by|before|on|until|end of)\s+(?:the\s+)?(?P<day>" + _DAY + r")"
     r"|\b(?:by|before|until)\s+(?P<rel>tomorrow|tonight|next week|end of (?:day|week)|eod|eow|cob)\b"
@@ -296,6 +330,8 @@ def trim_overreach(text: str, sources: str = "") -> str:
                 continue
             if _META.search(piece):
                 continue
+            if invented_claim(piece, sources):
+                continue
             if _PROMISE.search(piece) and _invented_when(piece, sources):
                 continue
             if _STEPS.search(piece) and not _STEPS.search(sources or ""):
@@ -326,14 +362,155 @@ def meta_reply(text: str) -> bool:
     return bool(_META.search(text or ""))
 
 
+def invented_claim(text: str, sources: str = "") -> bool:
+    """A meeting, wrap time, or status the thread does not state."""
+    low = (sources or "").lower()
+    for match in _INVENTED_CLAIM.finditer(text or ""):
+        if match.group(0).lower() not in low:
+            return True
+    return False
+
+
 def overreach(text: str, sources: str = "") -> bool:
     """A promise with an invented deadline, meta narration, or a numbered procedure the source did not contain."""
     body = text or ""
     if _META.search(body):
         return True
+    if invented_claim(body, sources):
+        return True
     if _PROMISE.search(body) and _invented_when(body, sources):
         return True
     return bool(_STEPS.search(body) and not _STEPS.search(sources or ""))
+
+
+def addressee_first(text: str, me: list[str] | None = None) -> str:
+    """First name of the last other person on screen. The writer is skipped."""
+    skip = set()
+    for name in me or []:
+        first = name.strip().split()
+        if first:
+            skip.add(first[0].lower())
+    found = []
+    for left, right in _WHO.findall(text or ""):
+        name = left or right
+        if name and name.lower() not in skip:
+            found.append(name)
+    return found[-1] if found else ""
+
+
+def screen_has_choice(sources: str) -> bool:
+    """True when they asked the writer to pick one side."""
+    return bool(_CHOICE_ASK.search(sources or ""))
+
+
+def bounced_choice(reply: str, sources: str) -> bool:
+    """True when they asked for a pick and the reply hands it back."""
+    if not screen_has_choice(sources):
+        return False
+    body = (reply or "").strip()
+    if not body:
+        return True
+    return bool(_CHOICE_BOUNCE.search(body))
+
+
+def draft_rules(addressee: str = "", choice: bool = False) -> str:
+    """Rules that have to survive a hop that keeps only the front of the prompt."""
+    greet = f"hey {addressee} --" if addressee else "hey <first name> --"
+    lines = [
+        "These rules win. Write only the reply they will paste.",
+        f'Start with "{greet}". Use their first name. Never "hey there", never "hi", never "hello".',
+        "All lowercase except names, dates, days, and I.",
+        "Match the style samples for tone only. Do not copy a fact, time, name, amount, or status out of a sample.",
+        "Use only facts written in this thread. A time written in their message is theirs, not your calendar.",
+        "Do not mention a meeting, a call, a wrap time, or being free or busy unless this thread says that.",
+        "Do not invent a time, a date, a name, a status, or any other fact.",
+        "If they ask yes or no, answer yes or no in the sentence right after the greeting.",
+        "No labels, no headers, no markdown, no word-colon lines. Plain sentences. Use I, not we.",
+        "No reasoning, no tool JSON, no narration of the message.",
+    ]
+    if choice:
+        lines.append(
+            "They asked you to choose. Pick one side and say it. "
+            "Do not hand the choice back and do not end with a question."
+        )
+    return " ".join(lines)
+
+
+def rewrite_ask(addressee: str = "", choice: bool = False) -> str:
+    """The redo turn. Same bar as the first draft."""
+    greet = f"hey {addressee} --" if addressee else "hey <first name> --"
+    choice_line = (
+        " They asked you to choose. Pick one side in a plain sentence. Do not ask them."
+        if choice else ""
+    )
+    return (
+        "Rewrite that reply as the paste itself. "
+        f'Open with "{greet}". '
+        "All lowercase except names, dates, days, and I. "
+        "Answer every open ask. Yes or no when they asked that. "
+        "Do not invent a date, a time, a name, a status, or a fact. "
+        "Do not mention your own meeting, call, or calendar. "
+        "No labels, no headers, no markdown, no reasoning, no tool JSON."
+        + choice_line
+    )
+
+
+def relevant_notes(found: str, screen: str, addressee: str = "") -> str:
+    """Drop a lookup line that is not about this person or this thread."""
+    words = {
+        word.lower()
+        for word in re.findall(r"[A-Za-z]{6,}", screen or "")
+        if word.lower() not in _NOTE_STOP
+    }
+    who = (addressee or "").strip().lower()
+    kept = []
+    for raw in (found or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        overlap = words & {word.lower() for word in re.findall(r"[A-Za-z]{6,}", line)}
+        named = bool(who) and re.search(rf"\b{re.escape(who)}\b", line.lower()) is not None
+        if named or len(overlap) >= 2:
+            kept.append(line)
+    return "\n".join(kept).strip()
+
+
+def shape_voice(text: str, sources: str = "", addressee: str = "") -> str:
+    """Greeting, lowercase, and no label lines. Facts stay as the model wrote them."""
+    body = _LABEL_LINE.sub("", text or "").strip()
+    if not body:
+        return ""
+    if addressee:
+        rest = _GREET.sub("", body, count=1).strip()
+        rest = re.sub(rf"(?i)^{re.escape(addressee)}\s*[,—–-]+\s*", "", rest, count=1).strip()
+        body = f"hey {addressee} -- {rest}".strip() if rest else f"hey {addressee} --"
+    protected = set(re.findall(r"\b[A-Z][A-Za-z0-9'’-]*", sources or ""))
+    if addressee:
+        protected.add(addressee)
+    days = set(_DAYS)
+    months = set(_MONTHS)
+    contractions = {"i'm", "i'll", "i'd", "i've"}
+
+    def repl(match: re.Match) -> str:
+        word = match.group(0)
+        low = word.lower()
+        if low in days or low in months:
+            return low[:1].upper() + low[1:]
+        if low == "i":
+            return "I"
+        if low in contractions:
+            return "I" + word[1:]
+        if addressee and low == addressee.lower():
+            return addressee
+        if word in protected:
+            return word
+        if word.isupper() and len(word) > 1:
+            return word.lower()
+        if word[:1].isupper():
+            return word[:1].lower() + word[1:]
+        return word
+
+    return re.sub(r"[A-Za-z][A-Za-z0-9'’-]*", repl, body).strip()
 
 
 def reply_ok(text: str) -> bool:
