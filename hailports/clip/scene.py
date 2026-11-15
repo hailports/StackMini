@@ -57,7 +57,39 @@ _INVENTED_CLAIM = re.compile(
     r"|\b(?:do not|don't) have a confirmed update\b"
     r"|\bnot a full update\b"
     r"|\bhaven'?t grabbed\b"
+    r"|\bnot\s+sorted(?:\s+yet)?\b"
+    r"|\bsorted\s+yet\b"
+    r"|\b(?:are|is|aren'?t|isn'?t)\s+sorted\b"
+    r"|\b(?:haven'?t|hasn'?t|have not|has not)\s+(?:sorted|gotten|grabbed)\b"
 )
+# Words that show up capitalized because they start a sentence, not because they are names.
+_CASE_SKIP = {
+    "from", "subject", "sent", "date", "commented", "re", "fw", "fwd",
+    "the", "an", "and", "or", "but", "if", "so", "to", "of", "in", "on",
+    "for", "with", "by", "at", "as", "can", "could", "would", "should", "will",
+    "please", "did", "does", "do", "is", "are", "was", "were", "be", "been",
+    "have", "has", "had", "not", "no", "yes", "we", "they", "you", "your",
+    "our", "this", "that", "these", "those", "sorry", "also", "ignore", "any",
+    "got", "still", "looking", "hey", "hi", "hello", "what", "when", "where",
+    "who", "how", "why", "just", "about", "after", "before", "then", "than",
+    "need", "needs", "there", "here", "let", "lets", "thanks", "thank", "dear",
+}
+_ASK_OBJECT = re.compile(
+    r"(?i)\b(?:(?:we|they)\s+)?(?:still\s+)?need\s+(?P<get>[^.?\n]{0,90})"
+    r"|\b(?:can|could)\s+you\s+bring\s+(?P<bring>[^.?\n]{0,90})"
+    r"|\b(?:can|could)\s+you\s+grab\s+(?P<grab>[^.?\n]{0,90})"
+    r"|\b(?:can|could)\s+you\s+get\s+(?P<get2>[^.?\n]{0,90})"
+    r"|\bplease\s+bring\s+(?P<bring2>[^.?\n]{0,90})"
+    r"|\bplease\s+grab\s+(?P<grab2>[^.?\n]{0,90})"
+)
+_ASK_SKIP = {
+    "about", "after", "again", "before", "bring", "could", "from", "grab",
+    "have", "need", "please", "still", "that", "them", "these", "they",
+    "this", "those", "with", "your", "yours", "some", "into", "onto",
+    "look", "people", "arrive", "just", "also", "when", "what", "where",
+    "here", "there", "would", "should", "really", "maybe", "them",
+}
+_WILL = re.compile(r"(?i)\b(i'll|i will|i can|i am going to|i'm going to)\b")
 _NOTE_STOP = {
     "about", "after", "again", "being", "could", "every", "first", "their",
     "there", "these", "thing", "those", "today", "tomorrow", "tonight",
@@ -429,6 +461,66 @@ def bounced_choice(reply: str, sources: str) -> bool:
     return bool(_CHOICE_BOUNCE.search(body))
 
 
+def _proper_case(sources: str) -> dict[str, str]:
+    """Capitalization of names written in the thread. Sentence starters are skipped."""
+    found: dict[str, str] = {}
+    for match in re.finditer(r"\b([A-Z][a-z]+(?:['’-][A-Za-z]+)?)\b", sources or ""):
+        word = match.group(1)
+        low = word.lower()
+        if low in _CASE_SKIP or low in _DAYS or low in _MONTHS:
+            continue
+        found.setdefault(low, word)
+    return found
+
+
+def asked_objects(sources: str) -> list[tuple[str, str]]:
+    """Things they asked to be brought or gotten, with the verb they used."""
+    found: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for match in _ASK_OBJECT.finditer(sources or ""):
+        kind = match.lastgroup or ""
+        phrase = match.group(kind) or ""
+        verb = "grab" if kind.startswith("grab") else "bring" if kind.startswith("bring") else "get"
+        clause = re.split(r"\band\b|,", phrase, maxsplit=1)[0]
+        words = [word.lower() for word in re.findall(r"[A-Za-z']{4,}", clause)]
+        words = [word for word in words if word not in _ASK_SKIP and word not in _DAYS and word not in _MONTHS]
+        if not words or words[-1] in seen:
+            continue
+        seen.add(words[-1])
+        found.append((words[-1], verb))
+    return found[:6]
+
+
+def _mentions(text: str, token: str) -> bool:
+    low = (text or "").lower()
+    if token in low:
+        return True
+    return bool(token.endswith("s") and token[:-1] in low)
+
+
+def missing_commits(reply: str, sources: str) -> list[str]:
+    """Asked-for objects that never appear in a sentence where the writer says they will."""
+    sentences = re.split(r"(?<=[.!?])\s+|\n+", reply or "")
+    missing = []
+    for token, _verb in asked_objects(sources):
+        covered = any(_mentions(sentence, token) and _WILL.search(sentence) for sentence in sentences)
+        if not covered:
+            missing.append(token)
+    return missing
+
+
+def ensure_commits(reply: str, sources: str) -> str:
+    """Add a will-line for an asked object the model skipped or replaced with a status."""
+    body = (reply or "").strip()
+    if not body:
+        return body
+    verbs = {token: verb for token, verb in asked_objects(sources)}
+    lines = [f"I'll {verbs[token]} the {token}." for token in missing_commits(body, sources)]
+    if not lines:
+        return body
+    return (body + " " + " ".join(lines)).strip()
+
+
 def draft_rules(addressee: str = "", choice: bool = False) -> str:
     """Rules that have to survive a hop that keeps only the front of the prompt."""
     greet = f"hey {addressee} --" if addressee else "hey <first name> --"
@@ -442,6 +534,8 @@ def draft_rules(addressee: str = "", choice: bool = False) -> str:
         "Do not invent a time, a date, a name, a status, or any other fact.",
         "If they ask yes or no, answer yes or no in the sentence right after the greeting.",
         "If they ask you to bring, grab, cover, swap, check, or change something, say you will. That is the answer, not a new fact, and not a claim the work is already finished.",
+        "If they say they still need something, say you will get it. Do not report a status such as sorted, not sorted, ready, or lined up unless those words are in the thread.",
+        "Keep the capitalization of every proper name written in the thread.",
         "Do not answer an action ask with 'I do not have a confirmed update' or 'not a full update'.",
         "If they ask whether something is the cause and the thread does not say, say you do not know yet. Do not name the cause.",
         "Name every object, place, time, and change they brought up. Use their words. Do not answer only the last line.",
@@ -469,6 +563,8 @@ def rewrite_ask(addressee: str = "", choice: bool = False, points: list[str] | N
         "All lowercase except names, dates, days, and I. "
         "Answer every open ask. Yes or no when they asked that. "
         "If they asked you to bring, grab, cover, or change something, say you will. "
+        "If they still need something, say you will get it. Do not invent a status such as sorted or not sorted. "
+        "Keep the capitalization of proper names from the thread. "
         "Name every object, place, time, and change they brought up, in their words. "
         "Do not invent a date, a time, a name, a status, or a fact. "
         "Do not say you lack a confirmed update. "
@@ -509,8 +605,10 @@ def shape_voice(text: str, sources: str = "", addressee: str = "") -> str:
         rest = re.sub(rf"(?i)^{re.escape(addressee)}\s*[,—–-]+\s*", "", rest, count=1).strip()
         body = f"hey {addressee} -- {rest}".strip() if rest else f"hey {addressee} --"
     protected = set(re.findall(r"\b[A-Z][A-Za-z0-9'’-]*", sources or ""))
+    named = _proper_case(sources)
     if addressee:
         protected.add(addressee)
+        named[addressee.lower()] = addressee
     days = set(_DAYS)
     months = set(_MONTHS)
     contractions = {"i'm", "i'll", "i'd", "i've"}
@@ -524,6 +622,8 @@ def shape_voice(text: str, sources: str = "", addressee: str = "") -> str:
             return "I"
         if low in contractions:
             return "I" + word[1:]
+        if low in named:
+            return named[low]
         if addressee and low == addressee.lower():
             return addressee
         if word in protected:

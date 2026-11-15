@@ -16,6 +16,8 @@ from hailports.clip.scene import (
     bounced_choice,
     copy_text,
     draft_rules,
+    ensure_commits,
+    missing_commits,
     overreach,
     plain_reply,
     prepare,
@@ -252,19 +254,23 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
             mark.chmod(0o600)
         except OSError:
             pass
-        invented = overreach(text, sources) or bounced_choice(text, sources)
+        gaps = missing_commits(text, sources)
+        invented = overreach(text, sources) or bounced_choice(text, sources) or bool(gaps)
         first = text
         if invented or weak:
+            ask = rewrite_ask(who, choice, points)
+            if gaps:
+                ask += " Say you will get these, and do not give a status for them: " + ", ".join(gaps) + "."
             retry = list(prepared["messages"]) + [
                 {"role": "assistant", "content": text},
-                {"role": "user", "content": rewrite_ask(who, choice, points)},
+                {"role": "user", "content": ask},
             ]
             try:
                 text = shape_voice(plain_reply(_complete(route)(retry).strip()), sources, who)
             except ModelOffline:
                 # A weak first draft beats nothing. An invented one does not.
                 text = "" if invented else first
-        kept = as_writer(trim_overreach(text, sources), me)
+        kept = ensure_commits(as_writer(trim_overreach(text, sources), me), sources)
         # Cleanup that removes the whole reply must not put the raw text back.
         if reply_ok(kept):
             text = kept
