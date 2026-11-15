@@ -159,6 +159,15 @@ Keep a spare copy of every required weight file in `weight-backup/` (or pass
 `--backup-dir` to point at another volume). Point `--backup-dir` at a path
 you control; do not rely on the previous process still having the mapping.
 
+A free-space prune that deletes large unused GGUF files has to use that same
+path list. Keeping only the `-m` argument drops the vision projector. The 4x
+projector is about 910 MB, so it sits above a 500 MB cutoff, and the server
+flag is `--mmproj`, not `-m`. The process can keep serving after the file is
+unlinked. The next start is when it is missing. `hailports_setup.gguf_keep.keep_paths`
+collects `-m`, `--mmproj`, and draft paths from the server command and from
+the extra-args text. Use that set when the server is down too, so a morning
+prune does not remove the projector before the next boot.
+
 
 ## API mode
 
