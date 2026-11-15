@@ -335,7 +335,9 @@ def cmd_onboard(args, cfg) -> int:
             print(exc)
             return 2
         dest.parent.mkdir(parents=True, exist_ok=True)
-        save_file(dest, {"paiste": updated})
+        route = dict(cfg)
+        route["paiste"] = updated
+        save_file(dest, route)
         dest.chmod(0o600)
         print("using")
         return 0

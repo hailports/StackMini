@@ -621,6 +621,23 @@ def test_setup_save_orders_claude_codex_local_then_cursor():
     assert saved["order"] == ["claude", "codex", "brain", "cursor"]
 
 
+def test_setup_yes_keeps_claude_codex_and_cursor():
+    current = {
+        "mail": "front",
+        "order": ["cursor", "local", "codex", "claude"],
+        "models": {
+            "claude": {"via": "claude", "bin": "/usr/bin/claude", "model": "claude", "base_url": "", "ssh_host": "", "remote_url": ""},
+            "codex": {"via": "codex", "bin": "/usr/bin/codex", "model": "codex", "base_url": "", "ssh_host": "", "remote_url": ""},
+            "local": {"via": "http", "base_url": "http://127.0.0.1:8080/v1", "model": "qwen", "ssh_host": "", "remote_url": ""},
+            "cursor": {"via": "cursor", "bin": "/usr/bin/agent", "model": "cursor", "base_url": "", "ssh_host": "", "remote_url": ""},
+        },
+    }
+    out = guide(IO({"paiste_hop_0": "http://127.0.0.1:8080/v1"}), current, {"model": "http://127.0.0.1:8080/v1"})
+    assert out["order"] == ["claude", "codex", "local", "cursor"]
+    assert out["models"]["codex"]["bin"] == "/usr/bin/codex"
+    assert out["models"]["cursor"]["via"] == "cursor"
+
+
 def test_not_logged_in_and_empty_models_are_not_ready(monkeypatch):
     from hailports.clip import board as board_mod
 

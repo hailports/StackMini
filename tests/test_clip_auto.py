@@ -158,6 +158,24 @@ def test_auto_keeps_user_mail_and_chat_choice(tmp_path):
     assert updated["mail"] == "front" and updated["chat"] == "front"
 
 
+def test_auto_adds_every_signed_in_app_and_keeps_codex(tmp_path, monkeypatch):
+    monkeypatch.setattr(board, "app_bin", lambda name: "/usr/bin/" + name)
+    current = {
+        "context_file": "/tmp/voice.md",
+        "order": ["codex", "local"],
+        "models": {
+            "codex": {"via": "codex", "bin": "/usr/bin/codex", "model": "codex", "base_url": "", "ssh_host": "", "remote_url": ""},
+            "local": {"via": "http", "base_url": "http://127.0.0.1:8080/v1", "model": "qwen", "ssh_host": "", "remote_url": ""},
+        },
+    }
+    scan = _scan(tmp_path, states={"claude": "signed-in", "cursor": "signed-in"})
+    updated, summary = board.auto_setup(current, scan, tmp_path / "cfg", tmp_path / "notes", binary="/usr/bin/claude")
+    assert summary["ai"] == "claude"
+    assert updated["order"] == ["claude", "codex", "local", "cursor"]
+    assert updated["context_file"] == "/tmp/voice.md"
+    assert updated["models"]["local"]["model"] == "qwen"
+
+
 def test_onboard_auto_board_error_prints_json_exit_2(tmp_path, monkeypatch, capsys):
     from hailports.clip import run as clip_run
 

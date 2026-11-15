@@ -453,8 +453,27 @@ def auto_setup(current: dict | None, scan: dict, key_dir: Path, notes_dir: Path,
     picked = ""
     kind = ai.get("kind")
     if kind == "app":
-        out = use_app(out, str(ai.get("name")), binary)
-        picked = str(ai.get("name"))
+        suggested = str(ai.get("name") or "")
+        signed = []
+        for row in scan.get("apps") or []:
+            name = str(row.get("name") or "")
+            if row.get("drives") and row.get("status") == "signed-in" and name in _APP_NAMES and name not in signed:
+                signed.append(name)
+        if suggested in _APP_NAMES and suggested not in signed:
+            signed.append(suggested)
+        signed.sort(key=lambda name: _APP_NAMES.index(name))
+        added = ""
+        for name in signed:
+            try:
+                out = use_app(out, name, binary if name == suggested else "")
+                added = name
+            except BoardError:
+                continue
+        if added:
+            picked = suggested if suggested in (out.get("models") or {}) else added
+        elif suggested:
+            out = use_app(out, suggested, binary)
+            picked = suggested
     elif kind == "api":
         secret = str(source.get(str(ai.get("env") or "")) or "").strip()
         try:
@@ -1661,14 +1680,12 @@ def _premium_after_local(current: dict, order: list, models: dict) -> tuple[list
         else:
             rest.append(name)
     if locals_first:
+        # A local hop must not drop claude, codex, or cursor that were already saved.
         seen = {_premium_key(models[name]) for name in premiums}
-        has_app = any(str((models.get(name) or {}).get("via") or "") in _APP_NAMES for name in premiums)
         old = current.get("models") if isinstance(current.get("models"), dict) else {}
         for old_name in current.get("order") or []:
             spec = old.get(old_name)
             if not isinstance(spec, dict) or not _premium_spec(spec):
-                continue
-            if has_app and str(spec.get("via") or "") in _APP_NAMES:
                 continue
             key = _premium_key(spec)
             if key in seen:
@@ -1845,6 +1862,8 @@ def guide(io, paiste: dict | None = None, found: dict | None = None) -> dict:
         order.append(hop["name"])
         models[hop["name"]] = hop["spec"]
     if order:
+        # Keep claude, codex, and cursor. A blank stop must not leave only the local line.
+        order, models = _premium_after_local(dict(paiste or {}), order, models)
         out["order"] = order
         out["models"] = models
     return out
