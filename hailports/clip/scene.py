@@ -53,7 +53,10 @@ _INVENTED_CLAIM = re.compile(
     r"(?i)\b(?:my|our)\s+(?:last\s+|next\s+|own\s+)?(?:meeting|call|appointment|calendar)\b"
     r"|\bwraps?\s+at\b"
     r"|\bi(?:'m| am)\s+(?:free|busy|booked|tied up|in a meeting)\b"
-    r"|\b(?:not|aren't|isn'?t|are not|is not)\s+lined\s+up\b"
+    r"|\blined\s+up\b"
+    r"|\b(?:do not|don't) have a confirmed update\b"
+    r"|\bnot a full update\b"
+    r"|\bhaven'?t grabbed\b"
 )
 _NOTE_STOP = {
     "about", "after", "again", "being", "could", "every", "first", "their",
@@ -438,6 +441,10 @@ def draft_rules(addressee: str = "", choice: bool = False) -> str:
         "Do not mention a meeting, a call, a wrap time, or being free or busy unless this thread says that.",
         "Do not invent a time, a date, a name, a status, or any other fact.",
         "If they ask yes or no, answer yes or no in the sentence right after the greeting.",
+        "If they ask you to bring, grab, cover, swap, check, or change something, say you will. That is the answer, not a new fact, and not a claim the work is already finished.",
+        "Do not answer an action ask with 'I do not have a confirmed update' or 'not a full update'.",
+        "If they ask whether something is the cause and the thread does not say, say you do not know yet. Do not name the cause.",
+        "Name every object, place, time, and change they brought up. Use their words. Do not answer only the last line.",
         "No labels, no headers, no markdown, no word-colon lines. Plain sentences. Use I, not we.",
         "No reasoning, no tool JSON, no narration of the message.",
     ]
@@ -449,7 +456,7 @@ def draft_rules(addressee: str = "", choice: bool = False) -> str:
     return " ".join(lines)
 
 
-def rewrite_ask(addressee: str = "", choice: bool = False) -> str:
+def rewrite_ask(addressee: str = "", choice: bool = False, points: list[str] | None = None) -> str:
     """The redo turn. Same bar as the first draft."""
     greet = f"hey {addressee} --" if addressee else "hey <first name> --"
     choice_line = (
@@ -461,10 +468,14 @@ def rewrite_ask(addressee: str = "", choice: bool = False) -> str:
         f'Open with "{greet}". '
         "All lowercase except names, dates, days, and I. "
         "Answer every open ask. Yes or no when they asked that. "
+        "If they asked you to bring, grab, cover, or change something, say you will. "
+        "Name every object, place, time, and change they brought up, in their words. "
         "Do not invent a date, a time, a name, a status, or a fact. "
+        "Do not say you lack a confirmed update. "
         "Do not mention your own meeting, call, or calendar. "
         "No labels, no headers, no markdown, no reasoning, no tool JSON."
         + choice_line
+        + ((" Cover each of these in the reply: " + " | ".join(points[:6]) + ".") if points else "")
     )
 
 

@@ -126,7 +126,7 @@ def _with_points(messages: list[dict], points: list[str]) -> list[dict]:
         return messages
     lines = [
         "Cover every point below that is still open. Do not answer only the last line.",
-        "One short sentence for each point. Use I, not we. No labels or headers.",
+        "One short sentence for each point below. Do not skip a point. Use I, not we. No labels or headers.",
         "Do not turn their update into a new rule they did not say.",
         "Do not start with a number. Do not end with lmk.",
     ]
@@ -135,7 +135,7 @@ def _with_points(messages: list[dict], points: list[str]) -> list[dict]:
     out = [dict(item) for item in messages]
     for index in range(len(out) - 1, -1, -1):
         if out[index].get("role") == "user":
-            out[index]["content"] = str(out[index].get("content") or "") + "\n\n" + block
+            out[index]["content"] = block + "\n\n" + str(out[index].get("content") or "")
             break
     return out
 
@@ -192,6 +192,10 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
             + rules
         )
     messages = prepared.get("messages") or []
+    rules = rules.replace(
+        "Do not promise work that is not already done.",
+        "When they ask you to do something, say you will. Do not claim it is already finished.",
+    )
     if messages and messages[0].get("role") == "system":
         messages[0]["content"] = rules
     me = [part.strip() for part in str((route.get("paiste") or {}).get("me") or "").split(",") if part.strip()]
@@ -250,10 +254,10 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
             pass
         invented = overreach(text, sources) or bounced_choice(text, sources)
         first = text
-        if invented or (weak and len(hops) <= 1):
+        if invented or weak:
             retry = list(prepared["messages"]) + [
                 {"role": "assistant", "content": text},
-                {"role": "user", "content": rewrite_ask(who, choice)},
+                {"role": "user", "content": rewrite_ask(who, choice, points)},
             ]
             try:
                 text = shape_voice(plain_reply(_complete(route)(retry).strip()), sources, who)
@@ -264,7 +268,7 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
         # Cleanup that removes the whole reply must not put the raw text back.
         if reply_ok(kept):
             text = kept
-        elif weak and not invented and len(hops) <= 1:
+        elif weak and not invented:
             # Retry returned worse junk; keep the usable first draft.
             fallback = as_writer(trim_overreach(first, sources), me)
             text = fallback if reply_ok(fallback) else ""

@@ -708,11 +708,16 @@ def open_points(text: str) -> list[str]:
         line = " ".join(raw.split()).strip(" -*")
         if len(line) < 16 or len(line) > 300:
             continue
+        if re.match(r"^[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]*)?\s+\d{1,2}:\d{2}\s*[AP]M$", line):
+            continue
         numbered = re.match(r"^\d+[.)]\s+(\S.*)$", line)
         if numbered:
             found.append(numbered.group(1).strip())
             continue
-        if "?" in line:
+        if "?" in line or re.search(
+            r"(?i)\b(can you|could you|tell me|do not|don't|please|not in|moved|changed)\b|\d{1,2}:\d{2}",
+            line,
+        ):
             found.append(line)
     unique = []
     for point in found:
@@ -737,8 +742,11 @@ def misses_points(reply: str, points: list[str]) -> bool:
     low = (reply or "").lower()
     hit = 0
     for point in points:
-        words = [word.lower() for word in re.findall(r"[A-Za-z]{6,}", point)][:5]
-        if words and any(word in low for word in words):
+        words = [word.lower() for word in re.findall(r"[A-Za-z]{5,}", point)][:6]
+        times = re.findall(r"\d{1,2}:\d{2}", point)
+        if any(word in low for word in words) or any(token in low for token in times):
+            hit += 1
+        elif not words and not times:
             hit += 1
     return hit < len(points)
 
