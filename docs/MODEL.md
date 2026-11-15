@@ -169,6 +169,28 @@ the extra-args text. Use that set when the server is down too, so a morning
 prune does not remove the projector before the next boot.
 
 
+## Chat-server binary check (2026-11-15)
+
+The reference machine is still on the Metal build of commit `f174553` above. A same-day check of newer llama.cpp did not beat that binary on a fixed bench, so it was not adopted.
+
+The bench is three short prompts (plain prose, a Python module, a project status update), 300 tokens each, temperature 0, seed 7, prompt cache off, two rounds. Weighted decode is total tokens divided by the sum of (tokens / tok/s). Baseline on `f174553` was 40.2 to 40.7 tok/s overall and 69.7% draft acceptance (prose about 37, code about 48, work about 38).
+
+Candidates, each started with the same model, projector, draft flags (`--spec-draft-n-max 4`, `--spec-draft-p-min 0.5`, greedy), flash attention, and 32768 context after a clean stop (memory level was above 80 once the old process had exited):
+
+| Build | What it was | Overall tok/s (two runs) | Acceptance | Result |
+|---|---|---|---|---|
+| Official macOS arm64 `b12412` (commit 73f5331) | ggml-org prebuilt, Metal dylibs included | 39.78, then 37.76 | 69.4% | Not adopted |
+| Official macOS arm64 `b12359` (llama.cpp v1.0.0) | ggml-org prebuilt for the v1.0.0 release | 37.80, then 38.20 | 69.4% | Not adopted |
+| Native Metal build of `b12412` | Same cmake flags as the reference build: Release, `GGML_METAL=ON`, `GGML_METAL_EMBED_LIBRARY=ON`, `GGML_NATIVE=ON`, Apple BLAS | 39.12, then 35.35 | 69.4% | Not adopted |
+
+Code-prompt draft acceptance also slipped from 195/273 to 193/273 on the newer builds. Resident size on the newer servers was about 15 to 16 GB, versus about 12 GB on the long-running `f174553` process. Upstream v1.0.0 already includes the later host-memory MoE expert cache, so a custom MoE patch was not required. The newer code ran and stayed at 32768 context with vision enabled; it was simply not faster.
+
+After those results, the launch wrapper was pointed back at the `f174553` binary and the LaunchAgent was started again. A repeat of the same bench was 40.64 and 39.02 tok/s, acceptance 69.7%. The slightly slower second restore run had long wall times from a shared slot, not a lower acceptance count.
+
+The launch wrapper's last-resort path must be a binary that exists. A missing older tree name was changed to the proven `f174553` Metal build. The flag that names the live binary is still that same path. Embeddings were left on the separate v0.6.0 server; they were not moved onto a build that lost the chat bench.
+
+A 32768 context start is safe when the previous server has been stopped and the memory level is 40 or higher. On this check the level rose above 80 within a couple of seconds of the stop. Do not force 32768 while the old process is still resident.
+
 ## API mode
 
 `hailports setup` asks for the mode first. API mode does not build llama.cpp and does not download a GGUF. Hybrid mode still uses the local build above for reading, summarizing, retrieval, drafting, and compression, and calls the configured cloud provider only when the routing policy says the job is hard, unsure, or too long.
