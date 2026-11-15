@@ -23,6 +23,7 @@ from hailports.clip.scene import (
     reply_ok,
     rewrite_ask,
     run_inbox,
+    scene_blob,
     scene_from,
     screen_has_choice,
     shape_voice,
@@ -195,7 +196,7 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
         messages[0]["content"] = rules
     me = [part.strip() for part in str((route.get("paiste") or {}).get("me") or "").split(",") if part.strip()]
     sources = "\n".join(prepared.get("sources") or [])
-    who = addressee_first(sources, me)
+    who = addressee_first(scene_blob(doc) + "\n" + sources, me)
     choice = screen_has_choice(sources)
     voice = _context_note(route)[:1400]
     parts = []

@@ -383,6 +383,19 @@ def overreach(text: str, sources: str = "") -> bool:
     return bool(_STEPS.search(body) and not _STEPS.search(sources or ""))
 
 
+def scene_blob(doc: dict | None) -> str:
+    """Header lines included. The page reader drops From: before the model sees it."""
+    if not isinstance(doc, dict):
+        return ""
+    parts = [str(doc.get("field_text") or ""), str(doc.get("selection") or "")]
+    for block in doc.get("blocks") or []:
+        if isinstance(block, dict):
+            parts.append(str(block.get("text") or ""))
+        elif isinstance(block, str):
+            parts.append(block)
+    return "\n".join(part for part in parts if part)
+
+
 def addressee_first(text: str, me: list[str] | None = None) -> str:
     """First name of the last other person on screen. The writer is skipped."""
     skip = set()
