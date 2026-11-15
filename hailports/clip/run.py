@@ -223,7 +223,7 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
             "If a note names a file, a label, or a message, use those words. "
             "Do not replace them with a vague restatement. "
             "Code lines outrank an older note when they disagree. "
-            "Do not invent a name that is not written in the notes.\n" + found[:2200]
+            "Do not mention a person, a company, or a task from a note unless this message asks about it.\n" + found[:2200]
         )
     note = "\n\n".join(parts).strip()
     if note:
@@ -239,12 +239,12 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
     try:
         hops = endpoints_from(route)
         text, hop = complete(hops, prepared["messages"])
-        text = drop_ungrounded(shape_voice(plain_reply(text), sources, who), sources, who)
+        text = shape_voice(drop_ungrounded(plain_reply(text), sources, who), sources, who)
         weak = misses_points(text, points) or (bool(re.search(r"\.(?:cls|js|html)\b", found or "")) and thin_reply(text, found))
         if weak and len(hops) > 1:
             try:
                 nxt, nxt_hop = complete(hops[1:], prepared["messages"])
-                nxt = drop_ungrounded(shape_voice(plain_reply(nxt), sources, who), sources, who)
+                nxt = shape_voice(drop_ungrounded(plain_reply(nxt), sources, who), sources, who)
                 if nxt and not thin_reply(nxt, found) and not misses_points(nxt, points):
                     text, hop = nxt, nxt_hop
             except ModelOffline:
@@ -267,7 +267,7 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
                 {"role": "user", "content": ask},
             ]
             try:
-                text = drop_ungrounded(shape_voice(plain_reply(_complete(route)(retry).strip()), sources, who), sources, who)
+                text = shape_voice(drop_ungrounded(plain_reply(_complete(route)(retry).strip()), sources, who), sources, who)
             except ModelOffline:
                 # A weak first draft beats nothing. An invented one does not.
                 text = "" if invented else first
@@ -277,7 +277,7 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
             text = kept
         elif weak and not invented:
             # Retry returned worse junk; keep the usable first draft.
-            fallback = as_writer(trim_overreach(first, sources), me)
+            fallback = drop_ungrounded(ensure_commits(as_writer(trim_overreach(first, sources), me), sources), sources, who)
             text = fallback if reply_ok(fallback) else ""
         else:
             text = ""

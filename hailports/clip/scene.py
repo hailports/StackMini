@@ -80,7 +80,7 @@ _ASK_OBJECT = re.compile(
     r"|\b(?:we|they)\s+need\s+(?P<get2>[^.?\n]{0,90})"
     r"|\b(?:can|could)\s+you\s+bring\s+(?P<bring>[^.?\n]{0,90})"
     r"|\b(?:can|could)\s+you\s+grab\s+(?P<grab>[^.?\n]{0,90})"
-    r"|\b(?:can|could)\s+you\s+get\s+(?P<get2>[^.?\n]{0,90})"
+    r"|\b(?:can|could)\s+you\s+get\s+(?P<get3>[^.?\n]{0,90})"
     r"|\bplease\s+bring\s+(?P<bring2>[^.?\n]{0,90})"
     r"|\bplease\s+grab\s+(?P<grab2>[^.?\n]{0,90})"
 )
@@ -464,12 +464,14 @@ def bounced_choice(reply: str, sources: str) -> bool:
 
 
 def _proper_case(sources: str) -> dict[str, str]:
-    """Capitalization of names written in the thread. Sentence starters are skipped."""
+    """Names written in title case. A word the thread also uses in lowercase stays as written."""
+    text = sources or ""
+    lower_words = {word.lower() for word in re.findall(r"\b[a-z][A-Za-z0-9'’-]*\b", text)}
     found: dict[str, str] = {}
-    for match in re.finditer(r"\b([A-Z][a-z]+(?:['’-][A-Za-z]+)?)\b", sources or ""):
+    for match in re.finditer(r"\b([A-Z][a-z]+(?:['’-][A-Za-z]+)?)\b", text):
         word = match.group(1)
         low = word.lower()
-        if low in _CASE_SKIP or low in _DAYS or low in _MONTHS:
+        if low in _CASE_SKIP or low in _DAYS or low in _MONTHS or low in lower_words:
             continue
         found.setdefault(low, word)
     return found

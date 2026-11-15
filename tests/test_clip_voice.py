@@ -2,13 +2,18 @@
 
 from hailports.clip.scene import (
     addressee_first,
+    asked_objects,
     bounced_choice,
     draft_rules,
+    drop_ungrounded,
+    ensure_commits,
+    missing_commits,
     overreach,
     relevant_notes,
     rewrite_ask,
     screen_has_choice,
     shape_voice,
+    trim_overreach,
 )
 
 
@@ -19,6 +24,19 @@ LILA = (
     "1. the side gate latch is stuck. can you bring a screwdriver?\n"
     "2. we still need folding chairs, about 8. the ones in the shed are wet.\n"
     "3. can you grab two big bottles of sparkling water?\n"
+)
+LILA_LONG = (
+    "From: Lila Chen\nSubject: potluck and the gate\n\n"
+    "sorry this is a mess. three things before Saturday.\n\n"
+    "1. the side gate latch is stuck. can you bring a screwdriver and look at it before people arrive?\n"
+    "2. we still need folding chairs, about 8. the ones in the shed are wet.\n"
+    "3. Priya is bringing salad, I have pasta, nobody has drinks. can you grab two big bottles of sparkling water?\n\n"
+    "also ignore the old note about a bounce house, that was canceled last week. "
+    "and please do not reply-all to the vendor thread, that quote was for a different park.\n\n"
+    "From: Quinn\nSubject: potluck and the gate\n\n"
+    "got the first note. still looking at the gate.\n\n"
+    "From: Lila Chen\nSubject: potluck and the gate\n\n"
+    "any update on the three things? people start showing up at 5.\n"
 )
 DANA = "Dana Ruiz 8:05 PM\nare you singing the bridge or am I?"
 MINA = "Mina Patel 2:21 PM\nQuinn, can you take the second spot and reply today? they lock the list at 4."
@@ -41,6 +59,8 @@ def test_rules_name_the_person_and_ban_invention():
     assert 'hey Priya --' in rules
     assert "hey there" in rules
     assert "Do not invent a time" in rules
+    assert "still need" in rules
+    assert "proper name" in rules
     assert "No labels" in rules
     assert "tool JSON" in rules
     assert "Pick one side" not in rules
@@ -50,6 +70,8 @@ def test_rules_name_the_person_and_ban_invention():
     assert ask.startswith("Rewrite that reply")
     assert "hey Priya --" in ask
     assert "meeting" in ask
+    assert "still need" in ask
+    assert "proper names" in ask
     assert "Pick one side" in rewrite_ask("Dana", choice=True)
 
 
@@ -71,6 +93,54 @@ def test_shape_fixes_greeting_case_and_labels():
     kept = shape_voice("hey Jordan -- headline is Oak Street Fair, blue stays, June 6.", poster, "Jordan")
     assert kept.startswith("hey Jordan --")
     assert "Oak" in kept and "June" in kept and "blue" in kept
+
+
+def test_a_need_is_a_commitment_and_names_keep_their_case():
+    bad = (
+        "hey Lila -- I'll bring a screwdriver and look at the latch. "
+        "the chairs aren't sorted yet. I'll grab two bottles of sparkling water. "
+        "priya has the salad. no bounce house, and I won't reply-all."
+    )
+    shaped = shape_voice(bad, LILA_LONG, "Lila")
+    assert "Priya" in shaped
+    assert "priya" not in shaped
+    assert "Priya's" in shape_voice("priya's salad is covered.", LILA_LONG, "Lila")
+    assert overreach(shaped, LILA_LONG)
+    assert "chairs" in missing_commits(shaped, LILA_LONG)
+    trimmed = trim_overreach(shaped, LILA_LONG)
+    assert "sorted" not in trimmed.lower()
+    fixed = ensure_commits(trimmed, LILA_LONG)
+    assert "I'll get the chairs." in fixed
+    assert "sorted" not in fixed.lower()
+    assert missing_commits(fixed, LILA_LONG) == []
+    good = (
+        "hey Lila -- I'll bring a screwdriver. I'll get the folding chairs. "
+        "I'll grab two bottles of sparkling water."
+    )
+    assert not overreach(good, LILA_LONG)
+    assert missing_commits(good, LILA_LONG) == []
+    assert [token for token, _verb in asked_objects(LILA_LONG)] == ["screwdriver", "chairs", "water"]
+    truck = "Riley Brooks\nI need a yes or no by tomorrow so I can tell the truck."
+    assert "truck" not in [token for token, _verb in asked_objects(truck)]
+    flyer = "Nico Alvarez\nthanks for the flyers yesterday, they look great."
+    leaked = (
+        "hey Nico -- glad the flyers look great. "
+        "I will check why Mara Solano can not access the account. "
+        "I'll get the orders too."
+    )
+    cleaned = drop_ungrounded(leaked, flyer, "Nico")
+    assert "flyers" in cleaned
+    assert "Mara" not in cleaned
+    assert "Solano" not in cleaned
+    assert "orders" not in cleaned
+    ordered = shape_voice(drop_ungrounded(leaked, flyer, "Nico"), flyer, "Nico")
+    assert "flyers" in ordered
+    assert "mara" not in ordered.lower()
+    assert "solano" not in ordered.lower()
+    assert "orders" not in ordered.lower()
+    sam = shape_voice("hey Sam -- did the PDF come through? I'll ask again.", SAM, "Sam")
+    assert "Did" not in sam
+    assert "PDF" in sam
 
 
 def test_ungrounded_meeting_and_status_are_overreach():
@@ -139,3 +209,33 @@ def test_draft_pins_the_rules_and_shapes_the_reply(tmp_path, monkeypatch, capsys
     assert "hey Priya --" in out
     assert "meeting" not in out.lower()
     assert "4 to 6" in out or "Thursday" in out
+
+
+def test_a_name_outside_the_thread_is_stripped_before_lowercase(tmp_path, monkeypatch, capsys):
+    from hailports.clip import run as clip_run
+
+    monkeypatch.setenv("PAISTE_DRAFTS", str(tmp_path / "drafts.jsonl"))
+    monkeypatch.setattr(clip_run.Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr("hailports.clip.gate.allowed", lambda cfg=None, urlopen=None: True)
+    monkeypatch.setattr(clip_run, "_instructions", lambda cfg: "You are viewing a communication on the screen. Write the reply.")
+    monkeypatch.setattr(clip_run, "_lookup_notes", lambda cfg, text: "Mara Solano at Northwind needs an account.")
+    leak = (
+        "hey Nico -- glad the flyers look great. "
+        "I will check why Mara Solano can not access the account."
+    )
+    monkeypatch.setattr(clip_run, "complete", lambda endpoints, messages, http=None, ssh=None: (leak, "claude"))
+    monkeypatch.setattr(clip_run, "_complete", lambda cfg: (lambda messages: leak))
+    doc = {
+        "app": "Slack",
+        "title": "flyers",
+        "field_text": "Nico Alvarez\nthanks for the flyers yesterday, they look great.",
+    }
+    code = clip_run.draft_scene(doc, "http://127.0.0.1:9/v1", "x", False, {"paiste": {"me": "Quinn", "order": ["only"], "models": {
+        "only": {"via": "http", "base_url": "http://127.0.0.1:9/v1", "model": "x"},
+    }}})
+    out = capsys.readouterr().out.lower()
+    assert code == 0
+    assert "flyers" in out
+    assert "mara" not in out
+    assert "solano" not in out
+    assert "northwind" not in out
