@@ -626,6 +626,7 @@ def cmd_uninstall(cfg: dict, cfg_path: Path, delete_data: bool, apply: bool) -> 
 
 def _cmd_accounts(cfg: dict, cfg_path: Path, args) -> int:
     from hailports.accounts import assist_accounts, find_edge, open_plan, tick
+    from hailports.clip.native import from_config
     from hailports.draft_runner import run_round
 
     sessions = dict(cfg.get("accounts") or {})
@@ -646,12 +647,13 @@ def _cmd_accounts(cfg: dict, cfg_path: Path, args) -> int:
         print(json.dumps({"opened": len(sessions), "sent": False}))
         return 0
     try:
-        router = _router(cfg)
+        native = from_config(cfg)
+        router = native or _router(cfg)
     except ProviderError as exc:
         return _fail_provider(exc)
 
     def complete(messages):
-        reply = router.complete(messages, task="draft")
+        reply = router.complete(messages, task="read" if native is not None else "draft")
         return reply.text or ""
 
     if args.action == "adapt":

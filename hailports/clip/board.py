@@ -67,9 +67,12 @@ def parse_hop(line: str, index: int) -> dict | None:
 def _model_up(url: str) -> bool:
     try:
         with urllib.request.urlopen(url.rstrip("/") + "/models", timeout=0.4) as resp:
-            return resp.status == 200
+            if resp.status != 200:
+                return False
+            body = resp.read(8000).decode("utf-8", "replace")
     except (OSError, TimeoutError):
         return False
+    return bool(model_ids(body))
 
 
 def discover(home: Path | None = None) -> dict:
@@ -215,7 +218,9 @@ def scan_models(read_local=None, hosts=None, read_ssh=None) -> list[dict]:
         if not body or not body.lstrip().startswith("{"):
             return
         ids = model_ids(body)
-        name = ids[0] if ids else ""
+        if not ids:
+            return
+        name = ids[0]
         key = (host, base, name)
         if key in seen:
             return
@@ -416,7 +421,7 @@ def scan_setup(home: Path | None = None, read_local=None, hosts=None, read_ssh=N
 
 
 def _use_hop(current: dict, name: str, spec: dict) -> dict:
-    """Add one API or local hop. Other premium and local hops stay. Locals still run first."""
+    """Add one API or local hop. Other hops stay. Order is claude, codex, paid APIs, local or brain, then cursor."""
     out = dict(current or {})
     old_models = current.get("models") if isinstance(current.get("models"), dict) else {}
     models = {}
@@ -1484,9 +1489,7 @@ def apply_board(existing: dict | None, answers: dict) -> dict:
             models[slot] = hop["spec"]
             if slot not in behind and slot != name:
                 behind.append(slot)
-        locals_only = [hop for hop in behind if _local_spec(models.get(hop) or {})]
-        rest = [hop for hop in behind if hop not in locals_only]
-        out["order"] = [name] + rest + locals_only
+        out["order"] = _order_hops([name] + behind, models)
         out["models"] = models
         return out
     order = []
@@ -1545,7 +1548,7 @@ _APP_NAMES = ("claude", "codex", "cursor")
 
 
 def _wrapper(path: str) -> bool:
-    """Skip the local-first shim. paisty already tries the local model first."""
+    """Skip the local-first shim. paisty orders the hops itself."""
     try:
         head = Path(path).read_text(encoding="utf-8", errors="replace")[:180]
     except OSError:
@@ -1594,7 +1597,7 @@ def _premium_key(spec: dict) -> str:
 
 
 def _prefer_connected_app(current: dict, order: list, models: dict, answers: dict) -> tuple[list, dict]:
-    """The login they picked is the fallback. Local hops stay in front of it."""
+    """The login they picked is one hop. claude and codex lead, a local or brain hop is next, and cursor is last."""
     wanted = str((answers or {}).get("app") or "").strip().lower()
     if wanted in _APP_NAMES:
         binary = str((answers or {}).get("bin") or "").strip() or app_bin(wanted)
@@ -1624,8 +1627,28 @@ def _prefer_connected_app(current: dict, order: list, models: dict, answers: dic
     return _premium_after_local(current, order, models)
 
 
+def _hop_rank(spec: dict) -> int:
+    """claude, then codex, then other paid APIs, then local or brain, then cursor."""
+    via = str((spec or {}).get("via") or "")
+    if via == "claude":
+        return 0
+    if via == "codex":
+        return 1
+    if via == "cursor":
+        return 4
+    if _local_spec(spec or {}):
+        return 3
+    if _premium_spec(spec or {}):
+        return 2
+    return 5
+
+
+def _order_hops(order: list, models: dict) -> list:
+    return sorted(list(order), key=lambda name: _hop_rank(models.get(name) or {}))
+
+
 def _premium_after_local(current: dict, order: list, models: dict) -> tuple[list, dict]:
-    """Premium first. A configured premium API or app leads; a local hop is the optional fallback behind it."""
+    """claude, then codex, then other paid APIs, then a local or brain hop, then cursor."""
     locals_first = []
     premiums = []
     rest = []
@@ -1654,11 +1677,11 @@ def _premium_after_local(current: dict, order: list, models: dict) -> tuple[list
             models[slot] = dict(spec)
             premiums.append(slot)
             seen.add(key)
-    return premiums + rest + locals_first, models
+    return _order_hops(premiums + rest + locals_first, models), models
 
 
 def use_app(current: dict, name: str, binary: str = "") -> dict:
-    """Add one signed-in app after any local hop. Mail, notes, and context stay."""
+    """Add one signed-in app. Mail, notes, and context stay. Order is claude, codex, local or brain, then cursor."""
     picked = (name or "").strip().lower()
     if picked not in _APP_NAMES:
         raise BoardError("Choose Claude, Codex, or Cursor.")
@@ -1728,14 +1751,20 @@ def app_status(name: str) -> str:
         done = subprocess.run(argv, capture_output=True, check=False, timeout=12)
     except (OSError, subprocess.TimeoutExpired):
         return "login"
+    if done.returncode != 0:
+        return "login"
     text = ((done.stdout or b"") + b"\n" + (done.stderr or b"")).decode("utf-8", "replace")
+    low = text.lower()
+    # "Not logged in" contains "logged in".
+    if "not logged in" in low or "logged out" in low:
+        return "login"
     if name == "claude":
         try:
             doc = json.loads(done.stdout.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeError):
             doc = {}
         return "signed-in" if doc.get("loggedIn") is True else "login"
-    if "logged in" in text.lower():
+    if "logged in" in low:
         return "signed-in"
     return "login"
 

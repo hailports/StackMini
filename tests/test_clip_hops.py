@@ -124,9 +124,10 @@ def test_setup_offers_a_found_vault_and_model():
     assert any("Obsidian" in line for line in io.said)
 
 
-def test_discover_finds_an_obsidian_vault(tmp_path):
+def test_discover_finds_an_obsidian_vault(tmp_path, monkeypatch):
     vault = tmp_path / "notes"
     (vault / ".obsidian").mkdir(parents=True)
+    monkeypatch.setattr("hailports.clip.board._model_up", lambda url: False)
     found = discover(tmp_path)
     assert found["obsidian"] == str(vault)
     assert found["model"] == ""
@@ -282,11 +283,11 @@ def test_connected_premium_leads_the_local():
         "notes": "off",
         "calendar": "off",
     })
-    # Premium-first: the already-connected premium leads, the added local is the fallback.
-    assert saved["order"][0] == "cursor"
+    # A local or brain hop stays ahead of Cursor.
+    assert saved["order"][0] == "ssh"
+    assert saved["models"]["ssh"]["ssh_host"] == "brain"
     assert saved["models"]["cursor"]["via"] == "cursor"
-    assert saved["order"][-1] != "cursor"
-    assert "cursor" in saved["order"]
+    assert saved["order"][-1] == "cursor"
 
 
 def test_login_choice_stores_the_app_and_not_a_key():
@@ -319,7 +320,7 @@ def test_login_choice_stores_the_app_and_not_a_key():
     assert shown["link"] == "app"
     argv = claude_argv("/usr/bin/claude", "rules", "hi")
     assert argv[1:5] == ["-p", "--output-format", "text", "--permission-mode"]
-    assert "plan" in argv
+    assert "plan" not in argv and "--setting-sources" in argv
     assert "bypass" not in " ".join(argv)
     codex = " ".join(codex_argv("/usr/bin/codex", "/tmp/out"))
     assert "--sandbox read-only" in codex
@@ -343,7 +344,7 @@ def test_login_choice_stores_the_app_and_not_a_key():
     assert plain["locals"][0]["host"] == "brain"
 
 
-def test_setup_puts_the_premium_login_ahead_of_an_optional_local():
+def test_setup_puts_cursor_after_the_local_hop():
     saved = apply_board({}, {
         "link": "app",
         "app": "cursor",
@@ -354,8 +355,8 @@ def test_setup_puts_the_premium_login_ahead_of_an_optional_local():
         "notes": "off",
         "calendar": "off",
     })
-    assert saved["order"][0] == "cursor"
-    local = saved["models"][saved["order"][-1]]
+    assert saved["order"][-1] == "cursor"
+    local = saved["models"][saved["order"][0]]
     assert local["via"] == "ssh"
     assert local["ssh_host"] == "brain"
     assert local["remote_url"] == "http://127.0.0.1:8080/v1"
@@ -569,3 +570,127 @@ def test_review_edge_cases_for_cleanup():
     assert plain_reply("Thanks Maria, I'll send the PO today.") == "Thanks Maria, I'll send the PO today."
     assert not junk_name("Q3 Security Audit.md") and not junk_name("Project history.md")
     assert junk_name("07-HISTORY.txt") and junk_name("SECURITY.md")
+
+
+def test_menu_cfg_loads_saved_route_without_env(tmp_path, monkeypatch):
+    import importlib.machinery
+    import importlib.util
+    path = Path(__file__).resolve().parents[1] / "contrib" / "clip" / "run"
+    loader = importlib.machinery.SourceFileLoader("paiste_clip_run_cfg", str(path))
+    spec = importlib.util.spec_from_loader("paiste_clip_run_cfg", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    home = tmp_path / "home"
+    saved = home / ".config" / "paiste" / "route.yaml"
+    saved.parent.mkdir(parents=True)
+    saved.write_text(
+        "paiste:\n  order:\n    - local\nllm:\n  base_url: http://127.0.0.1:8080/v1\n  model: qwen\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod.Path, "home", classmethod(lambda cls: home))
+    monkeypatch.delenv("PAISTE_ROUTE", raising=False)
+    cfg = mod._cfg("", "http://127.0.0.1:18080/v1", "local")
+    assert cfg["llm"]["base_url"] == "http://127.0.0.1:8080/v1"
+    assert cfg["paiste"]["order"] == ["local"]
+    monkeypatch.setattr(mod.Path, "home", classmethod(lambda cls: tmp_path / "empty-home"))
+    assert mod._cfg("", "http://127.0.0.1:18080/v1", "local") == {
+        "llm": {"base_url": "http://127.0.0.1:18080/v1", "model": "local"},
+    }
+    monkeypatch.setenv("PAISTE_ROUTE", str(tmp_path / "missing.yaml"))
+    assert mod._cfg("", "http://127.0.0.1:18080/v1", "local")["llm"]["model"] == "local"
+
+
+def test_setup_save_orders_claude_codex_local_then_cursor():
+    saved = apply_board({
+        "order": ["cursor", "codex", "brain", "claude"],
+        "models": {
+            "claude": {"via": "claude", "bin": "/usr/bin/claude", "model": "claude", "base_url": "", "ssh_host": "", "remote_url": ""},
+            "codex": {"via": "codex", "bin": "/usr/bin/codex", "model": "codex", "base_url": "", "ssh_host": "", "remote_url": ""},
+            "brain": {"via": "http", "base_url": "http://127.0.0.1:8080/v1", "model": "qwen", "ssh_host": "", "remote_url": ""},
+            "cursor": {"via": "cursor", "bin": "/usr/bin/agent", "model": "cursor", "base_url": "", "ssh_host": "", "remote_url": ""},
+        },
+    }, {
+        "link": "local",
+        "local": "http://127.0.0.1:8080/v1",
+        "local_model": "qwen",
+        "mail": "off",
+        "chat": "off",
+        "notes": "off",
+        "calendar": "off",
+    })
+    assert saved["order"] == ["claude", "codex", "brain", "cursor"]
+
+
+def test_not_logged_in_and_empty_models_are_not_ready(monkeypatch):
+    from hailports.clip import board as board_mod
+
+    class Done:
+        def __init__(self, code, out):
+            self.returncode = code
+            self.stdout = out
+            self.stderr = b""
+
+    monkeypatch.setattr(board_mod, "app_bin", lambda name: "/usr/bin/codex")
+    monkeypatch.setattr(board_mod.subprocess, "run", lambda *a, **k: Done(0, b"Not logged in\n"))
+    assert board_mod.app_status("codex") == "login"
+    monkeypatch.setattr(board_mod.subprocess, "run", lambda *a, **k: Done(1, b"logged in\n"))
+    assert board_mod.app_status("codex") == "login"
+    monkeypatch.setattr(board_mod.subprocess, "run", lambda *a, **k: Done(0, b"Logged in\n"))
+    assert board_mod.app_status("codex") == "signed-in"
+    rows = scan_models(read_local=lambda url: '{"data":[]}', hosts=[], read_ssh=lambda host, url: "")
+    assert rows == []
+
+
+def test_retry_keeps_the_conversation_and_drops_an_emptied_reply(tmp_path, monkeypatch, capsys):
+    import json
+    from hailports.clip import run as clip_run
+    from hailports.clip.hops import _split_messages
+
+    system, user = _split_messages([
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "On screen: create the account"},
+        {"role": "assistant", "content": "I will finish it by Friday."},
+        {"role": "user", "content": "Rewrite that reply"},
+    ])
+    assert system == "rules"
+    assert "create the account" in user and "Friday" in user and "Rewrite that reply" in user
+    assert _split_messages([{"role": "system", "content": "rules"}, {"role": "user", "content": "hi"}])[1] == "hi"
+
+    monkeypatch.setenv("PAISTE_DRAFTS", str(tmp_path / "drafts.jsonl"))
+    monkeypatch.setattr(clip_run.Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr("hailports.clip.gate.allowed", lambda cfg=None, urlopen=None: True)
+    monkeypatch.setattr(clip_run, "_instructions", lambda cfg: (
+        "You are viewing a communication on the screen. "
+        "Read the whole conversation on screen, not only the last line. "
+        "Search all connected mail, all connected calendar events, and all connected notes."
+    ))
+    seen = []
+
+    def fake_complete(endpoints, messages, http=None, ssh=None):
+        seen.append(messages)
+        if len(seen) == 1:
+            return "I will finish it by Friday.", "local"
+        return "I can create the account.", "local"
+
+    monkeypatch.setattr(clip_run, "complete", fake_complete)
+    doc = json.loads((Path(__file__).resolve().parents[1] / "contrib" / "clip" / "fixtures" / "mail.json").read_text())
+    cfg = {"llm": {"base_url": "http://127.0.0.1:8080/v1", "model": "local"}}
+    code = clip_run.draft_scene(doc, "http://127.0.0.1:8080/v1", "local", False, cfg)
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "Friday" not in out
+    assert "create the account" in out.lower()
+    assert any(item.get("role") == "assistant" and "Friday" in str(item.get("content")) for item in seen[1])
+    assert any(item.get("role") == "user" and "account" in str(item.get("content")).lower() for item in seen[1])
+
+    seen.clear()
+
+    def always_bad(endpoints, messages, http=None, ssh=None):
+        seen.append(messages)
+        return "I will finish it by Friday.", "local"
+
+    monkeypatch.setattr(clip_run, "complete", always_bad)
+    code = clip_run.draft_scene(doc, "http://127.0.0.1:8080/v1", "local", False, cfg)
+    assert code == 2
+    assert capsys.readouterr().out.strip() == "empty"
+    assert len(seen) == 2

@@ -314,7 +314,7 @@ def _invented_when(piece: str, sources: str) -> bool:
     for match in _WHEN.finditer(piece or ""):
         token = next((value for value in match.groupdict().values() if value), match.group(0)).lower()
         if match.group("day"):
-            seen = re.search(r"\b" + re.escape(token[:3]), low) is not None
+            seen = any(day.group(0)[:3] == token[:3] for day in re.finditer(r"\b" + _DAY, low))
         else:
             seen = token in low
         if not seen:
@@ -560,7 +560,8 @@ def folder_hits(folder: Path, query: str, limit: int = 3) -> list[dict]:
             break
         if not path.is_file() or path.suffix.lower() not in {".md", ".txt", ".markdown", ".eml", ".ics"}:
             continue
-        if any(part in _SKIP_DIR or part.startswith(".") for part in path.parts):
+        # Relative parts: the sources folder itself lives under ~/.config, which is a dot folder.
+        if any(part in _SKIP_DIR or part.startswith(".") for part in path.relative_to(folder).parts):
             continue
         if junk_name(path.name):
             continue
@@ -594,7 +595,11 @@ def source_notes(reading: Reading, hits: list[dict]) -> list[str]:
 _SCAFFOLD_TAG = re.compile(
     r"(?is)<\s*/?\s*(?:tool_call|tool_calls|function_call|function_calls|tool|function|"
     r"thinking|think|scratchpad|reasoning|reflection|search|read|lookup|query|plan|"
-    r"antml:[a-z_]+)\b[^>]*>"
+    r"invoke|parameter|function_results|tool_use|tool_result|antml:[a-z_]+)\b[^>]*>"
+)
+# A tool call printed as text, body and all: <invoke name="Write"><parameter ...>a plan</parameter></invoke>.
+_SCAFFOLD_BLOCK = re.compile(
+    r"(?is)<\s*(invoke|function_calls|function_results|tool_use|tool_result)\b[^>]*>.*?(?:<\s*/\s*\1\s*>|\Z)"
 )
 _SCAFFOLD_FENCE = re.compile(r"(?s)```[A-Za-z0-9_-]*\n?(.*?)```")
 _TOOL_JSON = re.compile(
@@ -674,7 +679,7 @@ def strip_scaffold(text: str) -> str:
     leaks its own tool calls, a Search:/Read: blob, or "I'll pull up the full
     message history" never reaches the reply.
     """
-    body = text or ""
+    body = _SCAFFOLD_BLOCK.sub("", text or "")
     body = _SCAFFOLD_FENCE.sub(_unfence, body)
     body = _SCAFFOLD_TAG.sub("", body)
     body = _strip_tool_objects(body)
@@ -696,7 +701,7 @@ def strip_scaffold(text: str) -> str:
     if out:
         return out
     # Over-eager line drop: fall back to the tag/json/meta-stripped body only.
-    fb = _META_NARRATION.sub(" ", _strip_tool_objects(_SCAFFOLD_TAG.sub("", _SCAFFOLD_FENCE.sub(_unfence, text or ""))))
+    fb = _META_NARRATION.sub(" ", _strip_tool_objects(_SCAFFOLD_TAG.sub("", _SCAFFOLD_FENCE.sub(_unfence, _SCAFFOLD_BLOCK.sub("", text or "")))))
     return re.sub(r"\n{3,}", "\n\n", fb).strip()
 
 

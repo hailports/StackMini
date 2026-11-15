@@ -109,13 +109,7 @@ def read_key(endpoint: dict) -> str:
 
 
 def _http(endpoint: dict, messages: list[dict]) -> str:
-    system = ""
-    user = ""
-    for message in messages:
-        if message.get("role") == "system":
-            system = str(message.get("content") or "")
-        elif message.get("role") == "user":
-            user = str(message.get("content") or "")
+    system, user = _split_messages(messages)
     return chat(endpoint["base_url"], endpoint["model"], user, system=system, key=read_key(endpoint)).text
 
 
@@ -145,13 +139,15 @@ def _bin_ok(binary: str) -> bool:
 
 
 def claude_argv(binary: str, system: str, user: str) -> list[str]:
-    """Print-only. Plan mode does not edit files."""
+    """Print-only. No tools, so nothing can edit files. Plan mode made the model write a plan and an ExitPlanMode call as text."""
     argv = [
         binary, "-p", "--output-format", "text",
-        "--permission-mode", "plan", "--permission-prompts", "none",
+        "--permission-mode", "default", "--permission-prompts", "none",
         "--tools", "", "--no-session-persistence",
         # No MCP servers, claude.ai connectors, skills, or Chrome: the hop drafts text only.
         "--strict-mcp-config", "--disable-slash-commands", "--no-chrome",
+        # No user CLAUDE.md, hooks, or settings: they cost ~25k tokens a click and steer the reply.
+        "--setting-sources", "",
     ]
     if system:
         argv += ["--system-prompt", system[:6000]]
@@ -168,8 +164,14 @@ def codex_argv(binary: str, outfile: str) -> list[str]:
     ]
 
 
+# Every hop: a plan or staging note instead of the reply. Narrow, so "I staged the fix in QA" survives.
+_HOP_META = re.compile(
+    r"exitplanmode|\bi staged (?:the|this|a|your) (?:reply|draft|response)\b"
+    r"|\bbelow as a plan\b|\bso nothing has been (?:posted|sent)\b",
+    re.I,
+)
 _CURSOR_META = re.compile(
-    r"ask mode|switch to agent|didn.?t stage|pasteable draft|i can.?t post|i cannot post",
+    r"ask mode|switch to agent|didn.?t stage|pasteable draft|i can.?t post|i cannot post|" + _HOP_META.pattern,
     re.I,
 )
 
@@ -208,14 +210,29 @@ def cursor_argv(binary: str, prompt: str) -> list[str]:
 
 
 def _split_messages(messages: list[dict]) -> tuple[str, str]:
+    """System prompt, then every turn. A corrective retry must not drop the earlier ones."""
     system = ""
-    user = ""
+    turns = []
     for message in messages:
-        if message.get("role") == "system" and not system:
-            system = str(message.get("content") or "")
-        elif message.get("role") == "user":
-            user = str(message.get("content") or "")
-    return system, user
+        role = str(message.get("role") or "")
+        content = str(message.get("content") or "")
+        if role == "system" and not system:
+            system = content
+            continue
+        if content:
+            turns.append((role, content))
+    if len(turns) <= 1:
+        return system, turns[0][1] if turns else ""
+    *earlier, (_, final) = turns
+    lines = []
+    for role, content in earlier:
+        if role == "assistant":
+            lines.append("Previous draft:\n" + content[:1500])
+        else:
+            lines.append(content)
+    # The hops cut the prompt from the end (codex keeps 4000), so the last turn goes in whole.
+    room = max(0, 3900 - len(final) - 2)
+    return system, ("\n\n".join(lines)[:room] + "\n\n" + final).strip()
 
 
 def premium_env() -> dict:
@@ -319,6 +336,11 @@ def complete(endpoints: list[dict], messages: list[dict], http=None, ssh=None) -
             last = str(endpoint.get("name") or "?") + ":" + type(exc).__name__
             continue
         if str(text or "").strip():
+            from hailports.clip.scene import strip_scaffold
+            if _HOP_META.search(strip_scaffold(str(text))):
+                # Narration about staging or planning is not a reply. Try the next hop.
+                last = str(endpoint.get("name") or "?") + ":meta"
+                continue
             return str(text).strip(), str(endpoint.get("name") or "")
         last = str(endpoint.get("name") or "?") + ":empty"
     raise ModelOffline(last)

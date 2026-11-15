@@ -393,12 +393,14 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
     func finish(path: String, note: String = "") {
         stopSpin()
         markHandled(draftSig)
-        let pasted = path != "copied"
-        let tip = path == "cmdv-unverified" ? "Pasted. If it is not there, press Cmd-V" : (pasted ? "Pasted" : "Copied. Click in the message box and press Cmd-V")
+        let copied = path == "copied" || path == "cmdv-unverified"
+        // cmdv-unverified: Cmd-V was sent but the field could not be read back. Do not invite a second paste.
+        let tip = path == "copied" ? "Copied — click the reply box and press Cmd-V"
+            : path == "cmdv-unverified" ? "Pasted? If it is not in the reply box, press Cmd-V" : "Pasted"
         item?.button?.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: tip)
         item?.button?.toolTip = tip
         item?.button?.appearsDisabled = false
-        log.error("\(pasted ? "pasted" : "copied", privacy: .public) \(path, privacy: .public) \(note, privacy: .public)")
+        log.error("\(copied ? "copied" : "pasted", privacy: .public) \(path, privacy: .public) \(note, privacy: .public)")
         busy = false
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
             self.item?.button?.image = self.mark

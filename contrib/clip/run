@@ -26,7 +26,12 @@ from hailports.clip.run import _complete, cmd_onboard, draft_scene  # noqa: E402
 
 
 def _cfg(path: str, base_url: str, model: str) -> dict:
+    # The menu runs `draft --scene` with no --route and no PAISTE_ROUTE.
     route = path or os.environ.get("PAISTE_ROUTE") or ""
+    if not route:
+        saved = Path.home() / ".config" / "paiste" / "route.yaml"
+        if saved.is_file():
+            route = str(saved)
     if route and Path(route).is_file():
         loaded = load_file(Path(route))
         if isinstance(loaded, dict):

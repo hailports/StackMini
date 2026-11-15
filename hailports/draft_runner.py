@@ -236,7 +236,7 @@ def _reply_thread_block(row: dict, text: str = "") -> str:
     return str(decision.get("disposition") or "")
 
 
-def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | None = None, cleaner=None, now=None, badges: dict | None = None) -> dict:
+def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | None = None, cleaner=None, now=None, badges: dict | None = None, cfg: dict | None = None) -> dict:
     """One pass over the inbox. Nothing in this pass is sent.
 
     The same message id is handled once. A later copy is a duplicate skip.
@@ -249,6 +249,9 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
     skipped: list[dict] = []
     lines: list[str] = []
     drafts: list[dict] = []
+    from hailports.clip.native import NativeRouter, from_config, scene_for
+
+    native = router if isinstance(router, NativeRouter) else from_config(cfg) if router is None else None
 
     def emit(reason: str, subject: str, sender: str, error: str = "") -> None:
         lines.append(skip_line(reason, subject, sender, error))
@@ -355,11 +358,21 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
         sources = list(row.get("sources") or [])
         ask = str(row.get("ask") or subject or newest)
         scene = row.get("scene")
+        active_router = router
+        if native is not None:
+            scene = scene_for(row, body)
+            if scene:
+                active_router = native
         prepared = None
         if scene:
             from hailports.clip.scene import prepare as scene_prepare
 
-            prepared = scene_prepare(scene, search=row.get("memory_search"), folders=row.get("memory_folders"))
+            folders = row.get("memory_folders")
+            if folders is None and active_router is native and native is not None:
+                folders = native.folders
+            prepared = scene_prepare(scene, search=row.get("memory_search"), folders=folders)
+            if active_router is native and native is not None and "scene" not in row:
+                prepared["ask"] = str(row.get("ask") or newest or ask)
             if not prepared.get("ok"):
                 emit(str(prepared.get("reason") or "paiste"), subject or str(prepared.get("subject") or ""), sender or str(prepared.get("app") or ""))
                 continue
@@ -394,17 +407,20 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
             if packed.get("text"):
                 sources = sources + [packed["text"]]
             link_kinds = list(packed.get("kinds") or [])
+        if prepared is not None and active_router is native and native is not None:
+            sources = list(dict.fromkeys([*(prepared.get("sources") or []), *sources]))
+            prepared["messages"][-1]["content"] += "\n\nSource notes:\n" + "\n".join(sources)
         try:
-            if prepared is not None and router is not None:
-                got = router.complete(prepared["messages"], task="draft")
-                held = False
+            if prepared is not None and active_router is not None:
+                got = active_router.complete(prepared["messages"], task="draft")
+                held = bool(got.raw.get("held")) if active_router is native else False
                 text = got.text or ""
-            elif router is None:
+            elif active_router is None:
                 text = draft(ask, sources)
                 held = False
             else:
                 from hailports.features import draft_reply
-                got = draft_reply(router, ask, sources)
+                got = draft_reply(active_router, ask, sources)
                 held = bool(got.raw.get("held"))
                 text = got.text or ""
         except NoSource:
@@ -413,9 +429,10 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
             emit("no_source", subject, sender)
             continue
         if held:
-            _park(prev, "need_citation", reopened)
+            reason = str(got.raw.get("reason") or "empty") if active_router is native and native is not None else "need_citation"
+            _park(prev, reason, reopened)
             _remember(prior, mid, prev)
-            emit("need_citation", subject, sender)
+            emit(reason, subject, sender)
             continue
         draft_secret = secret_hold(text)
         if draft_secret:
@@ -424,14 +441,14 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
             emit("secret", subject, sender, draft_secret)
             continue
         if row.get("check"):
-            if router is None:
+            if active_router is None:
                 _park(prev, "hold", reopened)
                 _remember(prior, mid, prev)
                 emit("hold", subject, sender, "no_model")
                 continue
             from hailports.contextpack import apply_check
 
-            def _one(messages, max_tokens=180, _router=router):
+            def _one(messages, max_tokens=180, _router=active_router):
                 got = _router.complete(messages, task="read", max_tokens=max_tokens)
                 return {"ok": True, "text": getattr(got, "text", "") or "", "reason": ""}
 
@@ -444,12 +461,16 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
                     prev["discard_parked"] = False
                     prev["error"] = (reason if reason.startswith("hold:") else "hold:" + reason)[:160]
                     best = str(checked.get("best_text") or text or "").strip()
+                    if native is not None and active_router is native:
+                        best = native.sanitize(best, "\n".join(sources))
                     if len(best) > len(str(prev.get("best_text") or "")):
                         prev["best_text"] = best[:800]
                     if fails >= _HOLD_MAX:
                         prev["settled"] = True
                         prev["review"] = True
                         staged_text = str(prev.get("best_text") or "").strip()
+                        if native is not None and active_router is native:
+                            staged_text = native.sanitize(staged_text, "\n".join(sources))
                         _remember(prior, mid, prev)
                         if staged_text:
                             blocked = _reply_thread_block(row, staged_text)
@@ -477,6 +498,13 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
                 emit("hold", subject, sender, reason[:80])
                 continue
             text = checked.get("text") or ""
+        if row.get("check") and native is not None and active_router is native:
+            text = native.sanitize(text, "\n".join(sources))
+            if not text:
+                _park(prev, "empty", reopened)
+                _remember(prior, mid, prev)
+                emit("empty", subject, sender)
+                continue
         if row.get("require_pass") and not has_pass(text):
             text = stamp_pass(text)
         prev["draft_ok"] = True
@@ -490,7 +518,7 @@ def run_round(rows: list[dict], *, router=None, calendar=None, prior: dict | Non
             "from": sender,
             "text": text,
             "sent": False,
-            "via": "paiste" if prepared else "draft",
+            "via": "paiste" if prepared or active_router is native and native is not None else "draft",
         }
         if link_kinds:
             staged["links"] = link_kinds

@@ -224,7 +224,9 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
             mark.chmod(0o600)
         except OSError:
             pass
-        if overreach(text, sources):
+        invented = overreach(text, sources)
+        if invented or (weak and len(hops) <= 1):
+            first = text
             retry = list(prepared["messages"]) + [
                 {"role": "assistant", "content": text},
                 {"role": "user", "content": (
@@ -234,10 +236,17 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
                     "Never describe the message or say what it does not list. No meta commentary."
                 )},
             ]
-            text = plain_reply(_complete(route)(retry).strip())
+            try:
+                text = plain_reply(_complete(route)(retry).strip())
+            except ModelOffline:
+                # A weak first draft beats nothing. An invented one does not.
+                text = "" if invented else first
         kept = as_writer(trim_overreach(text, sources), me)
+        # Cleanup that removes the whole reply must not put the raw text back.
         if reply_ok(kept):
             text = kept
+        else:
+            text = ""
     except ModelOffline as exc:
         print("model offline: " + str(exc))
         return 2

@@ -86,9 +86,9 @@ enum PastePath {
             .map(String.init).joined()
     }
 
-    /// A short fingerprint of the draft's opening words.
+    /// Opening words, normalized. 60 characters, or the whole draft when it is shorter.
     static func probe(_ text: String) -> String {
-        String(squash(text).prefix(28))
+        String(squash(text).prefix(60))
     }
 
     static func hits(_ probe: String, in el: AXUIElement) -> Int {
