@@ -32,9 +32,30 @@ if git diff --cached --quiet; then
   echo "nothing to commit"
   exit 0
 fi
-git commit -m "$MSG"
 PUSH=$(git remote get-url --push origin 2>/dev/null || true)
 case "$PUSH" in
+  *github.com[:/]hailports/*) HP=1 ;;
+  *) HP=0 ;;
+esac
+if [ "$HP" = 1 ]; then
+  # Project identity for both author and committer, whatever the global config says.
+  GIT_AUTHOR_NAME=HailPorts GIT_AUTHOR_EMAIL=noreply@hailports.com \
+  GIT_COMMITTER_NAME=HailPorts GIT_COMMITTER_EMAIL=noreply@hailports.com \
+    git commit -m "$MSG"
+else
+  git commit -m "$MSG"
+fi
+case "$PUSH" in
   *DISABLED*|*no-push*|"") echo "local commit only; push remote is not usable" ;;
-  *) git push origin HEAD ;;
+  *)
+    if [ "$HP" = 1 ]; then
+      # Run the guard directly so a hook bypass (--no-verify, another hooksPath) cannot skip it.
+      GUARD=${HAILPORTS_GUARD:-}
+      for g in "$ROOT/contrib/git-guard/hailports-guard" "$HOME/claude-stack/git-hooks/hailports-guard"; do
+        [ -n "$GUARD" ] || { [ -x "$g" ] && GUARD=$g; }
+      done
+      [ -n "$GUARD" ] && [ -x "$GUARD" ] || { echo "refuse: hailports-guard missing" >&2; exit 5; }
+      "$GUARD" verify origin HEAD || { echo "refuse: hailports-guard blocked the push" >&2; exit 5; }
+    fi
+    git push origin HEAD ;;
 esac

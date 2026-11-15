@@ -1,0 +1,7 @@
+#!/bin/sh
+# Pass any other hook through to the repo's own hook, if it has one.
+n=$(basename "$0")
+g=$(git rev-parse --git-common-dir) || exit 0
+c=$(git config --get hailports-guard.chainHooksPath || echo "$g/hooks")
+[ -x "$c/$n" ] && exec "$c/$n" "$@"
+exit 0

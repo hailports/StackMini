@@ -1,0 +1,11 @@
+#!/bin/sh
+# Shared hook dir for hailports clones. Run the guard, then any repo hook.
+d=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+t=$(mktemp "${TMPDIR:-/tmp}/hpprepush.XXXXXX") || exit 1
+trap 'rm -f "$t"' EXIT
+cat > "$t"
+"$d/hailports-guard" pre-push "$@" < "$t" || exit 1
+g=$(git rev-parse --git-common-dir) || exit 1
+c=$(git config --get hailports-guard.chainHooksPath || echo "$g/hooks")
+if [ -x "$c/pre-push" ]; then "$c/pre-push" "$@" < "$t" || exit 1; fi
+exit 0
