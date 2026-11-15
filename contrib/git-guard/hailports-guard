@@ -12,6 +12,8 @@
 set -u
 set -o pipefail
 OK_ID="HailPorts <noreply@hailports.com>"
+# Exact second identity. Not a domain wildcard.
+OK_ID_ALT="HailPorts <hailports@users.noreply.github.com>"
 CONF=${HAILPORTS_GUARD_CONF:-$HOME/.config/hailports-guard}
 DENY="$CONF/deny.txt"          # fixed strings, any case, anywhere
 WORDS="$CONF/deny-words.txt"   # fixed strings, any case, whole words only
@@ -43,7 +45,10 @@ scan_text() {
 }
 
 check_ident() {  # $1 label, $2 "Name <email>"
-  [ "$2" = "$OK_ID" ] || bad "$1 is not the project identity"
+  case "$2" in
+    "$OK_ID"|"$OK_ID_ALT") ;;
+    *) bad "$1 is not the project identity" ;;
+  esac
 }
 
 check_commit() {
@@ -54,7 +59,8 @@ check_commit() {
   git log -1 --format=%B "$c" > "$TMP/msg" || { bad "$short: no message"; return; }
   grep -E -i "$TRAILER_RE" "$TMP/msg" | sed -E 's/^[^:]+:[[:space:]]*//; s/[[:space:]]+$//' > "$TMP/tr"
   while IFS= read -r t; do check_ident "$short trailer" "$t"; done < "$TMP/tr"
-  grep -E -o "$EMAIL_RE" "$TMP/msg" | grep -v -x -F 'noreply@hailports.com' > "$TMP/em"
+  # Exact addresses only. Do not turn this into a domain or regex allow.
+  grep -E -o "$EMAIL_RE" "$TMP/msg" | grep -v -x -F -e 'noreply@hailports.com' -e 'hailports@users.noreply.github.com' > "$TMP/em"
   [ -s "$TMP/em" ] && bad "$short message: email address"
   if [ "$full" = 1 ]; then
     scan_text "$TMP/msg" "$short message"
@@ -117,7 +123,7 @@ run_checks() {  # $1 remote, $2 url, stdin ref lines
       done < "$TMP/excl"
     fi
   fi
-  if [ "$BAD" != 0 ]; then say "push refused. Fix the commits (identity must be $OK_ID)."; exit 1; fi
+  if [ "$BAD" != 0 ]; then say "push refused. Fix the commits (identity must be $OK_ID or $OK_ID_ALT)."; exit 1; fi
   say "ok ($n new commit(s) checked)"
   exit 0
 }
