@@ -2,8 +2,12 @@
 
 Ladder, and each rung is checked before the next one runs:
   1. Rebind the receipt to the service pid when that pid is this job.
-  2. kickstart -k of this label only.
-  3. Signal that owned pid only, and only when the port is still down.
+  2. If the service is stuck (spawn failed or spawn scheduled, often after
+     SIGTERM) or has no pid, rebootstrap the plist with launchctl asuser
+     into gui/UID. kickstart -k from an SSH Background session can return
+     already-in-progress or hang and does not unstick that state.
+  3. Otherwise kickstart -k of this label only.
+  4. Signal that owned pid only, and only when the port is still down.
 
 Three heals per bridge per hour, then one local note.
 """
@@ -30,10 +34,48 @@ class Snap:
     unread: int | None = None
 
 
-def kickstart_argv(label: str, uid: int, *, allowed: frozenset[str]) -> list[str]:
+def kickstart_argv(label: str, uid: int, *, allowed: frozenset[str], kill: bool = True) -> list[str]:
     if label not in allowed:
         raise ValueError("refused label")
-    return ["launchctl", "kickstart", "-k", f"gui/{uid}/{label}"]
+    argv = ["launchctl", "kickstart"]
+    if kill:
+        argv.append("-k")
+    argv.append(f"gui/{int(uid)}/{label}")
+    return argv
+
+
+STUCK_STATES = frozenset({"spawn failed", "spawn scheduled"})
+
+
+def launchd_is_stuck(state: str, pid: int | None, *, port_up: bool) -> bool:
+    """True when the service manager will not respawn the job, often after SIGTERM."""
+    st = (state or "").strip().lower().replace("_", " ")
+    if st in STUCK_STATES:
+        return True
+    if (not port_up) and not pid:
+        return True
+    return False
+
+
+def rungs_for(snap: Snap) -> tuple[str, ...]:
+    if launchd_is_stuck(snap.service_state, snap.service_pid, port_up=snap.port_up):
+        return ("adopt", "unstick", "kickstart")
+    return ("adopt", "kickstart", "restart_pid")
+
+
+def rebootstrap_argv(label: str, uid: int, plist: str, *, allowed: frozenset[str]) -> list[list[str]]:
+    """bootout + bootstrap in the GUI domain, even from an SSH Background session."""
+    if label not in allowed:
+        raise ValueError("refused label")
+    name = plist.rsplit("/", 1)[-1]
+    if not plist.endswith(".plist") or name != f"{label}.plist":
+        raise ValueError("refused plist")
+    domain = f"gui/{int(uid)}"
+    asuser = ["launchctl", "asuser", str(int(uid)), "launchctl"]
+    return [
+        asuser + ["bootout", domain, plist],
+        asuser + ["bootstrap", domain, plist],
+    ]
 
 
 def command_matches(cmd: str, *, port: int, profile: str, browser_mark: str) -> bool:
@@ -81,14 +123,15 @@ def _recent(stamps: list[float], now: float) -> list[float]:
 
 
 def heal(bridge: str, snap: Snap, actions: dict, state: dict, *, now: float, allowed: frozenset[str]) -> dict:
-    """One ladder pass. `actions` keys are callables: adopt, kickstart, restart_pid, ensure, refresh, snapshot."""
+    """One ladder pass. `actions` keys are callables: adopt, unstick, kickstart, restart_pid, ensure, refresh, snapshot."""
     if bridge not in allowed and bridge not in ("chat", "mail"):
         return {"action": "refused"}
     reason = detect(snap)
     row = state.setdefault(bridge, {"heals": [], "exhausted": False})
     if not reason:
-        if row.get("exhausted") and len(_recent(row["heals"], now)) < MAX_HEALS:
+        if row.get("exhausted"):
             row["exhausted"] = False
+            row["heals"] = []
         return {"action": "none"}
     recent = _recent(list(row.get("heals") or []), now)
     row["heals"] = recent
@@ -105,13 +148,15 @@ def heal(bridge: str, snap: Snap, actions: dict, state: dict, *, now: float, all
     current = snap
     stopped = None
     result = "still_bad"
-    for rung in ("adopt", "kickstart", "restart_pid"):
+    for rung in rungs_for(snap):
         if rung == "restart_pid" and reason == "stale_cache" and current.port_up and current.cdp_up:
             result = "stale_cache_bridge_up"
             stopped = "kickstart"
             break
         actions[rung](bridge)
         if rung in ("kickstart", "restart_pid"):
+            actions.get("wait", lambda *_: None)(bridge)
+        if rung == "unstick":
             actions.get("wait", lambda *_: None)(bridge)
         if reason == "stale_cache":
             actions["refresh"](bridge)
@@ -120,8 +165,18 @@ def heal(bridge: str, snap: Snap, actions: dict, state: dict, *, now: float, all
             line = actions["ensure"](bridge)
             if str(line).startswith(("BLOCKED", "FAILED", "DOWN")):
                 current.ensure_line = line
+                if "BLOCKED" in str(line):
+                    actions["adopt"](bridge)
+                    current = actions["snapshot"](bridge)
+                    line = actions["ensure"](bridge)
+                    if str(line).startswith(("BLOCKED", "FAILED", "DOWN")):
+                        current.ensure_line = line
         if detect(current) is None:
             result = "cleared"
+            stopped = rung
+            break
+        if reason != "stale_cache" and current.port_up and current.cdp_up:
+            result = "bridge_up_residual"
             stopped = rung
             break
         stopped = rung

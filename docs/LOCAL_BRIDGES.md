@@ -34,7 +34,8 @@ The model selected in setup writes `read_list` and `write_fill`. `send` is force
 - A hot browser is watched, then reloaded, then the renderer is recycled, then the main process is bounced, and only when a bounce is allowed. A login, a held lock, or text sitting in a composer skips that.
 - Garbage collection is separate. It never quits, reloads, or clicks.
 - Restart goes through the service manager, and only when the recorded process id is still the live one. A different pid is left alone.
-- A stale receipt is rewritten to the service pid only when that pid is this job and the argv proof matches. If the port is down, the debug port is silent, ensure says BLOCKED, or the cache is older than 10 minutes while unread is above zero, the ladder is adopt, then kickstart -k of this label, then a signal to that owned pid. Three heals an hour, then one local note. No mail and no chat.
+- A stale receipt is rewritten to the service pid only when that pid is this job and the argv proof matches. If the port is down, the debug port is silent, ensure says BLOCKED, or the cache is older than 10 minutes while unread is above zero, the ladder is adopt, then a GUI-domain rebootstrap if launchd is stuck (spawn failed or spawn scheduled, often after SIGTERM), then kickstart -k of this label, then a signal to that owned pid. kickstart from an SSH Background session is not enough to unstick that state; the rebootstrap uses launchctl asuser into gui/UID. Three heals an hour, then one local note. After the bridge is healthy again, the exhausted budget resets. No mail and no chat.
+- A KeepAlive job that execs a browser should set AbandonProcessGroup and a longer ExitTimeOut so a SIGTERM of the process group does not leave launchd in spawn failed. After the browser is back, a signed-out page is reminted from a local cookie vault when one exists. A human is paged only when remint or respawn fails.
 
 ## Drafts
 
