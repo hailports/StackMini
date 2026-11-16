@@ -1,4 +1,5 @@
 import Cocoa
+import ApplicationServices
 
 /// Onboarding window. Local, API, or both. Mail, calendar, notes, and chat stay with the model.
 final class FlippedView: NSView {
@@ -28,6 +29,8 @@ final class SetupBoard: NSObject, NSWindowDelegate {
     let statusField = NSTextField(wrappingLabelWithString: "")
     let backButton = NSButton(title: "Back", target: nil, action: nil)
     let nextButton = NSButton(title: "Next", target: nil, action: nil)
+    let accessButton = NSButton(title: "Turn on Accessibility", target: nil, action: nil)
+    var sawUntrusted = false
     var page = 0
     var loaded = false
     var link = "local"
@@ -83,7 +86,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
 
     override init() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 540, height: 760),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 780),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -97,6 +100,9 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         backButton.action = #selector(back)
         nextButton.target = self
         nextButton.action = #selector(forward)
+        accessButton.target = self
+        accessButton.action = #selector(turnOnAccess)
+        accessButton.bezelStyle = .rounded
         buildChrome()
         render()
     }
@@ -120,7 +126,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         body.font = NSFont.systemFont(ofSize: 13)
         body.textColor = NSColor(srgbRed: 0.16, green: 0.13, blue: 0.10, alpha: 1)
         body.preferredMaxLayoutWidth = 480
-        body.maximumNumberOfLines = 12
+        body.maximumNumberOfLines = 8
         footer.font = NSFont.systemFont(ofSize: 12, weight: .medium)
         footer.textColor = NSColor(srgbRed: 0.45, green: 0.28, blue: 0.16, alpha: 1)
         footer.preferredMaxLayoutWidth = 480
@@ -156,6 +162,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         buttons.spacing = 8
         buttons.addArrangedSubview(backButton)
         buttons.addArrangedSubview(nextButton)
+        stack.addArrangedSubview(accessButton)
         stack.addArrangedSubview(buttons)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 28),
@@ -163,15 +170,22 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 24),
             stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -16),
             scroll.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            scroll.heightAnchor.constraint(equalToConstant: 320),
+            scroll.heightAnchor.constraint(equalToConstant: 220),
         ])
         window.center()
     }
 
     func show() {
         render()
+        window.level = .floating
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            guard let self, self.window.isVisible else { return }
+            self.window.level = .normal
+        }
         if !loaded {
             loaded = true
             load()
@@ -433,13 +447,11 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         nextButton.title = page == 3 ? "Save on this Mac" : (page == 0 ? "Customize" : "Next")
         switch page {
         case 0:
-            if autoDone && autoNeeds.isEmpty {
-                titleField.stringValue = "Ready."
-                body.stringValue = "Click the paperclip in any reply box."
-            } else {
-                titleField.stringValue = "Set up paisty."
-                body.stringValue = "paisty looked at this Mac. One click sets it up. Only your license is checked with paisty.com. No mail or notes leave this Mac."
-            }
+            titleField.stringValue = "The icon is in the menu bar."
+            let next = autoDone && autoNeeds.isEmpty
+                ? "Click the paperclip in any reply box."
+                : "Next, set up the AI you already use. One click can do that. Only your license is checked with paisty.com. No mail or notes leave this Mac."
+            body.stringValue = SetupBoard.menuGuide + " " + next
             autoPage()
         case 1:
             titleField.stringValue = "Pick your AI."
@@ -463,6 +475,34 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             body.stringValue += "\n\npaisty does not keep any data."
         }
         extra.frame = NSRect(x: 0, y: 0, width: 484, height: max(extraHeight, 40))
+        refreshTrust()
+    }
+
+    /// Where the menu-bar icon is, and how to get this window back. No global hotkey is registered.
+    static let menuGuide = "The paisty icon is the paperclip in the menu bar, at the top right. Click it in a reply box to draft. If the icon is hidden, open paisty from Spotlight or Applications and this window comes back. There is no keyboard shortcut. Press Turn on Accessibility to paste into the reply. Until then a click copies the draft."
+
+    func refreshTrust() {
+        let trusted = AXIsProcessTrusted()
+        accessButton.isHidden = trusted
+        if !trusted {
+            sawUntrusted = true
+            if statusField.stringValue.isEmpty || statusField.stringValue.hasPrefix("Accessibility") {
+                statusField.stringValue = "Accessibility is off. Paste copies until you turn it on."
+            }
+            return
+        }
+        if sawUntrusted {
+            statusField.stringValue = "Accessibility is on."
+            sawUntrusted = false
+        }
+    }
+
+    @objc func turnOnAccess() {
+        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+        AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     func notesCopy() -> String {

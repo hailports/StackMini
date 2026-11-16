@@ -96,10 +96,10 @@ def test_ground_reply_closes_the_judge_misses():
     owen = "Owen Park 4:02 PM\nbooth Saturday?"
     assert ground_reply("hey Owen -- I don't know yet. I'll check and let you know.", owen, ["Quinn"]).endswith("yes.")
     nico = "From: Nico Alvarez\n\nthanks for dropping off the flyers yesterday. they look great."
-    assert ground_reply("hey Nico -- lmk if there's anything else on either one!", nico, ["Quinn"]) == "hey Nico -- glad the flyers look great."
+    assert ground_reply("hey Nico -- lmk if there's anything else on either one!", nico, ["Quinn"]) == "hey Nico -- thanks for the flyers."
     noisy = nico + "\naccount: can you please see if the email in your note is possible?"
     drifted = "hey Nico -- on the email in your note, and see if it's possible. lmk if anything else comes up on either one."
-    assert ground_reply(drifted, noisy, ["Quinn"]) == "hey Nico -- glad the flyers look great."
+    assert ground_reply(drifted, noisy, ["Quinn"]) == "hey Nico -- thanks for the flyers."
     mina = "Mina Patel\ncan you take the second spot? they lock the list at 4."
     cleaned = ground_reply("hey Mina -- I'll take the second spot, so I'm on the list before they lock it at 4.", mina, ["Quinn"])
     assert "on the list" not in cleaned
@@ -131,6 +131,33 @@ def test_ground_reply_closes_the_judge_misses():
     assert "get this fixed" not in looked
     assert "1844" in looked
     assert "another week" not in looked
+
+
+def test_a_borrowed_status_stays_with_its_author_and_a_no_ask_is_only_thanks():
+    nora = (
+        "From: Nora Blake\n\nwe still need a cooler.\n\n"
+        "From: Quinn\n\nstill looking at the gate code.\n\npeople start showing up at 1."
+    )
+    borrowed = ground_reply(
+        "hey Nora -- I'm still looking at the gate code. the cooler is still open.",
+        nora,
+        ["Pat"],
+    )
+    assert "still looking" not in borrowed.lower()
+    own = ground_reply(
+        "hey Nora -- I'm still looking at the gate code.",
+        "From: Nora Blake\n\nany update on the gate?\n\nFrom: Quinn\n\nstill looking at the gate code.",
+        ["Quinn"],
+    )
+    assert "still looking" in own.lower()
+    posters = "From: Nico Alvarez\n\nthe posters arrived. they look great."
+    quiet = ground_reply("hey Nico -- glad the posters look great.", posters, ["Quinn"])
+    assert quiet == "hey Nico -- thanks for the posters."
+    assert "glad" not in quiet.lower()
+    flyers = "From: Nico Alvarez\n\nthanks for dropping off the flyers yesterday. they look great."
+    neutral = ground_reply("hey Nico -- glad the flyers look great.", flyers, ["Quinn"])
+    assert neutral == "hey Nico -- thanks for the flyers."
+    assert "look great" not in neutral.lower()
 
 
 def test_rules_name_the_person_and_ban_invention():
@@ -369,7 +396,7 @@ def test_ground_reply_stops_the_four_misses():
         ["Riley Example"],
     )
     assert "bring the new park gate code" not in gate.lower()
-    assert "still looking at the new park gate code" in gate
+    assert "still looking" not in gate.lower()
     assert "before people start showing up" not in gate
     assert "card," not in gate
     owen = "Owen Park 4:02 PM\nbooth Saturday?"

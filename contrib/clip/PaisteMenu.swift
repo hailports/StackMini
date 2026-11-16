@@ -42,6 +42,8 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
     var handledSigs: [String] = []
     static let glowKey = "glowHint"
     lazy var glowMark = PaisteApp.paperclipHalo()
+    var trustTimer: Timer?
+    var askedPasteAccess = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -62,13 +64,20 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
             NSApp.applicationIconImage = icon
         }
         let route = ProcessInfo.processInfo.environment["PAISTE_ROUTE"] ?? (NSHomeDirectory() + "/.config/paiste/route.yaml")
-        if !FileManager.default.fileExists(atPath: route) {
+        let fresh = !FileManager.default.fileExists(atPath: NSHomeDirectory() + "/.config/paiste")
+        if fresh || !FileManager.default.fileExists(atPath: route) || !AXIsProcessTrusted() {
             openSetup()
         }
         UserDefaults.standard.register(defaults: [Self.glowKey: true])
         Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
             self?.remember()
         }
+    }
+
+    /// Spotlight or Applications relaunch while paisty is already running.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        openSetup()
+        return true
     }
 
     func startSpin() {
@@ -105,18 +114,19 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         return image
     }
 
-    func promptTrust() {
-        if AXIsProcessTrusted() { return }
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
-        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-        let options = [key: true] as CFDictionary
-        AXIsProcessTrustedWithOptions(options)
-        if let url = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ListenEvent") {
-            NSWorkspace.shared.open(url)
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-            NSApp.setActivationPolicy(.accessory)
+    func watchTrust() {
+        trustTimer?.invalidate()
+        trustTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] timer in
+            guard let self, let board = self.board, board.window.isVisible else {
+                timer.invalidate()
+                self?.trustTimer = nil
+                return
+            }
+            board.refreshTrust()
+            if AXIsProcessTrusted(), self.item?.button?.toolTip == "Copied. Turn on Accessibility to paste automatically." {
+                self.item?.button?.toolTip = "paisty"
+                self.item?.button?.image = self.mark
+            }
         }
     }
 
@@ -275,6 +285,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         board?.show()
+        watchTrust()
     }
 
     @objc func setupAutomatically() {
@@ -294,12 +305,9 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
             return
         }
         if busy { return }
-        if !AXIsProcessTrusted() {
-            promptTrust()
-            item?.button?.image = NSImage(systemSymbolName: "questionmark", accessibilityDescription: "Allow paisty in Accessibility")
-            item?.button?.toolTip = "System Settings, search assistive, turn on paisty"
-            log.error("untrusted")
-            return
+        if !AXIsProcessTrusted() && !askedPasteAccess {
+            askedPasteAccess = true
+            openSetup()
         }
         busy = true
         draftSig = seenSig
@@ -362,6 +370,10 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
             board.clearContents()
             board.setString(text, forType: .string)
         }
+        if !AXIsProcessTrusted() {
+            PastePath.note("  untrusted clipboard only")
+            return "copied-untrusted"
+        }
         let bundle = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? "?"
         var path = "copied"
         PastePath.note("deliver app=\(bundle) chars=\(text.count) remembered=\(PastePath.describe(field)) front=\(PastePath.frontPID() == pid)")
@@ -393,9 +405,10 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
     func finish(path: String, note: String = "") {
         stopSpin()
         markHandled(draftSig)
-        let copied = path == "copied" || path == "cmdv-unverified"
+        let copied = path == "copied" || path == "cmdv-unverified" || path == "copied-untrusted"
         // cmdv-unverified: Cmd-V was sent but the field could not be read back. Do not invite a second paste.
-        let tip = path == "copied" ? "Copied — click the reply box and press Cmd-V"
+        let tip = path == "copied-untrusted" ? "Copied. Turn on Accessibility to paste automatically."
+            : path == "copied" ? "Copied — click the reply box and press Cmd-V"
             : path == "cmdv-unverified" ? "Pasted? If it is not in the reply box, press Cmd-V" : "Pasted"
         item?.button?.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: tip)
         item?.button?.toolTip = tip

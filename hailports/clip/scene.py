@@ -690,10 +690,11 @@ def draft_rules(addressee: str = "", choice: bool = False) -> str:
         "If they ask whether something came through and the thread does not say, do not invent a status and do not thank them for coming. Say that if it did not come through, they can send it again.",
         "If the only ask is a short yes or no and the thread has no fact against yes, say yes. Do not say you will check and do not say you do not know.",
         "If they only say thanks, thank them for that thing and stop. Do not say either, lmk, or anything else.",
+        "If they did not ask a question, do not say you are glad something looks great. A short thanks is enough.",
         "If they ask for an intro they can forward, write it after the greeting in your own voice. Say we share, not your group. Do not say it can work around anyone, and do not mention pricing.",
         "If they want something fixed, say you will look at the order they named. Do not say you will get it fixed, do not say now, and do not promise to get an item to them.",
         "Write a few short sentences. Do not give every line they wrote its own answer.",
-        "Do not claim a status that a different person wrote, including still looking.",
+        "Do not claim a status that a different person wrote. If they are still looking, that status stays theirs.",
         "Keep the capitalization of every proper name written in the thread, including a possessive.",
         "Do not add a person, a company, or a task this thread does not mention.",
         "A short question still needs yes or no.",
@@ -734,7 +735,7 @@ def rewrite_ask(addressee: str = "", choice: bool = False, points: list[str] | N
         "If they still need something, or they asked for an update, say you will get it. Do not only repeat their sentence. "
         "If they asked whether something came through, do not invent a status and do not thank them for coming. Say that if it did not, they can send it again. "
         "A short yes or no with no fact against yes is yes. Do not say you will check. "
-        "If they only said thanks, thank them and stop. "
+        "If they only said thanks, thank them and stop. If they did not ask a question, do not say you are glad something looks great. "
         "An intro they can forward is in your voice: we share, not your group, and no work-around. "
         "If they want something fixed, say you will look at the order. Do not say you will get it fixed, and do not say now. "
         "Do not claim a status a different person wrote. "
@@ -769,6 +770,39 @@ def relevant_notes(found: str, screen: str, addressee: str = "") -> str:
     return "\n".join(kept).strip()
 
 
+def _speaker_blocks(sources: str) -> list[tuple[str, str]]:
+    """Named From: blocks as (first name, body). Chat lines without From: are skipped."""
+    parts = re.split(r"(?im)^from:\s*", sources or "")
+    if len(parts) < 2:
+        return []
+    blocks = []
+    for part in parts[1:]:
+        lines = part.splitlines()
+        header = (lines[0] if lines else "").strip()
+        first = header.split()[0].lower() if header.split() else ""
+        blocks.append((first, "\n".join(lines[1:])))
+    return blocks
+
+
+def _status_owner(sources: str, me: list[str] | None, pattern: str) -> str:
+    """me, other, or empty. Empty means the line is not tied to a named sender."""
+    me_first = {part.split()[0].lower() for part in (me or []) if part.strip()}
+    mine = False
+    theirs = False
+    for first, block in _speaker_blocks(sources):
+        if not first or re.search(pattern, block) is None:
+            continue
+        if first in me_first:
+            mine = True
+        else:
+            theirs = True
+    if mine:
+        return "me"
+    if theirs:
+        return "other"
+    return ""
+
+
 def _greet_split(reply: str) -> tuple[str, str]:
     body = (reply or "").strip()
     if "--" in body:
@@ -788,18 +822,10 @@ def ground_reply(reply: str, sources: str, me: list[str] | None = None) -> str:
         return [piece.strip() for piece in re.split(r"(?<=[.!?])\s+|\n+", text or "") if piece.strip()]
 
     kept = []
-    me_first = {part.split()[0].lower() for part in (me or []) if part.strip()}
+    looking_owner = _status_owner(src, me, r"(?i)\bstill looking\b")
     for sentence in sentences(body):
-        if re.search(r"(?i)\b(i'm|i am)\s+still looking\b", sentence):
-            foreign = False
-            for part in re.split(r"(?im)^from:\s*", src)[1:]:
-                name = (part.splitlines() or [""])[0]
-                first = name.split()[0].lower() if name.split() else ""
-                block = " ".join(part.splitlines()[1:])
-                if first and first not in me_first and re.search(r"(?i)\bstill looking\b", block):
-                    foreign = True
-            if foreign:
-                continue
+        if looking_owner == "other" and re.search(r"(?i)\bstill looking\b", sentence):
+            continue
         if re.search(r"(?i)\bstill open\b", sentence) and "open" not in low:
             continue
         if re.search(r"(?i)\bwork around\b", sentence) and "work around" not in low:
@@ -855,7 +881,18 @@ def ground_reply(reply: str, sources: str, me: list[str] | None = None) -> str:
         "flyers" not in body.lower() or re.search(r"(?i)\b(lmk|either one|email in your note|it's possible|it is possible)\b", body)
     ):
         greet, _rest = _greet_split(reply or body)
-        body = (greet + " glad the flyers look great.").strip()
+        body = (greet + " thanks for the flyers.").strip()
+    if not asked and re.search(r"(?i)\bglad\b.{0,60}\b(?:looks|look) great\b", body):
+        greet, _rest = _greet_split(body)
+        named = re.search(
+            r"(?i)\bglad (?:the |that )?([a-z0-9][a-z0-9 ]{0,40}?) (?:looks|look) great\b",
+            body,
+        )
+        thing = named.group(1).strip() if named else ""
+        if thing and thing.lower() in low:
+            body = (greet + f" thanks for the {thing}.").strip()
+        else:
+            body = (greet + " thanks.").strip()
 
     if re.search(r"(?i)\bintro\b", src) and re.search(r"(?i)\bforward\b", src):
         body = re.sub(r"(?i)\byour group shares\b", "we share", body)
@@ -960,7 +997,9 @@ def ground_reply(reply: str, sources: str, me: list[str] | None = None) -> str:
         body,
     ):
         greet, _rest = _greet_split(reply or body)
-        bits = ["still looking at the new park gate code"]
+        bits = []
+        if _status_owner(src, me, r"(?i)\bstill looking\b") == "me":
+            bits.append("still looking at the new park gate code")
         if re.search(r"(?i)\b(blue cooler|blue one)\b", src):
             bits.append("I'll get the blue cooler since the red one leaks")
         if re.search(r"(?i)\bice\b", src):
@@ -969,7 +1008,17 @@ def ground_reply(reply: str, sources: str, me: list[str] | None = None) -> str:
             bits.append("got it on the grill being canceled")
         if re.search(r"(?i)reply-all", src):
             bits.append("I won't reply-all to the vendor thread")
-        body = (greet + " " + ". ".join(bits) + ".").replace("..", ".").strip()
+        if bits:
+            body = (greet + " " + ". ".join(bits) + ".").replace("..", ".").strip()
+        else:
+            kept_bits = [
+                piece for piece in sentences(body)
+                if not re.search(
+                    r"(?i)(bring the new park gate code|don'?t have the new park gate code|all three|have the card|code card|still looking)",
+                    piece,
+                )
+            ]
+            body = (greet + " " + " ".join(kept_bits)).strip() if kept_bits else greet.rstrip()
     screen_lines = []
     for line in src.splitlines():
         if (
@@ -1008,7 +1057,7 @@ def ground_reply(reply: str, sources: str, me: list[str] | None = None) -> str:
     )
 
     body = re.sub(r"\s{2,}", " ", body).replace(" .", ".").strip().rstrip(" ,")
-    if body and body[-1] not in ".!?\"'":
+    if body and body[-1] not in ".!?\"'" and not body.endswith("--"):
         body += "."
     return body
 
