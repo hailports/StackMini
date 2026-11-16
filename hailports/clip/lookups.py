@@ -60,6 +60,21 @@ _GENERIC = re.compile(
 _DONE = re.compile(
     r"(?i)\b(?:i|we)\s+(?:already\s+)?(?:have\s+)?(?:updated|assigned|added|granted|fixed|deployed|removed|changed)\b"
 )
+_ACCESS_OFFER = re.compile(
+    r"(?i)\b(?:"
+    r"(?:i'll|i will|let me|i can|i could)\s+(?:just\s+)?(?:go ahead and\s+)?"
+    r"(?:assign|add|grant|share|reactivate|enable|give)\b"
+    r"|which (?:permission set )?group should i add\b"
+    r"|want me to (?:go ahead|add|assign|grant|share|reactivate|enable)\b"
+    r"|should i (?:add|assign|grant|share|reactivate|enable)\b"
+    r")"
+)
+_LOGIN_THEIR = re.compile(
+    r"(?i)\btheir\s+([A-Za-z][A-Za-z0-9]*(?:[ '-][A-Za-z][A-Za-z0-9]*){0,3})\s+login\b"
+)
+_LOGIN_FOR = re.compile(
+    r"(?i)\bfor the\s+([A-Za-z][A-Za-z0-9]*(?:[ '-][A-Za-z][A-Za-z0-9]*){0,3})\s+login\b"
+)
 _WRITE = re.compile(
     r"(?i)\b(insert|update|delete|upsert|merge|undelete|create|drop|alter|truncate)\b|;|--|/\*"
 )
@@ -292,6 +307,60 @@ def _natural(sources: str, anchors: list[Anchor], greet: str) -> str:
     return f"{prefix}thanks, I'll check that and get back to you."
 
 
+def _ticket_ask(who: str = "") -> str:
+    label = (who or "").strip()
+    if label and label.lower() != "unnamed":
+        return (
+            "that access change needs a helpdesk ticket -- "
+            f"can you open one for the {label} login?"
+        )
+    return "that access change needs a helpdesk ticket -- can you open one?"
+
+
+def _login_who(text: str) -> str:
+    match = _LOGIN_THEIR.search(text or "") or _LOGIN_FOR.search(text or "")
+    if not match:
+        return ""
+    who = match.group(1).strip()
+    low = who.lower()
+    if low in {"the", "their", "a", "an", "this", "that", "dealer"}:
+        return ""
+    if re.search(r"(?i)\b(permission|access|group|set|user|account)\b", who):
+        return ""
+    return who
+
+
+def _reticket(text: str, greet: str) -> str:
+    """Keep the cause; replace an access-change offer with the helpdesk ticket ask."""
+    who = _login_who(text)
+    ask = _ticket_ask(who)
+    prefix = (greet + " ") if greet else ""
+    parts = re.split(r"(?<=[.?!])\s+", (text or "").strip())
+    kept = [part for part in parts if part and not _ACCESS_OFFER.search(part)]
+    body = " ".join(kept).strip()
+    if greet and body.lower().rstrip(" -") == greet.lower().rstrip(" -"):
+        body = ""
+    if not body:
+        return prefix + ask
+    if ask.lower() in body.lower():
+        return body
+    if body[-1] not in ".!?":
+        body += "."
+    return body + " " + ask
+
+
+def _access_gate(text: str, sources: str, anchors: list[Anchor], facts: str, greet: str) -> str:
+    """Never leave an access-change offer in the paste."""
+    if not _ACCESS_OFFER.search(text or ""):
+        return text
+    greet = greet or _greeting(text)
+    if (facts or "").strip():
+        woven = _weave(sources, anchors, facts, greet)
+        if woven and not _is_raw_paste(woven):
+            return woven
+    return _reticket(text, greet)
+
+
 def _parse_facts(facts: str) -> dict:
     text = facts or ""
     records = []
@@ -381,7 +450,7 @@ def _weave(sources: str, anchors: list[Anchor], facts: str, greet: str) -> str:
                 head = item
             return (
                 f"{prefix}{head}, and their {who} login has no permission set group. "
-                f"which group should I add?"
+                f"{_ticket_ask(who)}"
             )
     if permission and parsed["assigned"] and not parsed["missing"] and primary and primary.get("name"):
         who, perm, group = parsed["assigned"][0]
@@ -409,7 +478,7 @@ def concrete_reply(reply: str, sources: str, facts: str = "") -> str:
     if not body:
         return body
     if not anchors and not (facts or "").strip():
-        return body
+        return _access_gate(body, sources, anchors, facts, _greeting(body))
     generic = _GENERIC.search(body) is not None
     done = _DONE.search(body) is not None
     cleaned = _scrub(body)
@@ -423,16 +492,16 @@ def concrete_reply(reply: str, sources: str, facts: str = "") -> str:
         and not _is_raw_paste(cleaned)
         and "i have not" not in cleaned.lower()
     )
-    if sharp:
-        return cleaned
     greet = _greeting(body)
+    if sharp:
+        return _access_gate(cleaned, sources, anchors, facts, greet)
     if have_facts:
         woven = _weave(sources, anchors, facts, greet)
         if woven and not _is_raw_paste(woven):
             return woven
     if anchors:
-        return _natural(sources, anchors, greet)
-    return cleaned or body
+        return _access_gate(_natural(sources, anchors, greet), sources, anchors, facts, greet)
+    return _access_gate(cleaned or body, sources, anchors, facts, greet)
 
 
 def _is_raw_paste(text: str) -> bool:
@@ -447,9 +516,12 @@ def apply_facts(messages: list[dict], facts: str) -> list[dict]:
     if not block:
         return messages
     note = (
-        "Weave these facts into one or two natural sentences that give the cause and the fix. "
+        "Weave these facts into one or two natural sentences that give the cause. "
         "Use the human name or number, never a raw CRM id and never a /lightning/ path. "
-        "Do not claim a change was already made, and do not say that nothing was changed. "
+        "If permission or access is missing, say that access change needs a helpdesk ticket. "
+        "Do not offer, promise, or claim to assign a permission set or group, add or reactivate a user, "
+        "grant access, or share. "
+        "Do not claim a change was already made, and do not say that you have not changed anything. "
         "Do not invent a fact beyond this block.\n"
         + block
     )

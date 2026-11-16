@@ -40,7 +40,8 @@ AFTER = (
 WOVEN = (
     "hey Casey -- asset 440199 sits on the North Shop account, "
     "and their Dealer Clerk login has no permission set group. "
-    "which group should I add?"
+    "that access change needs a helpdesk ticket -- "
+    "can you open one for the Dealer Clerk login?"
 )
 JIRA = (
     "Morgan Lee 2:11 PM\n"
@@ -138,11 +139,15 @@ def test_prompt_names_the_item_and_bans_a_generic_look():
     assert "have not changed anything" in rules
     assert "I'll take a look" in rules
     assert "Do not invent a finding" in rules
+    assert "helpdesk ticket" in rules
+    assert "Never offer, promise, or claim to assign" in rules
     ask = rewrite_ask("Casey")
     assert "name that item and the concrete next step" in ask
     assert "never a raw CRM id" in ask
     assert "/lightning/" in ask
     assert "I'll take a look" in ask
+    assert "helpdesk ticket" in ask
+    assert "Never offer, promise, or claim to assign" in ask
 
 
 def test_generic_look_becomes_the_exact_item_and_the_next_step():
@@ -277,6 +282,8 @@ def test_fake_sf_is_read_only_and_caps_the_facts(tmp_path, monkeypatch):
     _assert_paste(draft, "asset 440199")
     assert "North Shop" in draft
     assert "Dealer Clerk" in draft
+    assert "helpdesk ticket" in draft
+    assert "which group" not in draft.lower()
     assert "take a look" not in draft.lower()
     assert "I already" not in draft
     assert FACTS_LABEL not in draft
@@ -284,8 +291,56 @@ def test_fake_sf_is_read_only_and_caps_the_facts(tmp_path, monkeypatch):
     assert concrete_reply(AFTER, SCREEN, facts) == AFTER
     messages = apply_facts([{"role": "user", "content": "hello"}], facts)
     assert messages[0]["content"].startswith("Weave these facts into one or two natural sentences")
+    assert "helpdesk ticket" in messages[0]["content"]
     assert FACTS_LABEL in messages[0]["content"]
     assert apply_facts([{"role": "user", "content": "hello"}], "")[0]["content"] == "hello"
+
+
+def test_access_offers_become_a_helpdesk_ticket():
+    offered = (
+        "hey Casey -- asset 440199 sits on the North Shop account, "
+        "and their Dealer Clerk login has no permission set group. "
+        "which group should I add?"
+    )
+    assert concrete_reply(offered, SCREEN, "") == WOVEN
+    assign = (
+        "hey Casey -- I'll assign the permission set group for the Dealer Clerk login "
+        "on asset 440199."
+    )
+    fixed = concrete_reply(assign, SCREEN, "")
+    assert fixed == (
+        "hey Casey -- that access change needs a helpdesk ticket -- "
+        "can you open one for the Dealer Clerk login?"
+    )
+    _assert_paste(fixed, "Dealer Clerk")
+    assert "I'll assign" not in fixed
+    assert "which group" not in fixed.lower()
+    ahead = (
+        "hey Casey -- asset 440199 sits on the North Shop account, "
+        "and their Dealer Clerk login has no permission set group. "
+        "want me to go ahead?"
+    )
+    assert concrete_reply(ahead, SCREEN, "") == WOVEN
+
+
+def test_unrelated_drafts_do_not_mention_a_helpdesk_ticket():
+    serial = concrete_reply("hey Ren -- I'll take a look.", SERIAL, "")
+    assert serial == (
+        "hey Ren -- thanks, I'll check serial SN44021 and get back to you."
+    )
+    assert "ticket" not in serial.lower()
+    assert "helpdesk" not in serial.lower()
+    order = concrete_reply(
+        "hey Pete -- I'll look at order 1844.",
+        "order 1844 showed up with plates. I want this fixed.",
+        "",
+    )
+    assert order == "hey Pete -- I'll look at order 1844."
+    assert "ticket" not in order.lower()
+    assert "helpdesk" not in order.lower()
+    assert "ticket" not in AFTER.lower()
+    assert "helpdesk" not in AFTER.lower()
+    assert concrete_reply(AFTER, SCREEN, "") == AFTER
 
 
 def test_missing_sf_timeout_or_error_adds_nothing(tmp_path, monkeypatch):
