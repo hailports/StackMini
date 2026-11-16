@@ -3,6 +3,8 @@
 # Use HAILPORTS_API_KEY, or the matching name in .env.example, or the OS keychain.
 label: com.hailports.local
 mode: local
+# off until set to on. A draft may then read a record. It never writes.
+lookups: off
 llm:
   base_url: http://127.0.0.1:18080/v1
   upstream_url: http://127.0.0.1:18080

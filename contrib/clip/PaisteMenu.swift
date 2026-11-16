@@ -280,6 +280,66 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         if !next { stopGlow() }
     }
 
+    @objc func toggleLookups(_ sender: NSMenuItem) {
+        Self.writeLookups(!Self.lookupsOn())
+    }
+
+    static func routePath() -> String {
+        let route = ProcessInfo.processInfo.environment["PAISTE_ROUTE"] ?? ""
+        if !route.isEmpty { return route }
+        return NSHomeDirectory() + "/.config/paiste/route.yaml"
+    }
+
+    static func lookupFilePath() -> String {
+        return (NSHomeDirectory() as NSString).appendingPathComponent(".config/paiste/lookups")
+    }
+
+    static func lookupsOn() -> Bool {
+        if let text = try? String(contentsOfFile: routePath(), encoding: .utf8) {
+            for line in text.components(separatedBy: "\n") {
+                if line.hasPrefix("lookups:") {
+                    let value = line.dropFirst("lookups:".count).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                    return value == "on" || value == "true" || value == "yes" || value == "1"
+                }
+            }
+        }
+        let side = (try? String(contentsOfFile: lookupFilePath(), encoding: .utf8)) ?? ""
+        let value = side.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return value == "on" || value == "true" || value == "yes" || value == "1"
+    }
+
+    static func writeLookups(_ on: Bool) {
+        let word = on ? "on" : "off"
+        let route = routePath()
+        if FileManager.default.fileExists(atPath: route),
+           var text = try? String(contentsOfFile: route, encoding: .utf8) {
+            var lines = text.components(separatedBy: "\n")
+            var hit = false
+            for index in lines.indices where lines[index].hasPrefix("lookups:") {
+                lines[index] = "lookups: " + word
+                hit = true
+                break
+            }
+            if hit {
+                text = lines.joined(separator: "\n")
+                if !text.hasSuffix("\n") { text += "\n" }
+            } else if text.isEmpty {
+                text = "lookups: " + word + "\n"
+            } else if text.hasSuffix("\n") {
+                text += "lookups: " + word + "\n"
+            } else {
+                text += "\nlookups: " + word + "\n"
+            }
+            try? text.write(toFile: route, atomically: true, encoding: .utf8)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: route)
+        }
+        let side = lookupFilePath()
+        let dir = (side as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try? (word + "\n").write(toFile: side, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: side)
+    }
+
     @objc func openSetup() {
         if board == nil { board = SetupBoard() }
         NSApp.setActivationPolicy(.regular)
@@ -469,7 +529,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         menu.autoenablesItems = false
         menu.addItem(header("Recent drafts"))
         if drafts.isEmpty {
-            menu.addItem(header("No drafts yet — left-click the paperclip to draft"))
+            menu.addItem(header("No drafts yet — left-click the p icon to draft"))
         }
         for draft in drafts.prefix(8) {
             let ref = DraftRef(draft, pid: pid, field: field)
@@ -506,6 +566,10 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         glow.target = self
         glow.state = glowOn ? .on : .off
         menu.addItem(glow)
+        let look = NSMenuItem(title: "Look things up before drafting", action: #selector(toggleLookups(_:)), keyEquivalent: "")
+        look.target = self
+        look.state = Self.lookupsOn() ? .on : .off
+        menu.addItem(look)
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit paisty", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
         quit.target = NSApp

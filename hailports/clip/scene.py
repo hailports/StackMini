@@ -671,6 +671,7 @@ def draft_rules(addressee: str = "", choice: bool = False) -> str:
     greet = f"hey {addressee} --" if addressee else "hey <first name> --"
     lines = [
         "These rules win. Write only the reply they will paste.",
+        "If they name a record link, a ticket, an asset, a case, a serial, or an error, name that item and the concrete next step. Use the human name or number, never a raw CRM id and never a /lightning/ path. A link already in the thread does not need repeating. Never answer with only I'll take a look. Do not invent a finding, a cause, or a status. Do not say that you have not changed anything.",
         f'Start with "{greet}". Use their first name. Never "hey there", never "hi", never "hello".',
         "All lowercase except names, dates, days, and I.",
         "Match the style samples for tone only. Do not copy a fact, time, name, amount, or status out of a sample.",
@@ -743,6 +744,7 @@ def rewrite_ask(addressee: str = "", choice: bool = False, points: list[str] | N
         "Name every object, place, time, and change they brought up, in their words. "
         "Do not invent a date, a time, a name, a status, or a fact. "
         "Do not say you lack a confirmed update. "
+        "If they name a record link, a ticket, an asset, a case, a serial, or an error, name that item and the concrete next step. Use the human name or number, never a raw CRM id and never a /lightning/ path. A link already in the thread does not need repeating. Never answer with only I'll take a look. Do not invent a finding. Do not say that you have not changed anything. "
         "Do not mention your own meeting, call, or calendar. "
         "No labels, no headers, no markdown, no reasoning, no tool JSON."
         + choice_line
