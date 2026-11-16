@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+# shellcheck source=../lib.sh
+source "$ROOT/lib.sh"
+name="$(basename "$0")"
+[[ "$name" == "_chain" ]] && exit 0
+unset RELGUARD_HOOK_STDIN || true
+chain_hook "$name" "$@"
+exit 0

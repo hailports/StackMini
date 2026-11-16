@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+# shellcheck source=../lib.sh
+source "$ROOT/lib.sh"
+
+case "${1:-}" in
+  committed|prepared) ;;
+  *) exit 0 ;;
+esac
+
+[[ "${RELGUARD_REF_OK:-0}" == "1" ]] && exit 0
+[[ -n "${RELGUARD_REMOTE_NEEDLE:-}" ]] || exit 0
+repo_is_org_clone || exit 0
+
+ZERO="$(printf '%040d' 0)"
+while read -r old new ref; do
+  [[ -n "${ref:-}" ]] || continue
+  [[ "$ref" == refs/heads/* ]] || continue
+  b="${ref#refs/heads/}"
+  branch_is_protected_target "$b" || continue
+  if [[ "$old" != "$ZERO" && "$new" != "$ZERO" ]]; then
+    if ! git merge-base --is-ancestor "$old" "$new" 2>/dev/null; then
+      die "non-ff update to $b forbidden (force); RELGUARD_REF_OK=1 to bypass"
+    fi
+  fi
+done
+exit 0

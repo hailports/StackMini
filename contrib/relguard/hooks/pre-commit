@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+# shellcheck source=../lib.sh
+source "$ROOT/lib.sh"
+
+if [[ -n "${RELGUARD_REMOTE_NEEDLE:-}" ]] && repo_is_org_clone; then
+  b="$(current_branch)"
+  if branch_is_commit_blocked "$b"; then
+    die "commits on '$b' forbidden in org clones (use feature/hotfix/sync; --no-verify forbidden for agents)"
+  fi
+fi
+
+unset RELGUARD_HOOK_STDIN || true
+chain_hook pre-commit "$@"
+exit 0

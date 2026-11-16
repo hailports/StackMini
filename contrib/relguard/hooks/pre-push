@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Generic pre-push: branch naming + no direct/force push to main|release/*.
+set -euo pipefail
+ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+# shellcheck source=../lib.sh
+source "$ROOT/lib.sh"
+
+remote="${1:-}"
+url="${2:-}"
+TMP="$(mktemp "${TMPDIR:-/tmp}/relguard-prepush.XXXXXX")" || die "no temp"
+trap 'rm -f "$TMP"' EXIT
+cat > "$TMP"
+RELGUARD_HOOK_STDIN="$TMP"
+ZERO="$(printf '%040d' 0)"
+
+if [[ -z "${RELGUARD_REMOTE_NEEDLE:-}" ]]; then
+  # Not configured: do not enforce; still chain.
+  export RELGUARD_HOOK_STDIN="$TMP"
+  chain_hook pre-push "$remote" "$url"
+  exit 0
+fi
+
+if is_org_remote_url "$url"; then
+  while read -r lref lsha rref rsha; do
+    [[ -n "${lsha:-}" ]] || continue
+    if [[ "$lsha" == "$ZERO" ]]; then
+      rbranch="${rref#refs/heads/}"
+      if [[ "$rref" == refs/heads/* ]] && branch_is_protected_target "$rbranch"; then
+        die "refusing delete of protected branch $rbranch (PRs only; --no-verify forbidden for agents)"
+      fi
+      continue
+    fi
+    if [[ "$rref" == refs/heads/* ]]; then
+      rbranch="${rref#refs/heads/}"
+      if branch_is_protected_target "$rbranch"; then
+        die "direct/force push to $rbranch forbidden (PRs only; --no-verify forbidden for agents)"
+      fi
+    fi
+    if [[ "$lref" == refs/heads/* ]]; then
+      lbranch="${lref#refs/heads/}"
+      if ! branch_allowed "$lbranch"; then
+        die "branch '$lbranch' does not match required feature|release|hotfix|sync pattern"
+      fi
+    fi
+  done < "$TMP"
+fi
+
+export RELGUARD_HOOK_STDIN="$TMP"
+chain_hook pre-push "$remote" "$url"
+exit 0
