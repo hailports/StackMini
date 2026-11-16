@@ -209,6 +209,12 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
     me = [part.strip() for part in str((route.get("paiste") or {}).get("me") or "").split(",") if part.strip()]
     sources = "\n".join(prepared.get("sources") or [])
     screen = scene_blob(doc)
+    facts = ""
+    try:
+        from hailports.clip.lookups import facts_for_draft
+        facts = facts_for_draft(route, screen)
+    except (OSError, TimeoutError, ValueError):
+        facts = ""
     who = addressee_first(screen + "\n" + sources, me)
     choice = screen_has_choice(sources)
     voice = _context_note(route)[:1400]
@@ -237,8 +243,10 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
         prepared["messages"] = runner_context(prepared.get("messages") or [], note)
     from hailports.clip.board import misses_points, thin_reply, thread_points
     points = thread_points(sources)
+    from hailports.clip.lookups import apply_facts
+    prepared["messages"] = apply_facts(_with_points(prepared.get("messages") or [], points), facts)
     prepared["messages"] = _pin_rules(
-        _with_points(prepared.get("messages") or [], points),
+        prepared.get("messages") or [],
         draft_rules(who, choice),
     )
     hop = ""
@@ -305,6 +313,11 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
     except ModelOffline as exc:
         print("model offline: " + str(exc))
         return 2
+    try:
+        from hailports.clip.lookups import concrete_reply
+        text = concrete_reply(text, screen, facts)
+    except (OSError, TimeoutError, ValueError):
+        pass
     if not reply_ok(text):
         print("empty")
         return 2

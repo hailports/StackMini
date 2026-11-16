@@ -1,7 +1,7 @@
 import Cocoa
 import ApplicationServices
 
-/// Onboarding window. Local, API, or both. Mail, calendar, notes, and chat stay with the model.
+/// Onboarding window. The model writes the draft.
 final class FlippedView: NSView {
     override var isFlipped: Bool { true }
 }
@@ -25,7 +25,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
     let titleField = NSTextField(labelWithString: "")
     let body = NSTextField(wrappingLabelWithString: "")
     let extra = FlippedView()
-    let footer = NSTextField(wrappingLabelWithString: "paisty does not connect to your systems or retain any data. That is your model's job.")
+    let footer = NSTextField(wrappingLabelWithString: "paisty itself doesn't send or keep your mail; your AI model writes the draft.")
     let statusField = NSTextField(wrappingLabelWithString: "")
     let backButton = NSButton(title: "Back", target: nil, action: nil)
     let nextButton = NSButton(title: "Next", target: nil, action: nil)
@@ -126,7 +126,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         body.font = NSFont.systemFont(ofSize: 13)
         body.textColor = NSColor(srgbRed: 0.16, green: 0.13, blue: 0.10, alpha: 1)
         body.preferredMaxLayoutWidth = 480
-        body.maximumNumberOfLines = 8
+        body.maximumNumberOfLines = 12
         footer.font = NSFont.systemFont(ofSize: 12, weight: .medium)
         footer.textColor = NSColor(srgbRed: 0.45, green: 0.28, blue: 0.16, alpha: 1)
         footer.preferredMaxLayoutWidth = 480
@@ -449,9 +449,9 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         case 0:
             titleField.stringValue = "The icon is in the menu bar."
             let next = autoDone && autoNeeds.isEmpty
-                ? "Click the paperclip in any reply box."
-                : "Next, set up the AI you already use. One click can do that. Only your license is checked with paisty.com. No mail or notes leave this Mac."
-            body.stringValue = SetupBoard.menuGuide + " " + next
+                ? "Click the p icon in any reply box."
+                : "Next, set up the AI you already use. One click can do that. paisty itself doesn't send or keep your mail; your AI model writes the draft."
+            body.stringValue = SetupBoard.menuGuide + " " + next + " " + SetupBoard.lookupNote
             autoPage()
         case 1:
             titleField.stringValue = "Pick your AI."
@@ -471,15 +471,16 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             extra.addSubview(saveKey)
             extraHeight = 84
         }
-        if !body.stringValue.contains("does not keep any data") {
-            body.stringValue += "\n\npaisty does not keep any data."
+        if !body.stringValue.contains("doesn't send or keep your mail") {
+            body.stringValue += "\n\npaisty itself doesn't send or keep your mail; your AI model writes the draft."
         }
         extra.frame = NSRect(x: 0, y: 0, width: 484, height: max(extraHeight, 40))
         refreshTrust()
     }
 
     /// Where the menu-bar icon is, and how to get this window back. No global hotkey is registered.
-    static let menuGuide = "The paisty icon is the paperclip in the menu bar, at the top right. Click it in a reply box to draft. If the icon is hidden, open paisty from Spotlight or Applications and this window comes back. There is no keyboard shortcut. Press Turn on Accessibility to paste into the reply. Until then a click copies the draft."
+    static let menuGuide = "The paisty icon is the p icon in the menu bar, at the top right. Click it in a reply box to draft. If the icon is hidden, open paisty from Spotlight or Applications and this window comes back. There is no keyboard shortcut. Press Turn on Accessibility to paste into the reply. Until then a click copies the draft."
+    static let lookupNote = "Look things up before drafting is in the menu. It stays off until you turn it on, and it only reads."
 
     func refreshTrust() {
         let trusted = AXIsProcessTrusted()
@@ -537,7 +538,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         let calendar = calendarOn ? "A calendar folder, read on the click." : "Calendar stays with your model."
         let known = establishedLocal()
         let shown = known.isEmpty ? model : known + ". " + model
-        return "A click asks your AI to search all connected mail, calendar, and notes.\n" + shown + "\n" + mail + " " + chat + "\n" + notes + " " + calendar + "\n\nA local model is optional. The AI login works without one.\n\nSaving writes the choice on this Mac. paisty does not sign into mail, calendar, or notes, and it does not keep them."
+        return "A click asks your AI to search all connected mail, calendar, and notes.\n" + shown + "\n" + mail + " " + chat + "\n" + notes + " " + calendar + "\n\nA local model is optional. The AI login works without one.\n\nSaving writes the choice on this Mac. paisty does not sign into mail, calendar, or notes."
     }
 
     func mailPage() {
@@ -959,14 +960,22 @@ final class SetupBoard: NSObject, NSWindowDelegate {
 
     static let appLabels = ["claude": "Claude", "codex": "Codex", "cursor": "Cursor", "grok": "Grok"]
 
+    static func appFoundLine(_ names: [String]) -> String {
+        let clean = names.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        if clean.isEmpty { return "" }
+        if clean.count == 1 { return clean[0] + " app found." }
+        if clean.count == 2 { return clean[0] + " and " + clean[1] + " apps found." }
+        return clean.dropLast().joined(separator: ", ") + ", and " + clean[clean.count - 1] + " apps found."
+    }
+
     func checklist() -> [String] {
         var lines: [String] = []
         let aiKind = suggestAI["kind"] as? String ?? "none"
         let aiReason = suggestAI["reason"] as? String ?? ""
         if !aiReason.isEmpty { lines.append((aiKind == "none" ? "○ " : "✓ ") + aiReason) }
-        lines.append(mailApps.isEmpty ? "○ No mail app found." : "✓ Mail: " + mailApps.joined(separator: ", ") + ".")
+        lines.append(mailApps.isEmpty ? "○ No mail app found." : "✓ " + SetupBoard.appFoundLine(mailApps))
         let chats = chatApps.filter { $0 != "Littlebird" }
-        lines.append(chats.isEmpty ? "○ No chat app found." : "✓ Chat: " + chats.joined(separator: ", ") + ".")
+        lines.append(chats.isEmpty ? "○ No chat app found." : "✓ " + SetupBoard.appFoundLine(chats))
         let notesReason = suggestNotes["reason"] as? String ?? ""
         if !notesReason.isEmpty { lines.append("✓ " + notesReason) }
         return lines
@@ -1047,7 +1056,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             return
         }
         autoRunning = true
-        statusField.stringValue = "Setting up on this Mac. Only your license is checked with paisty.com. No mail or notes leave this Mac."
+        statusField.stringValue = "Setting up on this Mac. paisty itself doesn't send or keep your mail; your AI model writes the draft."
         render()
         let route = ProcessInfo.processInfo.environment["PAISTE_ROUTE"] ?? ""
         DispatchQueue.global(qos: .userInitiated).async {
@@ -1087,9 +1096,9 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         let notes = doc["notes"] as? String ?? ""
         if !notes.isEmpty { parts.append("Notes: " + URL(fileURLWithPath: notes).lastPathComponent + ".") }
         let mail = doc["mail"] as? [String] ?? []
-        if !mail.isEmpty { parts.append("Mail: " + mail.joined(separator: ", ") + ".") }
+        if !mail.isEmpty { parts.append(appFoundLine(mail)) }
         let chat = (doc["chat"] as? [String] ?? []).filter { $0 != "Littlebird" }
-        if !chat.isEmpty { parts.append("Chat: " + chat.joined(separator: ", ") + ".") }
+        if !chat.isEmpty { parts.append(appFoundLine(chat)) }
         return parts.joined(separator: " ")
     }
 
