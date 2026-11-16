@@ -63,17 +63,37 @@ _HIGH = (
     re.compile(r"\bmerge (?:the )?(?:pr|pull request|branch)\b", re.I),
     re.compile(r"\bforce-push\b", re.I),
     re.compile(r"\bmust be (?:top-notch|perfect|production)\b", re.I),
+    re.compile(r"\b(?:multi[- ]?file|across (?:many |multiple )?files)\b", re.I),
+    re.compile(r"\b(?:scaffold|bootstrapp?(?:ing)?)\b", re.I),
+    re.compile(r"\b(?:agent loop|tool[- ]heavy|long reasoning)\b", re.I),
+    re.compile(r"\bbuild (?:a |the |this )?(?:feature|module|package|app|service)\b", re.I),
+    re.compile(r"\b(?:create|add) (?:a )?(?:new )?(?:file|component|endpoint|module)\b", re.I),
+)
+_BUILD = (
+    re.compile(r"\b(?:implement|refactor|scaffold|bootstrapp?(?:ing)?)\b", re.I),
+    re.compile(r"\b(?:multi[- ]?file|across (?:many |multiple )?files)\b", re.I),
+    re.compile(r"\b(?:agent loop|tool[- ]heavy|long reasoning)\b", re.I),
+    re.compile(r"\bbuild (?:a |the |this )?(?:feature|module|package|app|service)\b", re.I),
+    re.compile(r"\bwrite (?:the )?(?:code|function|class|module)\b", re.I),
+    re.compile(r"\b(?:create|add) (?:a )?(?:new )?(?:file|component|endpoint|module)\b", re.I),
+    re.compile(r"\b(?:fix|debug)\b.{0,32}\b(?:bug|code|function|tests?)\b", re.I),
 )
 _LOW = (
     re.compile(r"\b(?:summarize|summary|tl;dr|tldr)\b", re.I),
     re.compile(r"\b(?:classify|triage)\b", re.I),
+    re.compile(r"\b(?:extract|rewrite|rephrase|shorten)\b", re.I),
+    re.compile(r"\bcommit(?:\s+msg|\s+message)?\b", re.I),
+    re.compile(r"\b(?:grep[- ]?explain|explain (?:this |the )?(?:grep|match|regex|diff|line))\b", re.I),
     re.compile(r"\blogs?\b", re.I),
     re.compile(r"\b(?:search|look up|lookup)\b", re.I),
-    re.compile(r"\b(?:first draft|draft a note|draft notes|packet prep)\b", re.I),
+    re.compile(r"\b(?:first draft|draft a note|draft notes|packet prep|short rewrite)\b", re.I),
     re.compile(r"\bwhat does\b", re.I),
     re.compile(r"\blist the\b", re.I),
     re.compile(r"\bhow many\b", re.I),
     re.compile(r"\bstatus of\b", re.I),
+)
+_SOCIAL = (
+    re.compile(r"\b(?:tweet|x\.com|instagram|tiktok|social?(?:\s+bot)?|content calendar)\b", re.I),
 )
 _UNSURE = ("i don't know", "i do not know", "not sure", "cannot tell", "low confidence", "insufficient")
 _FOOTER_AT = ("## STANDING RULE",)
@@ -108,6 +128,9 @@ def classify_stakes(task: str, extra_high: list[str] | None = None) -> tuple[str
         n = (needle or "").strip().lower()
         if n and n in low_body:
             return "high", "configured_high_stakes"
+    for rx in _SOCIAL:
+        if rx.search(body):
+            return "high", "social_off_local"
     for rx in _HIGH:
         if rx.search(body):
             return "high", "high_stakes"
@@ -115,6 +138,21 @@ def classify_stakes(task: str, extra_high: list[str] | None = None) -> tuple[str
         if rx.search(body):
             return "low", "low_end_dig"
     return "unsure", "stakes_unsure"
+
+
+def route_class(task: str, stakes: str | None = None) -> str:
+    """Bucket for logs: simple | build | other. Never route build to local."""
+    body = split_footer(task)[0]
+    if stakes is None:
+        stakes, _ = classify_stakes(task)
+    for rx in _BUILD:
+        if rx.search(body):
+            return "build"
+    if stakes == "low":
+        return "simple"
+    if stakes == "high":
+        return "other"
+    return "other"
 
 
 def _clip(text: str, limit: int) -> str:
@@ -460,34 +498,144 @@ def fetch_local(cfg: dict, prompt: str, *, priority: int) -> dict:
     return _apply_timings(got)
 
 
+def _default_decisions_path() -> Path:
+    env = os.environ.get("LOCAL_FIRST_DECISIONS", "").strip()
+    if env:
+        return Path(env)
+    return Path.home() / ".local" / "share" / "local-first" / "router-decisions.jsonl"
+
+
+def _default_rollup_path() -> Path:
+    env = os.environ.get("LOCAL_FIRST_ROLLUP", "").strip()
+    if env:
+        return Path(env)
+    return Path.home() / ".local" / "share" / "local-first" / "offload-today.md"
+
+
+def _estimate_tokens(text: str) -> int:
+    return max(1, len((text or "").split()))
+
+
+def write_offload_rollup(decisions_path: Path | None = None, rollup_path: Path | None = None) -> Path:
+    """Rewrite today's rollup from the decisions log. Safe to call often."""
+    from datetime import datetime, timezone
+
+    dpath = decisions_path or _default_decisions_path()
+    rpath = rollup_path or _default_rollup_path()
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    local_n = paid_n = 0
+    local_tok = paid_tok = saved = 0
+    if dpath.is_file():
+        try:
+            for line in dpath.read_text(encoding="utf-8", errors="replace").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                ts = str(row.get("ts") or "")
+                if not ts.startswith(today):
+                    continue
+                route = str(row.get("route") or "")
+                tok = int(row.get("tokens") or 0)
+                if route == "local":
+                    local_n += 1
+                    local_tok += tok
+                    saved += tok
+                else:
+                    paid_n += 1
+                    paid_tok += tok
+        except OSError:
+            pass
+    body = (
+        f"# offload today ({today} UTC)\n\n"
+        f"- local requests: {local_n}\n"
+        f"- paid requests: {paid_n}\n"
+        f"- local tokens: {local_tok}\n"
+        f"- paid tokens: {paid_tok}\n"
+        f"- estimated premium tokens saved: {saved}\n"
+    )
+    try:
+        rpath.parent.mkdir(parents=True, exist_ok=True)
+        rpath.write_text(body, encoding="utf-8")
+    except OSError:
+        pass
+    return rpath
+
+
 def _record(cfg: dict, result: dict, task: str) -> None:
     if os.environ.get("LOCAL_FIRST_RECORD") == "0":
         return
+    from datetime import datetime, timezone
+
     path = Path(str(cfg.get("receipt_path") or "")) if cfg.get("receipt_path") else Path(tempfile.gettempdir()) / "local-first-receipts.jsonl"
     usage = result.get("usage") or {}
+    stakes = str(result.get("stakes") or "")
+    klass = str(result.get("class") or route_class(task, stakes or None))
+    decision = str(result.get("decision") or "")
+    route = "local" if decision == "complete_local" else "paid"
+    prompt_tokens = usage.get("prompt_tokens")
+    completion_tokens = usage.get("completion_tokens")
+    if not isinstance(prompt_tokens, int):
+        prompt_tokens = _estimate_tokens(split_footer(task)[0])
+    if not isinstance(completion_tokens, int):
+        completion_tokens = _estimate_tokens(str(result.get("answer") or result.get("brief") or ""))
+    tokens = int(prompt_tokens) + int(completion_tokens)
+    latency_ms = None
+    if isinstance(result.get("elapsed_s"), (int, float)):
+        latency_ms = int(float(result["elapsed_s"]) * 1000)
     row = {
         "schema": SCHEMA,
-        "decision": result.get("decision"),
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "tool": str(result.get("caller") or "cli"),
+        "class": klass,
+        "route": route,
+        "tokens": tokens,
+        "latency_ms": latency_ms,
+        "decision": decision,
         "why": result.get("why"),
         "confidence": result.get("confidence"),
-        "stakes": result.get("stakes"),
+        "stakes": stakes,
         "paid_invoked": bool(result.get("paid_invoked")),
         "backend": result.get("backend"),
         "task_sha": _sha(split_footer(task)[0]),
         "answer_chars": len(result.get("answer") or ""),
         "brief_chars": len(result.get("brief") or ""),
-        "prompt_tokens": usage.get("prompt_tokens"),
-        "completion_tokens": usage.get("completion_tokens"),
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
         "cached_tokens": ((usage.get("prompt_tokens_details") or {}) if isinstance(usage.get("prompt_tokens_details"), dict) else {}).get("cached_tokens"),
         "coop_pattern": result.get("coop_pattern") or "",
         "premium_in_saved": int(result.get("premium_in_saved") or 0),
         "premium_out_saved": int(result.get("premium_out_saved") or 0),
     }
+    result["class"] = klass
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, sort_keys=True) + "\n")
     except OSError:
+        pass
+    decisions = Path(str(cfg.get("decisions_path") or "")) if cfg.get("decisions_path") else _default_decisions_path()
+    try:
+        decisions.parent.mkdir(parents=True, exist_ok=True)
+        with decisions.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({
+                "ts": row["ts"],
+                "tool": row["tool"],
+                "class": row["class"],
+                "route": row["route"],
+                "tokens": row["tokens"],
+                "latency": row["latency_ms"],
+                "why": row["why"],
+                "backend": row["backend"],
+            }, sort_keys=True) + "\n")
+    except OSError:
+        pass
+    rollup = Path(str(cfg.get("rollup_path") or "")) if cfg.get("rollup_path") else _default_rollup_path()
+    try:
+        write_offload_rollup(decisions, rollup)
+    except Exception:
         pass
 
 
@@ -691,6 +839,10 @@ def route_task(task: str, *, caller: str = "cli", fetch=None, config: dict | Non
     cfg = config if config is not None else load_config()
     extra = [str(x) for x in (cfg.get("extra_high_substrings") or [])]
     stakes, stake_why = classify_stakes(task, extra)
+    klass = route_class(task, stakes)
+    # Never finish building work on the local model.
+    if klass == "build" and stakes != "high":
+        stakes, stake_why = "high", "build_never_local"
     coop = _load_coop()
     if coop and coop.coop_enabled(cfg) and stakes != "high":
         try:
@@ -705,6 +857,7 @@ def route_task(task: str, *, caller: str = "cli", fetch=None, config: dict | Non
                 "why": "cache_hit",
                 "confidence": 0.9,
                 "stakes": stakes,
+                "class": klass,
                 "brief": build_brief(stakes, "cache_hit", answer),
                 "answer": answer,
                 "paid_invoked": False,
@@ -718,6 +871,7 @@ def route_task(task: str, *, caller: str = "cli", fetch=None, config: dict | Non
             return _finish_route(cfg, result, task, execute_paid)
     if stakes in {"high", "unsure"}:
         result = _skipped_or_coop(task, stakes, stake_why, extra, cfg, fetch, caller)
+        result["class"] = klass
         return _finish_route(cfg, result, task, execute_paid)
     evidence = ""
     if fetch is None and config is None:
@@ -745,6 +899,7 @@ def route_task(task: str, *, caller: str = "cli", fetch=None, config: dict | Non
         result["elapsed_s"] = local.get("elapsed_s")
         result = _jev_after_local(task, local_text, result, caller)
     result["caller"] = caller
+    result["class"] = klass
     _remember(cfg, task, result, "low_local")
     return _finish_route(cfg, result, task, execute_paid)
 
@@ -1271,9 +1426,52 @@ def openai_completion(payload: dict, *, fetch=None, config: dict | None = None) 
     return 200, {"X-Local-First-Decision": "complete_local" if local else "need_premium"}, json.dumps(body), bool(payload.get("stream"))
 
 
-def serve_openai(argv: list[str]) -> int:
+def anthropic_messages(payload: dict, *, fetch=None, config: dict | None = None) -> tuple[int, dict, str]:
+    """Anthropic Messages-shaped response. Fail-open brief when local cannot finish."""
+    messages = payload.get("messages") if isinstance(payload, dict) else None
+    task_parts = []
+    if isinstance(payload, dict) and payload.get("system"):
+        task_parts.append(_content_text(payload.get("system")))
+    for msg in messages or []:
+        if isinstance(msg, dict) and msg.get("role") in {"user", "human"}:
+            task_parts.append(_content_text(msg.get("content")))
+    task = "\n".join(p for p in task_parts if p).strip() or "Summarize the request."
+    try:
+        result = route_task(task, caller="anthropic-door", fetch=fetch, config=config, execute_paid=None)
+    except Exception:
+        result = {
+            "decision": "need_premium",
+            "answer": "",
+            "brief": build_brief("unsure", "router_error", "Local route failed."),
+            "backend": "unavailable",
+            "why": "router_error",
+        }
+    local = result.get("decision") == "complete_local" and str(result.get("answer") or "").strip()
+    if local:
+        content = str(result.get("answer") or "").rstrip()
+        decision = "complete_local"
+    else:
+        content = (
+            str(result.get("brief") or "").rstrip()
+            + "\n\nThis endpoint cannot start the paid editor model. "
+            + "Switch the model picker to a paid model and use the brief above.\n"
+        )
+        decision = "need_premium"
+    body = {
+        "id": "local-first",
+        "type": "message",
+        "role": "assistant",
+        "model": "local-first",
+        "content": [{"type": "text", "text": content}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 0, "output_tokens": _estimate_tokens(content)},
+    }
+    return 200, {"X-Local-First-Decision": decision}, json.dumps(body)
+
+
+def _bind_host_port(argv: list[str], default_port: int) -> tuple[str, int]:
     host = "127.0.0.1"
-    port = 8791
+    port = default_port
     index = 0
     while index < len(argv):
         token = argv[index]
@@ -1286,10 +1484,11 @@ def serve_openai(argv: list[str]) -> int:
             index += 2
             continue
         index += 1
-    if host not in {"127.0.0.1", "localhost", "::1"}:
-        sys.stderr.write("local-first door refuses a non-loopback bind\n")
-        return 2
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    return host, port
+
+
+def _gateway_handler(modes: set[str]):
+    from http.server import BaseHTTPRequestHandler
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt: str, *args) -> None:
@@ -1305,16 +1504,18 @@ def serve_openai(argv: list[str]) -> int:
             self.wfile.write(data)
 
         def do_GET(self) -> None:  # noqa: N802
-            if self.path.split("?", 1)[0] != "/v1/models":
-                self._send(404, {}, b"{}", "application/json")
+            path = self.path.split("?", 1)[0]
+            if path in {"/v1/models", "/models"} and "openai" in modes:
+                body = json.dumps({"object": "list", "data": [{"id": "local-first", "object": "model"}]}).encode()
+                self._send(200, {}, body, "application/json")
                 return
-            body = json.dumps({"object": "list", "data": [{"id": "local-first", "object": "model"}]}).encode()
-            self._send(200, {}, body, "application/json")
+            if path == "/health":
+                self._send(200, {}, b'{"ok":true}', "application/json")
+                return
+            self._send(404, {}, b"{}", "application/json")
 
         def do_POST(self) -> None:  # noqa: N802
-            if self.path.split("?", 1)[0] != "/v1/chat/completions":
-                self._send(404, {}, b"{}", "application/json")
-                return
+            path = self.path.split("?", 1)[0]
             length = int(self.headers.get("Content-Length") or "0")
             raw = self.rfile.read(length) if length else b"{}"
             try:
@@ -1322,28 +1523,86 @@ def serve_openai(argv: list[str]) -> int:
             except json.JSONDecodeError:
                 self._send(400, {}, b"{}", "application/json")
                 return
-            status, headers, text, stream = openai_completion(payload)
-            if stream:
-                chunk = json.dumps({
-                    "id": "local-first",
-                    "object": "chat.completion.chunk",
-                    "choices": [{
-                        "index": 0,
-                        "delta": {"role": "assistant", "content": json.loads(text)["choices"][0]["message"]["content"]},
-                        "finish_reason": "stop",
-                    }],
-                })
-                data = ("data: " + chunk + "\n\ndata: [DONE]\n\n").encode()
-                self._send(status, headers, data, "text/event-stream")
+            if path == "/v1/chat/completions" and "openai" in modes:
+                status, headers, text, stream = openai_completion(payload)
+                if stream:
+                    chunk = json.dumps({
+                        "id": "local-first",
+                        "object": "chat.completion.chunk",
+                        "choices": [{
+                            "index": 0,
+                            "delta": {"role": "assistant", "content": json.loads(text)["choices"][0]["message"]["content"]},
+                            "finish_reason": "stop",
+                        }],
+                    })
+                    data = ("data: " + chunk + "\n\ndata: [DONE]\n\n").encode()
+                    self._send(status, headers, data, "text/event-stream")
+                    return
+                self._send(status, headers, text.encode(), "application/json")
                 return
-            self._send(status, headers, text.encode(), "application/json")
+            if path in {"/v1/messages", "/messages"} and "anthropic" in modes:
+                status, headers, text = anthropic_messages(payload)
+                self._send(status, headers, text.encode(), "application/json")
+                return
+            self._send(404, {}, b"{}", "application/json")
+
+    return Handler
+
+
+def serve_openai(argv: list[str]) -> int:
+    host, port = _bind_host_port(argv, 8791)
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        sys.stderr.write("local-first door refuses a non-loopback bind\n")
+        return 2
+    from http.server import ThreadingHTTPServer
 
     try:
-        server = ThreadingHTTPServer((host if host != "localhost" else "127.0.0.1", port), Handler)
+        server = ThreadingHTTPServer((host if host != "localhost" else "127.0.0.1", port), _gateway_handler({"openai"}))
     except OSError as exc:
         sys.stderr.write(f"local-first door failed: {exc}\n")
         return 1
     sys.stderr.write(f"[local-first] openai door on http://127.0.0.1:{port}/v1\n")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        return 0
+    return 0
+
+
+def serve_anthropic(argv: list[str]) -> int:
+    host, port = _bind_host_port(argv, 8792)
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        sys.stderr.write("local-first door refuses a non-loopback bind\n")
+        return 2
+    from http.server import ThreadingHTTPServer
+
+    try:
+        server = ThreadingHTTPServer((host if host != "localhost" else "127.0.0.1", port), _gateway_handler({"anthropic"}))
+    except OSError as exc:
+        sys.stderr.write(f"local-first anthropic door failed: {exc}\n")
+        return 1
+    sys.stderr.write(f"[local-first] anthropic door on http://127.0.0.1:{port}/v1\n")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        return 0
+    return 0
+
+
+def serve_gateway(argv: list[str]) -> int:
+    """OpenAI + Anthropic compatible loopback gateway (same classify + fail-open rules)."""
+    host, port = _bind_host_port(argv, 8790)
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        sys.stderr.write("local-first gateway refuses a non-loopback bind\n")
+        return 2
+    from http.server import ThreadingHTTPServer
+
+    try:
+        server = ThreadingHTTPServer((host if host != "localhost" else "127.0.0.1", port), _gateway_handler({"openai", "anthropic"}))
+    except OSError as exc:
+        sys.stderr.write(f"local-first gateway failed: {exc}\n")
+        return 1
+    sys.stderr.write(f"[local-first] gateway on http://127.0.0.1:{port} (openai+anthropic)\n")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -1373,6 +1632,17 @@ def _selftest() -> int:
     task = "Summarize this log: router started\n\n## STANDING RULE\ncommit and push the stack"
     check("footer does not raise stakes", classify_stakes(task)[0] == "low")
     check("unsure bare", classify_stakes("help me with this")[0] == "unsure")
+    check("commit msg simple", classify_stakes("write a commit message for this diff")[0] == "low")
+    check("extract simple", classify_stakes("extract the error codes from this log")[0] == "low")
+    check("build never local class", route_class("implement the multi-file feature scaffold") == "build")
+    check("social off local", classify_stakes("draft a tweet for the social bot")[0] == "high")
+    fail_open = route_task(
+        "Summarize this log in one sentence please",
+        caller="selftest",
+        fetch=lambda _p: {"ok": False, "error": "down", "backend": "unavailable"},
+        config={"transport": "inject", "extra_high_substrings": []},
+    )
+    check("fail open to paid", fail_open["decision"] == "need_premium" and fail_open["why"] == "local_unavailable")
     low = policy_decision("Summarize this log line for me please", '{"decision":"complete_local","confidence":0.9,"why":"short","answer":"The router started and wrote a one-line summary."}')
     check("low completes", low["decision"] == "complete_local" and low["paid_invoked"] is False)
     high = policy_decision("implement the function and deploy it to production", '{"decision":"complete_local","confidence":0.99,"why":"done","answer":"Shipped the production deploy already."}')
@@ -1453,6 +1723,14 @@ def main(argv: list[str] | None = None) -> int:
         return run_intercept(argv[1], argv[2:])
     if argv and argv[0] == "--openai-serve":
         return serve_openai(argv[1:])
+    if argv and argv[0] == "--anthropic-serve":
+        return serve_anthropic(argv[1:])
+    if argv and argv[0] in {"--gateway-serve", "--serve"}:
+        return serve_gateway(argv[1:])
+    if argv and argv[0] == "--rollup":
+        path = write_offload_rollup()
+        sys.stdout.write(str(path) + "\n")
+        return 0
     if argv and argv[0] == "--selftest":
         return _selftest()
     execute = False

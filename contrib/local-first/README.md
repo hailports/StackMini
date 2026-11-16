@@ -2,6 +2,17 @@
 
 Low-stakes prompts finish on the local model. High-stakes work and unsure replies escalate with a short brief. The paid binary runs only after that decision.
 
+Simple class (summarize, classify, triage, extract, short rewrite, first draft, commit msg, grep-explain) stays on `:8080`. Build / multi-file / tool-heavy / social always escalate. Fail-open to paid when the local model is down. Decisions append to `router-decisions.jsonl`; a daily rollup lands at `offload-today.md` (override with `LOCAL_FIRST_DECISIONS` / `LOCAL_FIRST_ROLLUP` or config keys).
+
+Gateway (OpenAI + Anthropic, loopback only):
+
+```sh
+python3 hailports/local_first.py --gateway-serve --port 8790
+# or: contrib/local-first/local-first-gateway --port 8790
+```
+
+Work laptop → Mini model host: `MINI_SSH_TARGET=user@host sh contrib/local-first/install-work-mac-wrappers`.
+
 ## Install
 
 From this repo or a stack checkout:

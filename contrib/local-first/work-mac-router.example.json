@@ -1,0 +1,11 @@
+{
+  "transport": "ssh",
+  "ssh_target": "REPLACE_WITH_SSH_TARGET",
+  "remote_cli": "/usr/bin/python3",
+  "http_url": "http://127.0.0.1:8080/v1/chat/completions",
+  "model": "local",
+  "decisions_path": "",
+  "rollup_path": "",
+  "extra_high_substrings": [],
+  "paid_bins": {}
+}

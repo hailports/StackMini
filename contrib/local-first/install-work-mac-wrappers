@@ -1,0 +1,38 @@
+#!/bin/sh
+# Install local-first wrappers on a laptop that SSHes to the Mini for :8080.
+# Requires MINI_SSH_TARGET (user@host). Never writes secrets.
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+TARGET=${MINI_SSH_TARGET:-}
+if [ -z "$TARGET" ]; then
+  echo "set MINI_SSH_TARGET=user@host first" >&2
+  exit 2
+fi
+case "$TARGET" in
+  *[!A-Za-z0-9_.+\-@]*) echo "bad MINI_SSH_TARGET" >&2; exit 2 ;;
+esac
+sh "$ROOT/install-local-first-wrappers"
+CFG_DIR=${HOME}/.config/local-first
+mkdir -p "$CFG_DIR" "${HOME}/.local/share/local-first"
+CFG="$CFG_DIR/router.json"
+cat > "$CFG" <<EOF
+{
+  "transport": "ssh",
+  "ssh_target": "$TARGET",
+  "remote_cli": "/usr/bin/python3",
+  "http_url": "http://127.0.0.1:8080/v1/chat/completions",
+  "model": "local",
+  "decisions_path": "$HOME/.local/share/local-first/router-decisions.jsonl",
+  "rollup_path": "$HOME/.local/share/local-first/offload-today.md",
+  "extra_high_substrings": []
+}
+EOF
+chmod 600 "$CFG"
+# shell rc hint (idempotent)
+RC=${HOME}/.zshrc
+LINE='export LOCAL_FIRST_CONFIG="$HOME/.config/local-first/router.json"'
+if [ -f "$RC" ] && ! grep -F 'LOCAL_FIRST_CONFIG' "$RC" >/dev/null 2>&1; then
+  printf '\n# local-first Mini offload\n%s\n' "$LINE" >> "$RC"
+fi
+echo "work-mac local-first ready; LOCAL_FIRST_CONFIG=$CFG"
+echo "open a new shell, then: claude -p 'Summarize this log in one sentence'"

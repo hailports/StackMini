@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>LABEL_PLACEHOLDER</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>RUNNER_PLACEHOLDER</string>
+    <string>NAME_PLACEHOLDER</string>
+    <string>CHECK_PLACEHOLDER</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>INTERVAL_PLACEHOLDER</integer>
+  <key>Nice</key>
+  <integer>15</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>LOG_PLACEHOLDER</string>
+  <key>StandardErrorPath</key>
+  <string>LOG_PLACEHOLDER</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>WATCH_MODEL_URL</key>
+    <string>http://127.0.0.1:8080/v1/chat/completions</string>
+    <key>X_CHAT_PRIORITY</key>
+    <string>0</string>
+  </dict>
+</dict>
+</plist>
