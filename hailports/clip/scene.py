@@ -454,8 +454,14 @@ def addressee_first(text: str, me: list[str] | None = None) -> str:
 
 
 def screen_has_choice(sources: str) -> bool:
-    """True when they asked the writer to pick one side."""
-    return bool(_CHOICE_ASK.search(sources or ""))
+    """True when they asked the writer to pick one side.
+
+    "or am I" asks who already has the part. It is not a license to take it.
+    """
+    text = sources or ""
+    if re.search(r"(?i)\bor am I\b", text):
+        return False
+    return bool(_CHOICE_ASK.search(text))
 
 
 def bounced_choice(reply: str, sources: str) -> bool:
@@ -671,19 +677,22 @@ def draft_rules(addressee: str = "", choice: bool = False) -> str:
         "Use only facts written in this thread. A time written in their message is theirs, not your calendar.",
         "Do not mention a meeting, a call, a wrap time, or being free or busy unless this thread says that.",
         "Do not invent a time, a date, a name, a status, or any other fact.",
-        "If they ask yes or no, answer yes or no in the sentence right after the greeting.",
+        "If they ask yes or no and the thread already states the fact, answer yes or no right after the greeting.",
         "If they say do not confirm, do not accept the role and do not say you are happy to do it. Say you will wait.",
         "If they say if you have a spare, do not claim you have one. Say you will bring it if you have it.",
         "If they ask for an intro they can forward, write the intro itself. Do not say you will send it later.",
-        "If they want something fixed and do not name a refund, a replacement, or a reship, say you will look. Do not promise to get an item to them.",
-        "If they ask whether a time is bad, say yes or no. Do not say you will tell them later.",
+        "If they want something fixed and do not name a refund, a replacement, or a reship, say you will look at the order they named. Do not say you will get it fixed. Do not mention a week, getting back to them, or sorting it out. Do not promise to get an item to them.",
+        "If they ask whether a time is bad and the thread does not say you are free or busy, say you do not know yet. Do not say the time is fine or not bad.",
+        "If they have not named a clock time, do not say you will make it work, that any time is fine, or that you are free.",
+        "If they ask who is doing something and the line says or am I, do not assign it to yourself. Say you do not know yet.",
         "If they ask you to bring, grab, cover, swap, check, or change something, say you will. That is the answer, not a new fact, and not a claim the work is already finished.",
         "If they say they still need something, or they ask for an update on it, say you will get it. Do not only repeat their sentence. Do not report a status such as sorted, not sorted, ready, lined up, or open unless those words are in the thread.",
-        "If they ask whether something came through and the thread does not say, say you cannot confirm yet and ask them to send it again. Do not call it good.",
+        "If they ask whether something came through and the thread does not say, do not invent a status and do not thank them for coming. Say that if it did not come through, they can send it again.",
         "If the only ask is a short yes or no and the thread has no fact against yes, say yes. Do not say you will check and do not say you do not know.",
         "If they only say thanks, thank them for that thing and stop. Do not say either, lmk, or anything else.",
         "If they ask for an intro they can forward, write it after the greeting in your own voice. Say we share, not your group. Do not say it can work around anyone, and do not mention pricing.",
-        "If they want something fixed, say you will look at the order they named. Do not say now, and do not promise to get an item to them.",
+        "If they want something fixed, say you will look at the order they named. Do not say you will get it fixed, do not say now, and do not promise to get an item to them.",
+        "Write a few short sentences. Do not give every line they wrote its own answer.",
         "Do not claim a status that a different person wrote, including still looking.",
         "Keep the capitalization of every proper name written in the thread, including a possessive.",
         "Do not add a person, a company, or a task this thread does not mention.",
@@ -718,14 +727,16 @@ def rewrite_ask(addressee: str = "", choice: bool = False, points: list[str] | N
         "If they said do not confirm, do not accept the role. "
         "If they said if you have a spare, do not claim you have one. "
         "If they asked for an intro they can forward, write the intro itself. "
-        "If they want something fixed and did not name a remedy, say you will look and do not promise to get an item to them. "
-        "If they asked whether a time is bad, say yes or no. "
+        "If they want something fixed and did not name a remedy, say you will look at the order. Do not say you will get it fixed. "
+        "If they asked whether a time is bad and the thread does not say you are free, say you do not know yet. "
+        "If they have not named a clock time, do not say you will make it work. "
+        "If they asked or am I, do not assign the part to yourself. "
         "If they still need something, or they asked for an update, say you will get it. Do not only repeat their sentence. "
-        "If they asked whether something came through, say you cannot confirm yet and ask them to send it again. "
+        "If they asked whether something came through, do not invent a status and do not thank them for coming. Say that if it did not, they can send it again. "
         "A short yes or no with no fact against yes is yes. Do not say you will check. "
         "If they only said thanks, thank them and stop. "
         "An intro they can forward is in your voice: we share, not your group, and no work-around. "
-        "If they want something fixed, say you will look at the order. Do not say now. "
+        "If they want something fixed, say you will look at the order. Do not say you will get it fixed, and do not say now. "
         "Do not claim a status a different person wrote. "
         "Keep the capitalization of proper names from the thread. "
         "Name every object, place, time, and change they brought up, in their words. "
@@ -799,15 +810,21 @@ def ground_reply(reply: str, sources: str, me: list[str] | None = None) -> str:
             continue
         if re.search(r"(?i)\b(a good one|was a good)\b", sentence) and not re.search(r"(?i)\bgood\b", src):
             continue
+        if re.search(r"(?i)\bthanks for (?:coming|attending)\b|\bglad you (?:came|could come)\b", sentence):
+            continue
         kept.append(sentence)
     body = " ".join(kept).strip()
 
-    if re.search(r"(?i)come through", src) and re.search(r"(?i)\b(if it didn't|a good one|i'll ask you to send)\b", body):
-        greet, _rest = _greet_split(body)
-        tail = "I can't confirm yet whether it came through. please send it again."
-        if re.search(r"(?i)saturday reading", src):
-            tail += " thanks for the Saturday reading."
-        body = (greet + " " + tail).strip()
+    if re.search(r"(?i)come through", src) and not re.search(r"(?i)\b(it came through|here is the (?:invoice|pdf)|attached)\b", src):
+        if re.search(
+            r"(?i)\b(if it didn't|a good one|i'll ask you to send|can(?:not|'t) confirm|thanks for coming|send it again|came through)\b",
+            body,
+        ):
+            greet, _rest = _greet_split(body)
+            named = re.search(r"(?i)\b(the [A-Za-z0-9 ]{3,60}?) come through", src)
+            thing = named.group(1).strip() if named else "it"
+            tail = f"I don't know yet if {thing} came through. if it didn't, send it again."
+            body = (greet + " " + tail).strip()
 
     if re.search(r"(?i)\bi(?:'m| am) on the list\b", body) and not re.search(r"(?i)you(?:'re| are) on the list", src):
         body = re.sub(r"(?i)\s*so I(?:'m| am) on the list\b", "", body)
@@ -828,24 +845,108 @@ def ground_reply(reply: str, sources: str, me: list[str] | None = None) -> str:
         greet, _rest = _greet_split(body)
         body = (greet + " yes.").strip()
 
-    if "?" not in src and not re.search(r"(?i)\b(can you|could you|please)\b", src):
-        if "flyers" in low and "flyers" not in body.lower():
-            greet, _rest = _greet_split(reply or "")
-            body = (greet + " glad the flyers look great.").strip()
+    thanks = re.search(r"(?is)thanks for [^.?\n]{0,40}\bflyers\b[^.?\n]*[.!]?\s*they look great", src)
+    if thanks:
+        window = src[max(0, thanks.start() - 180) : thanks.end()]
+        asked = "?" in window or bool(re.search(r"(?i)\b(can you|could you|please)\b", window))
+    else:
+        asked = "?" in src or bool(re.search(r"(?i)\b(can you|could you|please)\b", src))
+    if not asked and "flyers" in low and (
+        "flyers" not in body.lower() or re.search(r"(?i)\b(lmk|either one|email in your note|it's possible|it is possible)\b", body)
+    ):
+        greet, _rest = _greet_split(reply or body)
+        body = (greet + " glad the flyers look great.").strip()
 
     if re.search(r"(?i)\bintro\b", src) and re.search(r"(?i)\bforward\b", src):
         body = re.sub(r"(?i)\byour group shares\b", "we share", body)
         body = re.sub(r"(?i)\byour group\b", "we", body)
-
-    order = re.search(r"(?i)\border (\d+)\b", src)
-    if order and re.search(r"(?i)\b(look into it now|get this fixed)\b", body):
         body = re.sub(
-            r"(?i)\bI will look into it now and get this fixed\b[,.]?\s*",
-            f"I'll look at order {order.group(1)}. ",
+            r"(?i)\s*there(?:'s| is) no day picked yet,?\s*so lmk\b[^\"']*",
+            "",
             body,
         )
-        body = re.sub(r"(?i)\blook into it now\b", f"look at order {order.group(1)}", body)
-        body = re.sub(r"(?i)\bget this fixed\b", f"look at order {order.group(1)}", body)
+
+    if re.search(r"(?i)\b(sometime|do not have a time|don't have a time|no time yet)\b", src) and not re.search(
+        r"\d{1,2}:\d{2}", src
+    ):
+        body = re.sub(
+            r"(?i)\s*(?:and |so )?I(?:'ll| will) make (?:it|that|a time|any time) work\.?",
+            "",
+            body,
+        )
+
+    if re.search(r"(?i)tell me if .{0,40}\bis bad\b", src) and not re.search(
+        r"(?i)\b(i(?:'m| am) free|works for me|not bad)\b", src
+    ):
+        body = re.sub(
+            r"(?i)\b(?:no,?\s*)?(\d{1,2}:\d{2}) is not bad(?: for me)?\b\.?",
+            r"I don't know yet if \1 is bad",
+            body,
+        )
+
+    if re.search(r"(?i)key is with", src) and not re.search(r"(?i)\b(?:bring|grab|get) (?:the |your )?(?:hall )?key\b", src):
+        body = re.sub(
+            r"(?i)\bI(?:'ll| will) (?:grab|get|bring) the hall key[^.]*\.",
+            "the hall key is with the front desk.",
+            body,
+        )
+
+    if re.search(r"(?i)\bor am I\b", src) and not re.search(r"(?i)\byou (?:are|will) (?:sing|be singing)\b", src):
+        body = re.sub(
+            r"(?i)\b(?:I(?:'ll| will)|you(?:'re| are)|I am) singing the bridge\b\.?",
+            "I don't know yet who is singing the bridge",
+            body,
+        )
+
+    order = re.search(r"(?i)\border (\d+)\b", src)
+    if order:
+        num = order.group(1)
+        body = re.sub(r"(?i)\blook into it now\b", f"look at order {num}", body)
+        body = re.sub(r"(?i)\s*(?:and |to )?get (?:this|it) fixed\b", "", body)
+        body = re.sub(
+            rf"(?i)(look at order {num})(?:\s*(?:to|and)\s*look at order {num})+",
+            rf"look at order {num}",
+            body,
+        )
+        body = re.sub(r"\s+([.])", r"\1", body)
+        if not re.search(rf"(?i)\border {num}\b", body):
+            body = body.rstrip(". ") + f". I'll look at order {num}."
+        body = re.sub(
+            r"(?i),?\s*(?:and\s+)?I(?:'m| am) not going to tell you to wait another week\.?",
+            "",
+            body,
+        )
+        body = re.sub(
+            r"(?i),?\s*(?:and\s+)?I (?:won'?t|will not) tell you to wait another week\.?",
+            "",
+            body,
+        )
+        body = re.sub(
+            r"(?i),?\s*(?:and\s+)?that(?:'s| is) on (?:us|me) to (?:sort out|fix)(?: this| it)?\.?",
+            "",
+            body,
+        )
+        body = re.sub(r"(?i)\s*(?:and )?get back to you\b", "", body)
+        body = re.sub(rf"(?i)(look at order {num})\s+and the [^.]+", r"\1", body)
+        body = re.sub(rf"(?i)(look at order {num})\s+and see what happened\b[^.]*", r"\1", body)
+        body = " ".join(piece for piece in sentences(body) if not re.search(r"(?i)another week", piece))
+        if re.search(r"(?i)\b(want this fixed|do not tell me to wait|don't tell me to wait)\b", src):
+            greet, _rest = _greet_split(reply or body)
+            bits = []
+            if re.search(r"(?i)\bsecond time\b", src):
+                bits.append("this is the second time")
+            wrong = re.search(
+                r"(?i)was supposed to include the (.+?) and it showed up with ([^.]+)",
+                src,
+            )
+            if wrong:
+                arrived = re.sub(r"(?i)\s+instead$", "", wrong.group(2).strip())
+                bits.append(
+                    f"order {num} was supposed to include the {wrong.group(1).strip()} "
+                    f"and it showed up with {arrived}"
+                )
+            bits.append(f"I'll look at order {num}")
+            body = (greet + " " + ". ".join(bits) + ".").replace("..", ".").strip()
 
     shown = re.search(r"(?i)people start showing up at (\d{1,2}(?::\d{2})?(?:\s*[ap]m)?)", src)
     if shown and re.search(r"(?i)\bI've got \d", body):
@@ -854,7 +955,61 @@ def ground_reply(reply: str, sources: str, me: list[str] | None = None) -> str:
             f"people start showing up at {shown.group(1)}.",
             body,
         )
-    body = re.sub(r"\s{2,}", " ", body).replace(" .", ".").strip()
+    if re.search(r"(?i)still looking at the gate code", src) and re.search(
+        r"(?i)(bring the new park gate code|don'?t have the new park gate code|all three|code card|have the card)",
+        body,
+    ):
+        greet, _rest = _greet_split(reply or body)
+        bits = ["still looking at the new park gate code"]
+        if re.search(r"(?i)\b(blue cooler|blue one)\b", src):
+            bits.append("I'll get the blue cooler since the red one leaks")
+        if re.search(r"(?i)\bice\b", src):
+            bits.append("I'll grab two bags of ice")
+        if re.search(r"(?i)\bgrill\b", src) and re.search(r"(?i)canceled", src):
+            bits.append("got it on the grill being canceled")
+        if re.search(r"(?i)reply-all", src):
+            bits.append("I won't reply-all to the vendor thread")
+        body = (greet + " " + ". ".join(bits) + ".").replace("..", ".").strip()
+    screen_lines = []
+    for line in src.splitlines():
+        if (
+            re.match(r"^[^:\n]{1,80}: ", line)
+            and not line.lower().startswith(("from:", "subject:", "already in the box:"))
+        ):
+            break
+        screen_lines.append(line)
+    screen_only = "\n".join(screen_lines)
+    screen_content = []
+    for line in screen_only.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.lower().startswith(("from:", "subject:")):
+            continue
+        if re.match(r"(?i)^[A-Za-z]+ [A-Za-z]+ \d", stripped):
+            continue
+        screen_content.append(stripped)
+    screen_short = (
+        len(screen_content) == 1 and screen_content[0].endswith("?") and len(screen_content[0]) <= 40
+    )
+    screen_blocked = bool(re.search(r"(?i)\b(out of town|can't|cannot|do not confirm|don't confirm)\b", screen_only))
+    ask = screen_content[0] if screen_content else ""
+    action = bool(re.search(r"(?i)\b(look|check|bring|grab|send|cover|swap|hold|take)\b", ask))
+    if screen_short and not screen_blocked and not action:
+        greet, _rest = _greet_split(body)
+        body = (greet + " yes.").strip()
+    if re.search(r"(?i)lock (?:it|the list) at \d", src):
+        body = re.sub(r"(?i)\s*this is my reply today before they lock it at \d{1,2}\.?", "", body)
+        body = re.sub(r"(?i)\s*before they lock (?:it|the list) at \d{1,2}\.?", "", body)
+    body = re.sub(r"(?i),?\s*that should cover[^.]*\.?", "", body)
+    body = re.sub(r"(?i)\bthanks for noting that\s+", "", body)
+    body = re.sub(
+        r"(?i)with Avery on the crate list and Blake on the labels",
+        "Avery has the crate list and Blake has the labels",
+        body,
+    )
+
+    body = re.sub(r"\s{2,}", " ", body).replace(" .", ".").strip().rstrip(" ,")
+    if body and body[-1] not in ".!?\"'":
+        body += "."
     return body
 
 

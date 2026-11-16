@@ -133,8 +133,8 @@ def _with_points(messages: list[dict], points: list[str]) -> list[dict]:
     if not points:
         return messages
     lines = [
-        "Cover every point below that is still open. Do not answer only the last line.",
-        "One short sentence for each point below. Do not skip a point. Use I, not we. No labels or headers.",
+        "Answer the open asks in a few short sentences. Do not give every line its own answer.",
+        "Do not skip an ask. Use I, not we. No labels or headers.",
         "Do not turn their update into a new rule they did not say.",
         "Do not start with a number. Do not end with lmk.",
     ]

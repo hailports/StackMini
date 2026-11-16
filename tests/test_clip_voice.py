@@ -88,12 +88,18 @@ def test_ground_reply_closes_the_judge_misses():
         ["Quinn"],
     )
     assert "good one" not in fixed
-    assert "can't confirm yet" in fixed
-    assert "Saturday reading" in fixed
+    assert "can't confirm" not in fixed.lower()
+    assert "coming" not in fixed.lower()
+    assert "invoice" in fixed.lower()
+    assert "send it again" in fixed
+    assert "if " in fixed
     owen = "Owen Park 4:02 PM\nbooth Saturday?"
     assert ground_reply("hey Owen -- I don't know yet. I'll check and let you know.", owen, ["Quinn"]).endswith("yes.")
     nico = "From: Nico Alvarez\n\nthanks for dropping off the flyers yesterday. they look great."
     assert ground_reply("hey Nico -- lmk if there's anything else on either one!", nico, ["Quinn"]) == "hey Nico -- glad the flyers look great."
+    noisy = nico + "\naccount: can you please see if the email in your note is possible?"
+    drifted = "hey Nico -- on the email in your note, and see if it's possible. lmk if anything else comes up on either one."
+    assert ground_reply(drifted, noisy, ["Quinn"]) == "hey Nico -- glad the flyers look great."
     mina = "Mina Patel\ncan you take the second spot? they lock the list at 4."
     cleaned = ground_reply("hey Mina -- I'll take the second spot, so I'm on the list before they lock it at 4.", mina, ["Quinn"])
     assert "on the list" not in cleaned
@@ -111,12 +117,20 @@ def test_ground_reply_closes_the_judge_misses():
     assert "your group" not in forwarded
     assert "we share" in forwarded
     assert "work around" not in forwarded
+    wordy = (
+        'hey Kai -- here\'s an intro you can forward: "hi. we share one Saturday table. '
+        'would a 10-minute call be worth setting up? there\'s no day picked yet, so lmk if it makes sense and we can find one."'
+    )
+    trimmed = ground_reply(wordy, intro, ["Quinn"])
+    assert "lmk" not in trimmed
+    assert "find one" not in trimmed
+    assert 'forward: "' in trimmed
     angry = "order 1844 showed up with plates. I want this fixed. do not tell me to wait another week."
     looked = ground_reply("hey Pete -- I will look into it now and get this fixed. I won't tell you to wait another week.", angry, ["Quinn"])
     assert "now" not in looked
     assert "get this fixed" not in looked
     assert "1844" in looked
-    assert "another week" in looked
+    assert "another week" not in looked
 
 
 def test_rules_name_the_person_and_ban_invention():
@@ -232,10 +246,141 @@ are you singing the bridge or am I?"""
 
 
 def test_a_choice_that_is_handed_back_is_a_bounce():
-    assert screen_has_choice(DANA)
+    room = "Samira Cole 1:15 PM\nshould we book the small room or the library? I need a pick today."
+    assert screen_has_choice(room)
+    assert not screen_has_choice(DANA)
     assert not screen_has_choice(PRIYA)
-    assert bounced_choice("who do you want on the bridge?", DANA)
+    assert bounced_choice("who do you want on the bridge?", room)
     assert not bounced_choice("I will sing the bridge.", DANA)
+
+
+def test_ground_reply_stops_the_four_misses():
+    sam_src = (
+        "From: Sam Ortega\nSubject: bookshop invoice\n\n"
+        "Thanks for the Saturday reading. Did the invoice PDF for the 12 chairs come through? "
+        "If not I can send it again.\n"
+    )
+    sam = ground_reply(
+        "hey Sam -- thanks for coming to the Saturday reading. "
+        "I can't confirm yet that the invoice PDF for the 12 chairs came through, so please send it again.",
+        sam_src,
+        ["Quinn"],
+    )
+    assert "coming" not in sam.lower()
+    assert "can't confirm" not in sam.lower()
+    assert "don't know yet" in sam
+    assert "12 chairs" in sam
+    assert "send it again" in sam
+
+    june = "From: June Hale\nSubject: coffee\n\nwant to grab coffee sometime Thursday? I do not have a time yet.\n"
+    coffee = ground_reply(
+        "hey June -- yes, I'd like to grab coffee sometime Thursday. send me a time once you have one and I'll make it work.",
+        june,
+        ["Quinn"],
+    )
+    assert "make it work" not in coffee.lower()
+    assert "Thursday" in coffee
+    assert "time" in coffee.lower()
+
+    dana_src = (
+        "Dana Ruiz 8:05 PM\n"
+        "the hall key is with the front desk.\n"
+        "can you bring your music stand?\n"
+        "start time moved from 7 to 6:30. tell me if 6:30 is bad.\n"
+        "are you singing the bridge or am I?\n"
+    )
+    dana = ground_reply(
+        "hey Dana -- I'll grab the hall key from the front desk, not the lockbox. "
+        "I'll bring my music stand. no, 6:30 is not bad for me. you're singing the bridge.",
+        dana_src,
+        ["Quinn"],
+    )
+    assert "not bad" not in dana.lower()
+    assert "sing the bridge" not in dana.lower()
+    assert "grab the hall key" not in dana.lower()
+    assert "front desk" in dana
+    assert "don't know yet" in dana
+    assert "6:30" in dana
+    assert "bridge" in dana
+
+    pete = "From: Pete Lang\n\norder 1844 was supposed to include the blue mugs and it showed up with plates. I want this fixed."
+    angry = ground_reply(
+        "hey Pete -- I will look at order 1844 to look at order 1844.",
+        pete,
+        ["Quinn"],
+    )
+    assert angry.lower().count("look at order 1844") == 1
+    assert "get it fixed" not in angry.lower()
+    week = ground_reply(
+        "hey Pete -- I will look at order 1844, and I'm not going to tell you to wait another week.",
+        pete + " do not tell me to wait another week.",
+        ["Quinn"],
+    )
+    assert "another week" not in week.lower()
+    assert week.lower().count("look at order 1844") == 1
+    owned = ground_reply(
+        "hey Pete -- order 1844 showed up with plates instead, and that's on us to sort out. I will look at order 1844.",
+        pete,
+        ["Quinn"],
+    )
+    assert "sort out" not in owned.lower()
+    assert "on us" not in owned.lower()
+    assert owned.endswith(".")
+    later = ground_reply(
+        "hey Pete -- I hear you. I will look at order 1844 and get back to you. I hear you on not wanting to wait another week.",
+        pete,
+        ["Quinn"],
+    )
+    assert "another week" not in later.lower()
+    assert "get back" not in later.lower()
+    assert "look at order 1844" in later
+    mugs = ground_reply(
+        "hey Pete -- I will look at order 1844 and the blue mugs that should have been in it.",
+        pete,
+        ["Quinn"],
+    )
+    assert mugs.rstrip(".").endswith("look at order 1844")
+    assert "plates" in mugs
+    assert "with p." not in mugs
+    crate = "Casey Dunn\ncan you bring the folding table? Avery has the crate list and Blake has the labels."
+    covered = ground_reply(
+        "hey Casey -- yes, I'll bring the folding table. with Avery on the crate list and Blake on the labels, that should cover the market crate.",
+        crate,
+        ["Quinn"],
+    )
+    assert "should cover" not in covered.lower()
+    assert "folding table" in covered
+    mina_src = "Mina Patel\ncan you take the second spot and reply today? they lock the list at 4."
+    spot = ground_reply(
+        "hey Mina -- yes, I'll take the second spot on the new bike rack. this is my reply today before they lock it at 4.",
+        mina_src,
+        ["Quinn"],
+    )
+    assert "before" not in spot.lower()
+    assert "second spot" in spot
+    nora_src = (
+        "From: Nora Blake\ncan you bring the new code on a card?\n"
+        "From: Quinn\nstill looking at the gate code.\npeople start showing up at 1."
+    )
+    gate = ground_reply(
+        "hey Nora -- I will bring the new park gate code on a card before Sunday, and I will get the blue cooler. "
+        "I will have the card, the blue cooler, and the ice there Sunday before people start showing up at 1.",
+        nora_src,
+        ["Riley Example"],
+    )
+    assert "bring the new park gate code" not in gate.lower()
+    assert "still looking at the new park gate code" in gate
+    assert "before people start showing up" not in gate
+    assert "card," not in gate
+    owen = "Owen Park 4:02 PM\nbooth Saturday?"
+    terse = ground_reply("hey Owen -- yes, I'll be at the booth Saturday.", owen + "\naccount: can you check the other list?", ["Quinn"])
+    assert terse.endswith("yes.")
+    assert "booth" not in terse.lower()
+    assert "all three" not in ground_reply(
+        "hey Nora -- I don't have the new park gate code yet. I will have all three for Sunday before people start showing up at 1.",
+        nora_src,
+        ["Riley Example"],
+    ).lower()
 
 
 def test_unrelated_notes_are_dropped():

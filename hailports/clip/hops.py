@@ -109,7 +109,7 @@ def read_key(endpoint: dict) -> str:
 
 
 def _http(endpoint: dict, messages: list[dict]) -> str:
-    system, user = _split_messages(messages)
+    system, user = same_context(*_split_messages(messages))
     return chat(endpoint["base_url"], endpoint["model"], user, system=system, key=read_key(endpoint)).text
 
 
@@ -138,8 +138,37 @@ def _bin_ok(binary: str) -> bool:
     return binary.startswith("/") and ".." not in binary
 
 
+# Claude sends this much system and this much user, as two fields. A joined
+# prompt must not be shorter than that, or the thread at the end of the user
+# turn is the part that gets cut.
+_CONTEXT_CAP = 6000
+
+
+def same_context(system: str, user: str) -> tuple[str, str]:
+    """The system and user text the claude hop receives. Every hop uses this pair."""
+    return (system or "")[:_CONTEXT_CAP], (user or "")[:_CONTEXT_CAP]
+
+
+def joined_prompt(system: str, user: str, lead: str = "") -> str:
+    """One string for a hop that has no separate system field.
+
+    The user turn is first. It holds the on-screen thread at its tail, after
+    the rules. Joining system-first and then keeping the first 8000 characters
+    left the rules and dropped the thread, so the hop said it could not see
+    the message.
+    """
+    system, user = same_context(system, user)
+    chunks = [user]
+    if (lead or "").strip():
+        chunks.append(lead.strip())
+    if system:
+        chunks.append(system)
+    return "\n\n".join(chunk for chunk in chunks if chunk).strip()
+
+
 def claude_argv(binary: str, system: str, user: str) -> list[str]:
     """Print-only. No tools, so nothing can edit files. Plan mode made the model write a plan and an ExitPlanMode call as text."""
+    system, user = same_context(system, user)
     argv = [
         binary, "-p", "--output-format", "text",
         "--permission-mode", "default", "--permission-prompts", "none",
@@ -150,8 +179,8 @@ def claude_argv(binary: str, system: str, user: str) -> list[str]:
         "--setting-sources", "",
     ]
     if system:
-        argv += ["--system-prompt", system[:6000]]
-    argv.append(user[:6000])
+        argv += ["--system-prompt", system]
+    argv.append(user)
     return argv
 
 
@@ -174,12 +203,23 @@ _CURSOR_META = re.compile(
     r"ask mode|switch to agent|didn.?t stage|pasteable draft|i can.?t post|i cannot post|" + _HOP_META.pattern,
     re.I,
 )
+# The hop did not get the thread. Show nothing from it and try the next hop.
+_CANT_SEE = re.compile(
+    r"(?is)(?:"
+    r"can(?:not|['’]t)\s+see\b.{0,80}\b(?:message|screen|thread|asked|on-screen|onscreen)"
+    r"|(?:could you|can you|please)\s+send your message again"
+    r"|send your message again"
+    r")"
+)
+
+
+def blind_reply(text: str) -> bool:
+    """True when the hop says it cannot see the message. That reply is not a draft."""
+    return bool(_CANT_SEE.search(text or ""))
 
 
 def cursor_prompt(system: str, user: str) -> str:
     """The reply only. Cursor was narrating its own mode and that got copied."""
-    rules = (system or "").strip()[:3500]
-    body = (user or "").strip()[:4000]
     lead = (
         "You are viewing a communication on the screen. "
         "Read the whole conversation, not only the last line. "
@@ -191,9 +231,9 @@ def cursor_prompt(system: str, user: str) -> str:
         "Draft the reply to what is still open. "
         "No title. No code fence. "
         "Do not mention Cursor, ask mode, or the app. "
-        "Do not say you staged, posted, or sent anything.\n\n"
+        "Do not say you staged, posted, or sent anything."
     )
-    return (rules + "\n\n" + lead + body).strip()[:8000]
+    return joined_prompt(system, user, lead)
 
 
 def only_reply(text: str) -> str:
@@ -206,7 +246,7 @@ def only_reply(text: str) -> str:
 
 def cursor_argv(binary: str, prompt: str) -> list[str]:
     """Ask mode does not edit files. --trust only lets that read-only run start."""
-    return [binary, "-p", "--mode", "ask", "--trust", "--output-format", "text", prompt[:8000]]
+    return [binary, "-p", "--mode", "ask", "--trust", "--output-format", "text", prompt]
 
 
 def _split_messages(messages: list[dict]) -> tuple[str, str]:
@@ -265,7 +305,10 @@ def _codex(endpoint: dict, messages: list[dict]) -> str:
     if not _bin_ok(binary):
         raise ModelOffline("codex")
     system, user = _split_messages(messages)
-    prompt = (system + "\n\n" + user).strip()[:8000]
+    # Stdin, not an argv slot. The user turn goes first so the thread is not
+    # the part a length cut drops. No 8000-character slice: that slice kept
+    # the rules and cut the on-screen text.
+    prompt = joined_prompt(system, user)
     handle = tempfile.NamedTemporaryFile(prefix="paisty-codex-", delete=False)
     handle.close()
     try:
@@ -297,13 +340,18 @@ def _cursor(endpoint: dict, messages: list[dict]) -> str:
     if not _bin_ok(binary):
         raise ModelOffline("cursor")
     system, user = _split_messages(messages)
-    done = subprocess.run(
-        cursor_argv(binary, cursor_prompt(system, user)),
-        cwd=str(Path.home()),
-        capture_output=True,
-        check=False,
-        timeout=90,
-    )
+    # An empty directory. The home directory made this hop read other files
+    # instead of the thread in the prompt.
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="paisty-cursor-") as quiet:
+        done = subprocess.run(
+            cursor_argv(binary, cursor_prompt(system, user)),
+            cwd=quiet,
+            capture_output=True,
+            check=False,
+            timeout=90,
+            env=premium_env(),
+        )
     if done.returncode != 0:
         raise ModelOffline("cursor hop failed")
     text = only_reply((done.stdout or b"").decode("utf-8", "replace"))
@@ -337,9 +385,14 @@ def complete(endpoints: list[dict], messages: list[dict], http=None, ssh=None) -
             continue
         if str(text or "").strip():
             from hailports.clip.scene import strip_scaffold
-            if _HOP_META.search(strip_scaffold(str(text))):
+            cleaned = strip_scaffold(str(text))
+            if _HOP_META.search(cleaned):
                 # Narration about staging or planning is not a reply. Try the next hop.
                 last = str(endpoint.get("name") or "?") + ":meta"
+                continue
+            if blind_reply(cleaned):
+                # A hop that cannot see the thread must not be pasted.
+                last = str(endpoint.get("name") or "?") + ":blind"
                 continue
             return str(text).strip(), str(endpoint.get("name") or "")
         last = str(endpoint.get("name") or "?") + ":empty"

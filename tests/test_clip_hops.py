@@ -290,6 +290,80 @@ def test_connected_premium_leads_the_local():
     assert saved["order"][-1] == "cursor"
 
 
+def test_every_hop_keeps_the_thread_past_a_long_system_prompt():
+    """Codex used to join system+user and keep the first 8000 chars, which cut the thread."""
+    from hailports.clip.hops import claude_argv, cursor_prompt, joined_prompt, same_context
+
+    screen = "ONSCREEN-TOKEN out of town the whole weekend of the 21st"
+    system = "S" * 7000
+    user = ("R" * 2500) + "\nOn screen:\n" + screen
+    assert len(user) <= 6000
+    assert len(system) + len(user) > 8000
+    kept_system, kept_user = same_context(system, user)
+    assert screen in kept_user
+    assert len(kept_system) == 6000 and len(kept_user) <= 6000
+    claude = claude_argv("/usr/bin/claude", system, user)
+    assert screen in claude[-1]
+    assert screen in claude[claude.index("--system-prompt") + 1] or screen in claude[-1]
+    packed = joined_prompt(system, user)
+    assert screen in packed
+    assert packed.index(screen) < packed.index("S" * 40)
+    cursor = cursor_prompt(system, user)
+    assert screen in cursor
+    assert "viewing a communication" in cursor
+    # The old slice kept the system head and dropped this tail.
+    assert screen not in (system + "\n\n" + user).strip()[:8000]
+
+
+def test_a_hop_that_cannot_see_the_message_falls_through(monkeypatch):
+    import hailports.clip.hops as hops_mod
+    from hailports.llm import ModelOffline
+
+    assert hops_mod.blind_reply("hey Wes -- I can’t see Wes’s on-screen message.")
+    assert hops_mod.blind_reply("hey Robin -- can you send your message again? I can’t see what you asked.")
+    assert hops_mod.blind_reply("hey Casey -- could you send your message again? I'll bring the table.")
+    assert not hops_mod.blind_reply("hey Wes -- no, I can't staff the Sunday booth that weekend.")
+
+    calls = []
+
+    def fake_codex(endpoint, messages):
+        calls.append("codex")
+        blob = "\n".join(str(item.get("content") or "") for item in messages)
+        assert "Sunday booth" in blob
+        return "hey Wes -- I can't see the on-screen message."
+
+    def fake_http(endpoint, messages):
+        calls.append("local")
+        blob = "\n".join(str(item.get("content") or "") for item in messages)
+        assert "Sunday booth" in blob
+        return "hey Wes -- no, I can't staff the Sunday booth."
+
+    monkeypatch.setattr(hops_mod, "_codex", fake_codex)
+    monkeypatch.setattr(hops_mod, "_http", fake_http)
+    text, name = hops_mod.complete(
+        [
+            {"name": "codex", "via": "codex", "bin": "/usr/bin/codex"},
+            {"name": "local", "via": "http", "base_url": "http://127.0.0.1:9/v1", "model": "x"},
+        ],
+        [{"role": "user", "content": "On screen:\nSunday booth"}],
+    )
+    assert calls == ["codex", "local"]
+    assert "can't see" not in text
+    assert name == "local"
+    assert "Sunday booth" in text
+
+    monkeypatch.setattr(hops_mod, "_codex", lambda endpoint, messages: "could you send your message again?")
+    try:
+        hops_mod.complete(
+            [{"name": "codex", "via": "codex", "bin": "/usr/bin/codex"}],
+            [{"role": "user", "content": "On screen:\nSunday booth"}],
+        )
+        raised = False
+    except ModelOffline:
+        raised = True
+    assert raised
+
+
 def test_login_choice_stores_the_app_and_not_a_key():
     from hailports.clip.hops import claude_argv, codex_argv, cursor_argv, cursor_prompt, only_reply
     saved = apply_board({
