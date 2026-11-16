@@ -14,12 +14,16 @@ from hailports.clip.scene import (
     addressee_first,
     as_writer,
     bounced_choice,
+    conditional_claim,
     copy_text,
     draft_rules,
     drop_ungrounded,
     ensure_commits,
+    held_back,
+    intro_narration,
     missing_commits,
     overreach,
+    unasked_remedy,
     plain_reply,
     prepare,
     relevant_notes,
@@ -31,6 +35,7 @@ from hailports.clip.scene import (
     screen_has_choice,
     shape_voice,
     source_dirs,
+    ground_reply,
     trim_overreach,
 )
 from hailports.clip.hops import complete, endpoints_from
@@ -257,12 +262,27 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
         except OSError:
             pass
         gaps = missing_commits(text, sources)
-        invented = overreach(text, sources) or bounced_choice(text, sources) or bool(gaps)
+        blocked = (
+            held_back(text, sources)
+            or conditional_claim(text, sources)
+            or intro_narration(text, sources)
+            or unasked_remedy(text, sources)
+        )
+        invented = overreach(text, sources) or bounced_choice(text, sources) or bool(gaps) or blocked
         first = text
         if invented or weak:
             ask = rewrite_ask(who, choice, points)
             if gaps:
                 ask += " Say you will get these, and do not give a status for them: " + ", ".join(gaps) + "."
+            if held_back(text, sources):
+                ask += " Do not accept the role. Say you will wait."
+            if conditional_claim(text, sources):
+                ask += " Do not claim you have a spare. Say you will bring it if you have it."
+            if intro_narration(text, sources):
+                ask += " Write the intro itself. Do not say you will send it later."
+            if unasked_remedy(text, sources):
+                ask += " Do not promise a remedy they did not name. Say you will look."
+
             retry = list(prepared["messages"]) + [
                 {"role": "assistant", "content": text},
                 {"role": "user", "content": ask},
@@ -272,13 +292,13 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
             except ModelOffline:
                 # A weak first draft beats nothing. An invented one does not.
                 text = "" if invented else first
-        kept = drop_ungrounded(ensure_commits(as_writer(trim_overreach(text, sources), me), sources), screen, who)
+        kept = ground_reply(drop_ungrounded(ensure_commits(as_writer(trim_overreach(text, sources), me), sources), screen, who), sources, me)
         # Cleanup that removes the whole reply must not put the raw text back.
         if reply_ok(kept):
             text = kept
         elif weak and not invented:
             # Retry returned worse junk; keep the usable first draft.
-            fallback = drop_ungrounded(ensure_commits(as_writer(trim_overreach(first, sources), me), sources), screen, who)
+            fallback = ground_reply(drop_ungrounded(ensure_commits(as_writer(trim_overreach(first, sources), me), sources), screen, who), sources, me)
             text = fallback if reply_ok(fallback) else ""
         else:
             text = ""

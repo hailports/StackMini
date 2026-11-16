@@ -5,6 +5,7 @@ from hailports.clip.scene import (
     asked_objects,
     bounced_choice,
     draft_rules,
+    ground_reply,
     drop_ungrounded,
     ensure_commits,
     missing_commits,
@@ -52,6 +53,70 @@ def test_addressee_is_the_last_other_person():
     assert addressee_first("Riley Brooks 11:02 AM\nhey are you in for tacos Friday?", ["Quinn"]) == "Riley"
     assert addressee_first(NOAH, ["Quinn"]) == "Noah"
     assert addressee_first(DANA, ["Quinn"]) == "Dana"
+
+
+def test_a_held_back_role_and_an_unasked_remedy_are_caught():
+    from hailports.clip.scene import conditional_claim, held_back, intro_narration, unasked_remedy
+
+    hold = "do not confirm anything yet. I will write again on Friday."
+    assert held_back("happy to be the backup speaker if Jordan drops.", hold)
+    assert not held_back("got it. I will wait for Friday. I won't confirm.", hold)
+    spare = "if you have a spare, please bring it."
+    assert conditional_claim("I will bring a spare mic cable.", spare)
+    assert not conditional_claim("I will bring a spare mic cable if I have one.", spare)
+    assert not conditional_claim("I will bring my music stand.", spare)
+    intro = "send a short intro I can forward, using only that."
+    assert intro_narration("I will send a short intro you can forward.", intro)
+    assert not intro_narration("the group shares one Saturday table at the Oak market.", intro)
+    angry = "order 1844 showed up with plates. I want this fixed."
+    assert unasked_remedy("I will get the blue mugs to you.", angry)
+    assert not unasked_remedy("I will look at order 1844.", angry)
+    rules = draft_rules("Robin")
+    assert "do not confirm" in rules
+    assert "if you have a spare" in rules
+    assert "intro they can forward" in rules
+    assert "Do not promise to get an item" in rules
+    assert "whether a time is bad" in rules
+    assert "say you will get it" in rules
+
+
+def test_ground_reply_closes_the_judge_misses():
+    sam = "From: Sam Ortega\n\nThanks for the Saturday reading. Did the invoice PDF for the 12 chairs come through?"
+    fixed = ground_reply(
+        "hey Sam -- glad the Saturday reading was a good one. if it didn't come through, I'll ask you to send it again.",
+        sam,
+        ["Quinn"],
+    )
+    assert "good one" not in fixed
+    assert "can't confirm yet" in fixed
+    assert "Saturday reading" in fixed
+    owen = "Owen Park 4:02 PM\nbooth Saturday?"
+    assert ground_reply("hey Owen -- I don't know yet. I'll check and let you know.", owen, ["Quinn"]).endswith("yes.")
+    nico = "From: Nico Alvarez\n\nthanks for dropping off the flyers yesterday. they look great."
+    assert ground_reply("hey Nico -- lmk if there's anything else on either one!", nico, ["Quinn"]) == "hey Nico -- glad the flyers look great."
+    mina = "Mina Patel\ncan you take the second spot? they lock the list at 4."
+    cleaned = ground_reply("hey Mina -- I'll take the second spot, so I'm on the list before they lock it at 4.", mina, ["Quinn"])
+    assert "on the list" not in cleaned
+    nora = "From: Nora Blake\n\nwe still need a cooler.\n\nFrom: Quinn\n\nstill looking at the gate code.\n\npeople start showing up at 1."
+    dropped = ground_reply(
+        "hey Nora -- I'm still looking at the gate code. the cooler is still open. I've got 1 as when people start showing up.",
+        nora,
+        ["Riley Example"],
+    )
+    assert "still looking" not in dropped
+    assert "still open" not in dropped
+    assert "people start showing up at 1" in dropped
+    intro = "Could you send a short intro I can forward? your group shares one Saturday table."
+    forwarded = ground_reply("hey Kai -- your group shares one Saturday table. it can work around you.", intro, ["Quinn"])
+    assert "your group" not in forwarded
+    assert "we share" in forwarded
+    assert "work around" not in forwarded
+    angry = "order 1844 showed up with plates. I want this fixed. do not tell me to wait another week."
+    looked = ground_reply("hey Pete -- I will look into it now and get this fixed. I won't tell you to wait another week.", angry, ["Quinn"])
+    assert "now" not in looked
+    assert "get this fixed" not in looked
+    assert "1844" in looked
+    assert "another week" in looked
 
 
 def test_rules_name_the_person_and_ban_invention():
