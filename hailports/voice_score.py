@@ -256,7 +256,12 @@ def shape_reply(draft: str, incoming: str, channel: str = "outlook") -> str:
         words.extend(pieces)
     if not out:
         return shaped
-    return " ".join(out)
+    shaped = " ".join(out)
+    try:
+        from hailports.voice_post import post_filter
+        return post_filter(shaped)
+    except Exception:
+        return shaped
 
 
 def mean_score(rows: list[dict]) -> dict:
