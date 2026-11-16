@@ -218,6 +218,9 @@ def test_a_name_outside_the_thread_is_stripped_before_lowercase(tmp_path, monkey
     monkeypatch.setattr(clip_run.Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.setattr("hailports.clip.gate.allowed", lambda cfg=None, urlopen=None: True)
     monkeypatch.setattr(clip_run, "_instructions", lambda cfg: "You are viewing a communication on the screen. Write the reply.")
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    (notes / "account.txt").write_text("thanks for the flyers. Mara Solano at Northwind needs an account.\n", encoding="utf-8")
     monkeypatch.setattr(clip_run, "_lookup_notes", lambda cfg, text: "Mara Solano at Northwind needs an account.")
     leak = (
         "hey Nico -- glad the flyers look great. "
@@ -230,9 +233,12 @@ def test_a_name_outside_the_thread_is_stripped_before_lowercase(tmp_path, monkey
         "title": "flyers",
         "field_text": "Nico Alvarez\nthanks for the flyers yesterday, they look great.",
     }
-    code = clip_run.draft_scene(doc, "http://127.0.0.1:9/v1", "x", False, {"paiste": {"me": "Quinn", "order": ["only"], "models": {
-        "only": {"via": "http", "base_url": "http://127.0.0.1:9/v1", "model": "x"},
-    }}})
+    code = clip_run.draft_scene(doc, "http://127.0.0.1:9/v1", "x", False, {"paiste": {
+        "me": "Quinn",
+        "notes_dir": str(notes),
+        "order": ["only"],
+        "models": {"only": {"via": "http", "base_url": "http://127.0.0.1:9/v1", "model": "x"}},
+    }})
     out = capsys.readouterr().out.lower()
     assert code == 0
     assert "flyers" in out
