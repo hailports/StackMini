@@ -203,7 +203,8 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
         messages[0]["content"] = rules
     me = [part.strip() for part in str((route.get("paiste") or {}).get("me") or "").split(",") if part.strip()]
     sources = "\n".join(prepared.get("sources") or [])
-    who = addressee_first(scene_blob(doc) + "\n" + sources, me)
+    screen = scene_blob(doc)
+    who = addressee_first(screen + "\n" + sources, me)
     choice = screen_has_choice(sources)
     voice = _context_note(route)[:1400]
     parts = []
@@ -239,12 +240,12 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
     try:
         hops = endpoints_from(route)
         text, hop = complete(hops, prepared["messages"])
-        text = shape_voice(drop_ungrounded(plain_reply(text), sources, who), sources, who)
+        text = shape_voice(drop_ungrounded(plain_reply(text), screen, who), screen, who)
         weak = misses_points(text, points) or (bool(re.search(r"\.(?:cls|js|html)\b", found or "")) and thin_reply(text, found))
         if weak and len(hops) > 1:
             try:
                 nxt, nxt_hop = complete(hops[1:], prepared["messages"])
-                nxt = shape_voice(drop_ungrounded(plain_reply(nxt), sources, who), sources, who)
+                nxt = shape_voice(drop_ungrounded(plain_reply(nxt), screen, who), screen, who)
                 if nxt and not thin_reply(nxt, found) and not misses_points(nxt, points):
                     text, hop = nxt, nxt_hop
             except ModelOffline:
@@ -267,17 +268,17 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
                 {"role": "user", "content": ask},
             ]
             try:
-                text = shape_voice(drop_ungrounded(plain_reply(_complete(route)(retry).strip()), sources, who), sources, who)
+                text = shape_voice(drop_ungrounded(plain_reply(_complete(route)(retry).strip()), screen, who), screen, who)
             except ModelOffline:
                 # A weak first draft beats nothing. An invented one does not.
                 text = "" if invented else first
-        kept = drop_ungrounded(ensure_commits(as_writer(trim_overreach(text, sources), me), sources), sources, who)
+        kept = drop_ungrounded(ensure_commits(as_writer(trim_overreach(text, sources), me), sources), screen, who)
         # Cleanup that removes the whole reply must not put the raw text back.
         if reply_ok(kept):
             text = kept
         elif weak and not invented:
             # Retry returned worse junk; keep the usable first draft.
-            fallback = drop_ungrounded(ensure_commits(as_writer(trim_overreach(first, sources), me), sources), sources, who)
+            fallback = drop_ungrounded(ensure_commits(as_writer(trim_overreach(first, sources), me), sources), screen, who)
             text = fallback if reply_ok(fallback) else ""
         else:
             text = ""
