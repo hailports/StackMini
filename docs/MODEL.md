@@ -227,4 +227,4 @@ A work answer may use up to about 8k tokens of the 16k window. The model fact-ch
 Real-world A/B on this machine (Outlook/Zoom drafts, knowledge-base facts, ADO triage) kept **Gemma-4-26B-A4B-it-QAT** on `:8080`. Quality tied MiniCPM-V-4.7-35B-A3B IQ3_XS (16384 ctx, `--n-cpu-moe 0`, dspark Q4); Gemma won on decode mean and much lower RSS/swap. `gemma_serve.sh` may `exec` MiniCPM when `gd_model_variant=minicpm` (no LaunchAgents rewrite required). Tuning trials earlier the same day kept no other config wins.
 
 ## Bigbench 2026-11-16
-Large real-world A/B (drafts/WB/ADO/longctx/structured/vision) kept **Gemma-4-26B-A4B-it-QAT** on `:8080`. Overall pair wins {'tie': 138}; sign-test p=1.0. Swap still via `gd_model_variant` + `gemma_serve.sh` route.
+Large real-world A/B (drafts/WB/ADO/longctx/structured/vision) kept **Gemma-4-26B-A4B-it-QAT** on `:8080`. Overall pair wins {'minicpm': 38, 'gemma': 40, 'tie': 69}; sign-test p=0.909946. Swap still via `gd_model_variant` + `gemma_serve.sh` route.
