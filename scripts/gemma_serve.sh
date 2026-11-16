@@ -16,6 +16,14 @@ read_flag() {
   fi
 }
 
+# Shootout / dual-path: LaunchAgents writes are agent-denylisted; route by flag.
+# gd_model_variant=minicpm -> MiniCPM serve (16384/dspark). gemma (default) stays here.
+VARIANT=$(read_flag "$HOME/claude-stack/data/flags/gd_model_variant" "gemma")
+if [ "$VARIANT" = "minicpm" ]; then
+  echo "VARIANT_ROUTE minicpm" >&2
+  exec "$HOME/claude-stack/bin/minicpm_serve.sh"
+fi
+
 BIN=$(read_flag "$HOME/claude-stack/data/flags/gemma_bin" "")
 MODEL=$(read_flag "$HOME/claude-stack/data/flags/gemma_model" "")
 ALIAS=$(read_flag "$HOME/claude-stack/data/flags/gemma_alias" "Gemma-4-26B-A4B-it-QAT")

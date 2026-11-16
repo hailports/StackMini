@@ -222,3 +222,6 @@ The decode rate in the table above is the server. A fast server still writes a b
 
 Work questions are embedded and the nearest notes are retrieved by meaning. The model then picks the passage that answers the question and writes from that passage. A keyword list is not the lookup.
 A work answer may use up to about 8k tokens of the 16k window. The model fact-checks a grounded reply, and a clean miss can go to a premium model. The 32k window is armed and applies on the next start only when the memory level is 40 or higher.
+
+## Shootout 2026-11-16
+Real-world A/B on this machine (Outlook/Zoom drafts, knowledge-base facts, ADO triage) kept **Gemma-4-26B-A4B-it-QAT** on `:8080`. Quality tied MiniCPM-V-4.7-35B-A3B IQ3_XS (16384 ctx, `--n-cpu-moe 0`, dspark Q4); Gemma won on decode mean and much lower RSS/swap. `gemma_serve.sh` may `exec` MiniCPM when `gd_model_variant=minicpm` (no LaunchAgents rewrite required). Tuning trials earlier the same day kept no other config wins.
