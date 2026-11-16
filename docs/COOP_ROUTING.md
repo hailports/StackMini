@@ -28,3 +28,7 @@ Premium-writes-a-plan then local expansion spent more premium output and missed 
 ## Replay harness
 
 `contrib/local-first/replay/harness.py` scores the same gates on `sample_tasks.jsonl`. The sample is synthetic. It does not call a model unless you pass `--live-url`. Token counts in `--live-url` mode come from the server timings. Offline mode uses the four-character estimate.
+
+## Hosted personal lane
+
+`scripts/qwen4-max-run` is a separate capped hosted call to Qwen4-Max, used only after the local model, and only for personal tasks. Work and employer prompts are blocked. It is not part of the three coop patterns above, and it does not turn on paid inference for the local chat door.

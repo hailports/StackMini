@@ -1,0 +1,15 @@
+{
+  "lane": "personal_qwen4_max",
+  "after": "local",
+  "provider": "OpenRouter",
+  "model": "qwen/qwen4-max",
+  "thinking": "off",
+  "reasoning_effort": "none",
+  "daily_cap_usd": 1.00,
+  "per_call_cap_usd": 0.25,
+  "key_floor_usd": 0.50,
+  "cli": "scripts/qwen4-max-run",
+  "scope": "personal tasks only",
+  "blocked": "work/employer prompts blocked",
+  "does_not": "Does not enable paid inference on the local chat door."
+}

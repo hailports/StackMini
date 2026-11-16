@@ -10,6 +10,12 @@ An earlier switch the same day was rolled back. The 14249047104-byte QAT GGUF li
 
 On the internal copy, a 29-token prompt ran at about 100 tokens/s and the 4-token reply at about 28 tokens/s. A 23-token prompt ran at about 120 tokens/s and a 39-token reply at about 33 tokens/s. The server's context field is 8192. A later isolated short reply had a time to first token of about 3 seconds. One back-to-back call during the same check waited much longer before the first token; the server's own token timing for the completed replies stayed in the range above.
 
+## Hosted text lane
+
+After the local chat server, a personal hosted lane can call Qwen4-Max (`qwen/qwen4-max`) with thinking off. Caps are $1.00 per day in America/Chicago and $0.25 per call. Work and employer prompts are blocked. The lane does not enable paid inference on the local chat door. Official Qwen4 weights were not published when this lane was recorded, so this is not a local model swap.
+
+`scripts/qwen4-max-run` is the wrapper. `scripts/qwen4_max_lane.py` is the checker and client. `contrib/local-first/qwen4_max_lane.example.json` is the public policy shape. Pass `--check` to test a prompt without calling the API.
+
 This is the reference stack the appliance was shaped around, plus the builds the installer uses on other machines.
 
 ## Reference machine

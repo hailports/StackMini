@@ -1,0 +1,7 @@
+#!/bin/sh
+# Personal Qwen4-Max lane after the local model. Work and employer prompts are blocked.
+# Does not change the live local chat server.
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+export PYTHONPATH="$ROOT/scripts${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 "$ROOT/scripts/qwen4_max_lane.py" "$@"
