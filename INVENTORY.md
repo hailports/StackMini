@@ -36,7 +36,6 @@ This repo is a fresh write of a local model appliance. Private trees, databases,
 | Suggested card held until Approve and Post, Edit, or Dismiss | hailports/suggest.py, hailports/ticket_guard.py |
 | Precomputed packet for a paid call | hailports/precompute.py, hailports/router.py |
 | Local-first route: short work stays local, hard work gets a brief | hailports/local_first.py, contrib/local-first/ (grok, claude, codex, cursor-agent) |
-| Capped hosted Qwen4-Max lane after the local model; work/employer prompts blocked | scripts/qwen4_max_lane.py, scripts/qwen4-max-run, contrib/local-first/qwen4_max_lane.example.json |
 | Login-broken alert | hailports/alerts.py |
 | Vision input | hailports/images.py, hailports_setup, docs/MODEL.md |
 | Embedding server | hailports_setup/models.py `embed_server_args`, hailports/notes.py |
