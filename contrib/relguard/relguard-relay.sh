@@ -119,9 +119,9 @@ apply_artifact() {
       ;;
     *)
       if grep -q '^diff --git ' "$art" && ! grep -q '^From ' "$art"; then
-        git -C "$WT" apply --index --whitespace=nowarn "$art"
+        git -C "$WT" apply --index --whitespace=nowarn "$art" >/dev/null
       else
-        git -C "$WT" am --3way --whitespace=nowarn "$art"
+        git -C "$WT" am --3way --whitespace=nowarn "$art" >/dev/null
       fi
       ;;
   esac
