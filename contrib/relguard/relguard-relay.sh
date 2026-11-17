@@ -183,7 +183,7 @@ ncommits="$(git -C "$WT" rev-list --count "$base_ref"..HEAD)"
 [[ "$ncommits" == "1" ]] || die "expected 1 commit after squash, got $ncommits"
 
 if [[ "$no_push" -eq 0 ]]; then
-  git -C "$WT" push -u "$remote" "HEAD:refs/heads/$branch"
+  git -C "$WT" push -u "$remote" "HEAD:refs/heads/$branch" >/dev/null
 fi
 
 ts="$(iso_now)"
