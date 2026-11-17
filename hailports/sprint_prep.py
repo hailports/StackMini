@@ -12,7 +12,10 @@ with one lock so two runs cannot overlap.
 from __future__ import annotations
 
 import argparse
-import fcntl
+try:
+    import fcntl
+except ImportError:  # Windows has no fcntl
+    fcntl = None
 import json
 import os
 import re
@@ -506,11 +509,19 @@ def atomic_text(path: Path, text: str) -> None:
 
 def link_latest(directory: Path, target_name: str) -> None:
     directory.mkdir(parents=True, exist_ok=True)
+    dest = directory / "latest.json"
     tmp = directory / (".latest-%s.tmp" % os.getpid())
     if tmp.exists() or tmp.is_symlink():
         tmp.unlink()
-    tmp.symlink_to(target_name)
-    os.replace(tmp, directory / "latest.json")
+    try:
+        tmp.symlink_to(target_name)
+        os.replace(tmp, dest)
+        return
+    except OSError:
+        if tmp.exists() or tmp.is_symlink():
+            tmp.unlink()
+    tmp.write_bytes((directory / target_name).read_bytes())
+    os.replace(tmp, dest)
 
 
 def write_outputs(directory: Path, payload: dict, top_md: str, meter: dict) -> dict:
@@ -537,6 +548,9 @@ def log_line(path: Path, msg: str) -> None:
 def try_lock(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
     handle = open(path, "a", encoding="utf-8")
+    if fcntl is None:
+        # Exclusive locks are a Unix flock. A single Windows run can continue.
+        return handle
     try:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:

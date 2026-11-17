@@ -13,16 +13,16 @@ touch "$RELGUARD_RELAY_LEDGER"
 
 BARE="$TMP/bare.git"; git init -q --bare "$BARE"
 REPO="$TMP/repo"; git init -q -b main "$REPO"
-git -C "$REPO" config user.name "Test User"
-git -C "$REPO" config user.email "test@example.com"
+git -C "$REPO" config user.name "HailPorts"
+git -C "$REPO" config user.email "noreply@hailports.com"
 echo hi > "$REPO/README"; git -C "$REPO" add README
 git -C "$REPO" -c core.hooksPath=/dev/null commit -q -m init
 git -C "$REPO" remote add origin "$BARE"
 git -C "$REPO" -c core.hooksPath=/dev/null push -q origin main
 
 CLONE="$TMP/clone"; git clone -q "$BARE" "$CLONE"
-git -C "$CLONE" config user.name "Test User"
-git -C "$CLONE" config user.email "test@example.com"
+git -C "$CLONE" config user.name "HailPorts"
+git -C "$CLONE" config user.email "noreply@hailports.com"
 mkdir -p "$CLONE/src"
 echo 'x' > "$CLONE/src/a.txt"
 git -C "$CLONE" -c core.hooksPath=/dev/null add src/a.txt

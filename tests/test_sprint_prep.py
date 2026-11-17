@@ -217,13 +217,17 @@ def test_meter_formula_and_outputs(tmp_path):
     paths = sp.write_outputs(tmp_path, payload, md, row)
     saved = json.loads(Path(paths["json"]).read_text(encoding="utf-8"))
     assert saved["item_count"] == 1
-    assert Path(paths["latest"]).is_symlink()
-    assert Path(paths["latest"]).resolve() == Path(paths["json"]).resolve()
+    latest = Path(paths["latest"])
+    if latest.is_symlink():
+        assert latest.resolve() == Path(paths["json"]).resolve()
+    else:
+        assert latest.read_text(encoding="utf-8") == Path(paths["json"]).read_text(encoding="utf-8")
     assert "Check the login" in Path(paths["md"]).read_text(encoding="utf-8")
     meter = Path(paths["meter"]).read_text(encoding="utf-8")
     assert "140" in meter
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="exclusive locks use fcntl")
 def test_lock_blocks_a_second_run(tmp_path):
     first = sp.try_lock(tmp_path / "run.lock")
     second = sp.try_lock(tmp_path / "run.lock")

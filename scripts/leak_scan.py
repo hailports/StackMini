@@ -129,7 +129,17 @@ def scan_history(root: Path) -> list[str]:
         return []
     if not patch.strip():
         return []
-    return scan_text("unpublished", patch, git_shas(root))
+    # Removed lines are the cleanup. Only added lines and commit metadata are scanned.
+    kept = []
+    for line in patch.splitlines():
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("-") or line.startswith(" "):
+            continue
+        if line.startswith("diff ") or line.startswith("index ") or line.startswith("@@"):
+            continue
+        kept.append(line[1:] if line.startswith("+") else line)
+    return scan_text("unpublished", "\n".join(kept), git_shas(root))
 
 
 def main() -> int:

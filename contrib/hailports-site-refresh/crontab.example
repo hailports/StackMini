@@ -1,0 +1,4 @@
+# Optional backup if cron is available. On the hailports box the supervised
+# live-export-loop already runs refresh_site_data.sh every 15 minutes.
+# The script's own flock prevents overlapping runs.
+*/15 * * * * /usr/bin/flock -n /tmp/hp_site_refresh.cron.lock /bin/bash -lc "timeout 480 /workspace/hp/gen/refresh_site_data.sh" >> $HOME/social/site/refresh.log 2>&1
