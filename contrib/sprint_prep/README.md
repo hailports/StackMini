@@ -37,3 +37,13 @@ An unfinished day file (status still running) is resumed. Cards that already hav
 ## Notes
 
 A later note step may mail one note per card. It mails a card only when it is in the current iteration, System.AssignedTo is the configured owner or blocking_who names that owner, and the state is still open. Testing, resolved, closed, done, and removed are not open. The next-step sentence does not count. If that step would send more than 25 notes, it sends none.
+
+## Biweekly plan note: focus, proposals, no copies
+
+`hailports/sprint_focus.py` holds the pure helpers for a biweekly sprint plan note:
+an editable focus config (`sprint_focus.example.json`: focus areas, de-prioritized
+areas, out-of-office windows, who work may be pulled from), a cap scaled by working
+days, ticket proposals for the owner (suggestions in the note only; nothing is
+assigned), a diff against the previous plan that fails closed to "no change since
+the last plan" instead of a copy, and a check that freshly worded model text cites
+only numbers already in its sources. Model and tracker URLs must be loopback.

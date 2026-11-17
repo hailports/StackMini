@@ -1,0 +1,22 @@
+{
+  "_about": "Editable focus for a biweekly sprint plan note. 'match' terms are lowercase and matched as whole words on title, parent title and epic tag. A focus match in the title beats a de-prioritized match. Proposals are suggestions only; nothing is assigned.",
+  "owner": "me",
+  "manager": "Lead",
+  "cap": 8,
+  "focus": [
+    {"name": "payments", "match": ["prepay", "prepayment", "payments"]},
+    {"name": "checkout phase 2", "match": ["checkout2", "checkout phase 2"]},
+    {"name": "integration", "match": ["integration", "sync"]},
+    {"name": "KTLO", "match": ["ktlo", "helpdesk"]}
+  ],
+  "deprioritize": [
+    {"name": "legacy portal", "match": ["legacy portal"]}
+  ],
+  "pull_from": ["Lead"],
+  "out_of_office": [
+    {"who": "me", "start": "2030-01-14", "end": "2030-01-16"}
+  ],
+  "ktlo": {"types": ["Bug"], "max_priority": 2, "max_unpointed": 2},
+  "max_unpointed_commit": 3,
+  "max_stretch": 3
+}
