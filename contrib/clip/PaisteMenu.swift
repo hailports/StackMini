@@ -344,7 +344,19 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         if board == nil { board = SetupBoard() }
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
-        board?.show()
+        if SetupBoard.needsLicense() {
+            board?.showLicense()
+        } else {
+            board?.licenseOnly = false
+            board?.show()
+        }
+        watchTrust()
+    }
+
+    func openLicense() {
+        if board == nil { board = SetupBoard() }
+        NSApp.setActivationPolicy(.regular)
+        board?.showLicense()
         watchTrust()
     }
 
@@ -416,7 +428,8 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
                 if captureNote == "need-screen-recording" {
                     CGRequestScreenCaptureAccess()
                 }
-                let hint = blocked == "license" ? "Right-click and open setup to paste your key" : (captureNote == "need-screen-recording" ? "Allow paisty in Screen Recording" : "Nothing to copy")
+                if blocked == "license" { self.openLicense() }
+                let hint = blocked == "license" ? "Your trial ended" : (captureNote == "need-screen-recording" ? "Allow paisty in Screen Recording" : "Nothing to copy")
                 self.fail(hint)
                 self.log.error("empty \(captureNote, privacy: .public)")
             }

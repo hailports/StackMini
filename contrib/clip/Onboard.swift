@@ -69,6 +69,26 @@ final class SetupBoard: NSObject, NSWindowDelegate {
     var autoNeeds: [String] = []
     var autoLine = ""
     var pendingAuto = false
+    var licenseOnly = false
+    var trialEmail = ""
+    var licenseInput = ""
+    var trialInFlight = false
+    var trialFailure = false
+    var sendTrialButton: NSButton?
+
+    static let pricingURL = URL(string: "https://www.paisty.com/pricing")!
+
+    static func needsLicense() -> Bool {
+        let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".config/paiste/license")
+        guard let key = try? String(contentsOf: url, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+              key.contains("."), key.count > 40, key.count < 4000 else { return true }
+        let parts = key.split(separator: ".")
+        guard parts.count >= 2,
+              let payload = Data(base64Encoded: String(parts[1]).replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/") + String(repeating: "=", count: (4 - parts[1].count % 4) % 4)),
+              let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+              let exp = json["exp"] as? NSNumber else { return false }
+        return exp.doubleValue <= Date().timeIntervalSince1970
+    }
 
     /// OpenAI-compatible chat services. The address and a starting model fill in; the model stays editable.
     static let providers: [(id: String, name: String, url: String, model: String)] = [
@@ -190,6 +210,13 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             loaded = true
             load()
         }
+    }
+
+    func showLicense() {
+        licenseOnly = true
+        page = 3
+        statusField.stringValue = ""
+        show()
     }
 
     func load() {
@@ -337,15 +364,69 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             try key.write(to: url, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-            statusField.stringValue = "Key saved on this Mac."
+            fields["license"]?.stringValue = ""
+            licenseInput = ""
+            licenseOnly = false
+            render()
+            statusField.stringValue = "Key saved. Try drafting again."
         } catch {
             statusField.stringValue = "That key was not kept."
         }
     }
 
+    @objc func buy() {
+        NSWorkspace.shared.open(Self.pricingURL)
+    }
+
+    @objc func sendTrialKey() {
+        guard !trialInFlight else { return }
+        let email = (fields["trial-email"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        trialEmail = email
+        guard email.count <= 254, email.range(of: #"^[^\s@]+@[^\s@]+\.[^\s@]+$"#, options: .regularExpression) != nil else {
+            statusField.stringValue = "Enter a valid email address."
+            return
+        }
+        var request = URLRequest(url: URL(string: "https://www.paisty.com/api/trial")!)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 10
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["email": email])
+        trialInFlight = true
+        trialFailure = false
+        sendTrialButton?.isEnabled = false
+        statusField.stringValue = "Sending request..."
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.trialInFlight = false
+                self.sendTrialButton?.isEnabled = true
+                let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+                let json = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+                let reason = json["reason"] as? String ?? ""
+                if error == nil, code == 200, json["ok"] as? Bool == true {
+                    self.trialFailure = false
+                    self.statusField.stringValue = "Check your email for the key"
+                } else {
+                    self.trialFailure = true
+                    switch (code, reason) {
+                    case (403, "used"):
+                        self.statusField.stringValue = "This email's trial has ended."
+                    case (403, "network"):
+                        self.statusField.stringValue = "A trial was already started from this network."
+                    case (429, _):
+                        self.statusField.stringValue = "Too many requests. Please try later."
+                    default:
+                        self.statusField.stringValue = "Could not send a trial key. Please try later."
+                    }
+                }
+                self.render()
+            }
+        }.resume()
+    }
+
     @objc func hint() {
         capture()
-        statusField.stringValue = "Local needs a model already running on this Mac, or on a powerful machine you can ssh to. Host name, then http://127.0.0.1:8080/v1. Paid works anywhere online: the service URL, the model name, and the key. Press Connect. The key stays here."
+        statusField.stringValue = "Local needs a model already running on this Mac, or on a computer you can ssh to. Host name, then http://127.0.0.1:8080/v1. Paid works online: enter the service URL, model name, and key. Press Connect."
     }
 
     func save() {
@@ -439,12 +520,15 @@ final class SetupBoard: NSObject, NSWindowDelegate {
     }
 
     func render() {
+        if let email = fields["trial-email"] { trialEmail = email.stringValue }
+        if let license = fields["license"] { licenseInput = license.stringValue }
         fields = [:]
         toggles = [:]
         linkControl = nil
         extra.subviews.forEach { $0.removeFromSuperview() }
-        backButton.isHidden = page == 0
-        nextButton.title = page == 3 ? "Save on this Mac" : (page == 0 ? "Customize" : "Next")
+        backButton.isHidden = page == 0 || licenseOnly
+        nextButton.isHidden = licenseOnly
+        nextButton.title = page == 3 ? "Save setup" : (page == 0 ? "Customize" : "Next")
         switch page {
         case 0:
             titleField.stringValue = "The icon is in the menu bar."
@@ -455,21 +539,34 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             autoPage()
         case 1:
             titleField.stringValue = "Pick your AI."
-            body.stringValue = "Use the AI you already pay for: Claude, ChatGPT, or Cursor. Or paste a key from OpenAI, Anthropic, Grok, Gemini, and more. The key stays on this Mac."
+            body.stringValue = "Bring your own AI: Claude, ChatGPT, or Cursor. Or paste a key from OpenAI, Anthropic, Grok, Gemini, and more."
             aiPage()
         case 2:
             titleField.stringValue = "A local model is optional."
             body.stringValue = "Most people already finished on the last screen. Next keeps that AI. This page is only if you still want a local model."
             localPage()
         default:
-            titleField.stringValue = "Save on this Mac."
-            body.stringValue = reviewCopy()
-            _ = field("license", "License key from the email", "", 8)
+            titleField.stringValue = licenseOnly ? "Your trial ended" : "Save setup."
+            body.stringValue = licenseOnly ? "Paste a key from your email, or buy a license." : reviewCopy()
+            _ = field("trial-email", "Email address for your trial key", trialEmail, 8)
+            let send = NSButton(title: "Send my trial key", target: self, action: #selector(sendTrialKey))
+            send.frame = NSRect(x: 0, y: 44, width: 170, height: 28)
+            send.bezelStyle = .rounded
+            send.isEnabled = !trialInFlight
+            sendTrialButton = send
+            extra.addSubview(send)
+            _ = field("license", "License key from the email", licenseInput, 84)
             let saveKey = NSButton(title: "Save key", target: self, action: #selector(saveLicense))
-            saveKey.frame = NSRect(x: 0, y: 44, width: 140, height: 28)
+            saveKey.frame = NSRect(x: 0, y: 120, width: 140, height: 28)
             saveKey.bezelStyle = .rounded
             extra.addSubview(saveKey)
-            extraHeight = 84
+            if licenseOnly || trialFailure {
+                let buyButton = NSButton(title: "Buy", target: self, action: #selector(buy))
+                buyButton.frame = NSRect(x: 150, y: 120, width: 100, height: 28)
+                buyButton.bezelStyle = .rounded
+                extra.addSubview(buyButton)
+            }
+            extraHeight = 160
         }
         if !body.stringValue.contains("doesn't send or keep your mail") {
             body.stringValue += "\n\npaisty itself doesn't send or keep your mail; your AI model writes the draft."
@@ -598,7 +695,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
                 y = providerPopup(i, row.url, y)
                 y = field("api-url-\(i)", "https://…/v1", row.url, y)
                 y = field("api-model-\(i)", "Model name", row.model, y)
-                let placeholder = row.hasKey || !row.key.isEmpty ? "Key already on this Mac. Leave blank to keep it." : "API key. Stays on this Mac."
+                let placeholder = row.hasKey || !row.key.isEmpty ? "Key already saved. Leave blank to keep it." : "API key"
                 y = field("api-key-\(i)", placeholder, "", y, secure: true)
                 y = rowButtons(probe: 2000 + i, remove: 4000 + i, showRemove: apis.count > 1, y)
             }
@@ -861,7 +958,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             render()
             return
         }
-        statusField.stringValue = "Writing the starter. The model key stays off this app. paisty does not keep it."
+        statusField.stringValue = "Writing the starter."
         DispatchQueue.global(qos: .userInitiated).async {
             let done = SetupBoard.run(["onboard", "--pull", "notes", "--answers", url.path])
             try? FileManager.default.removeItem(at: url)
@@ -1114,7 +1211,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         var y = tagButton("Add Apple Notes", #selector(pullSource(_:)), 1, 0)
         y = tagButton("Add OneNote", #selector(pullSource(_:)), 2, y)
         y = tagButton("Add Monday", #selector(pullSource(_:)), 3, y)
-        y = field("monday", "Monday token. Stays on this Mac.", "", y, secure: true)
+        y = field("monday", "Monday token", "", y, secure: true)
         y = tagButton("Add Littlebird", #selector(pullSource(_:)), 4, y)
         y = tagButton("Add Zoom call notes", #selector(pullSource(_:)), 5, y)
         y = tagButton("Add a notes file", #selector(pickFeed(_:)), 6, y)
@@ -1202,7 +1299,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             let line = done.out.trimmingCharacters(in: .whitespacesAndNewlines)
             DispatchQueue.main.async {
                 if line.contains("need-token") {
-                    self.feedNote = "Paste the Monday token in the field. It stays on this Mac."
+                    self.feedNote = "Paste the Monday token in the field."
                 } else if line.hasPrefix("added 0") || done.code != 0 {
                     self.feedNote = "No text notes were there yet. Export from that app, then press the button again."
                 } else {
