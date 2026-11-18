@@ -4,7 +4,9 @@ set -eu
 HERE=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 ROOT=$(CDPATH= cd -- "$HERE/../.." && pwd)
 SIGN="${PAISTY_SIGN:-}"
-if ! security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGN"; then
+# Empty PAISTY_SIGN must not be grepped: an empty pattern matches any find-identity
+# output, including "0 valid identities found", and codesign --sign "" fails.
+if [ -z "$SIGN" ] || ! security find-identity -v -p codesigning 2>/dev/null | grep -q -F -- "$SIGN"; then
   SIGN="-"
 fi
 PY="${PAISTY_PYTHON_PREFIX:-}"
