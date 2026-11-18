@@ -7,7 +7,7 @@ They are not part of the `hailports` command and are not installed by `hailports
 ## macOS
 
 - `macos/zoom_session_watchdog.py` and `macos/outlook_session_watchdog.py` run from launchd every 180 seconds. Each tick reads the page over CDP and sorts it into ok, rows0 (signed in but no conversation rows), signed_out, sso_error, page_missing, or browser_down. The read is read-only.
-- After three bad ticks in a row they try one fix inside the same tab: expand the collapsed chat section, reload the same tab, or restore the cookie jar on an endpoint that is not protected. If the next tick is still bad, they send one login-link alert for that break and one "back in" note when it recovers.
+- After three bad ticks in a row they try one fix inside the same tab: expand the collapsed chat section, reload the same tab, or restore the cookie jar on an endpoint that is not protected. If the local :18812 Zoom page is missing for two ticks, they open one Team Chat tab over CDP (`/json/new`, at most once per 10 minutes) without restarting the browser. If the next tick is still bad, they send one login-link alert for that break and one "back in" note when it recovers.
 - `macos/zoom_session_vault.py` and `macos/owa_session_vault.py` save and restore the site cookies. Files are mode 0600 and the newest three are kept. Restore refuses a protected port.
 - `macos/launchd/` holds example launchd agents. The label prefix is `com.example`. Change the paths to match your install.
 

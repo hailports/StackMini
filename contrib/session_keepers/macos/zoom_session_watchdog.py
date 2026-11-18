@@ -16,6 +16,8 @@ Every tick (launchd, 180 s):
                                                   (zoom_web_send._DM_SECTION_STATE_JS / _expand_sections)
        rows0 stuck loading / sso_error          -> Page.navigate SAME tab to example.zoom.us/wc/team-chat (<=1 per 20 min)
        signed_out on a non-:18812 endpoint      -> tools/zoom_session_vault.py restore (<=1 per 30 min)
+     :18812 page_missing for >=2 ticks -> PUT /json/new?team-chat (<=1 per 10 min; records last_open_at).
+     Next tick uses normal logic (signed_out on a non-:18812 endpoint -> vault remint).
   4. still bad on the next bad tick after a heal -> authlink.login_needed('zoom') (private iMessage to the
      Mac's own handle with the Tailscale-only link), ONCE per break. ok again -> authlink.recovered('zoom').
 HARD: never starts/kills/restarts any browser, never touches :18822, never types or sends in Zoom.
@@ -41,8 +43,10 @@ TEAM_CHAT = "https://example.zoom.us/wc/team-chat"
 MINI_ZOOM = "http://127.0.0.1:18812"
 FORBIDDEN_PORTS = {"18822"}
 THRESHOLD = 3            # "more than 2 consecutive checks"
+PAGE_MISSING_THRESHOLD = 2  # :18812 open-tab after >=2 missing ticks
 NAV_COOLDOWN_S = 6 * 60   # 2026-11-03: box :9227 Team Chat hang cleared on a later same-tab reload; retry sooner
 VAULT_COOLDOWN_S = 30 * 60
+OPEN_TAB_COOLDOWN_S = 10 * 60
 BAD = ("rows0", "signed_out", "sso_error", "page_missing", "browser_down")
 LOGIN_BITS = ("zoom.us/signin", "zoom.us/login", "zoom.us/saml", "login.microsoftonline", "/adfs/",
               "idp.corp.example.com", "idp2.corp.example.com", "accounts.google.com")
@@ -192,9 +196,30 @@ def _reader_lock():
     return zoom_transport_lock.reader_transport_lock(timeout=8)
 
 
+def _open_team_chat_tab(ep: str) -> str:
+    """Open one Team Chat tab via CDP /json/new. Never restarts the browser."""
+    _guard(ep)
+    req = urllib.request.Request(f"{ep.rstrip('/')}/json/new?{TEAM_CHAT}", method="PUT")
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        resp.read()
+    return "opened_team_chat_tab"
+
+
 def heal(ep: str, state: str, st: dict, *, dry: bool) -> str:
     _guard(ep)
     now = _now()
+    # :18812 page_missing: open one Team Chat tab (rate-limited). No restart.
+    if state == "page_missing" and ep.rstrip("/").endswith(":18812"):
+        if now - float(st.get("last_open_at") or 0) < OPEN_TAB_COOLDOWN_S:
+            return "open_tab_cooldown"
+        if dry:
+            return "would_open_team_chat_tab"
+        try:
+            how = _open_team_chat_tab(ep)
+        except Exception as exc:
+            return f"open_tab_err={type(exc).__name__}"
+        st["last_open_at"] = now
+        return how
     if state in ("browser_down", "page_missing"):
         return "none_no_restart_allowed"
     if state == "signed_out":
@@ -257,7 +282,12 @@ def step(st: dict, state: str, *, now: float) -> list[str]:
     st.setdefault("break_since", None)
     if not st.get("break_since"):
         st["break_since"] = now
-    if st["consecutive_bad"] < THRESHOLD:
+    need = PAGE_MISSING_THRESHOLD if state == "page_missing" else THRESHOLD
+    if st["consecutive_bad"] < need:
+        return actions
+    if state == "page_missing":
+        # Open tab only; alert/remint wait for the next tick's real state.
+        actions.append("heal")
         return actions
     if st.get("healed_at") and not st.get("alerted"):
         actions.append("alert")
@@ -285,7 +315,7 @@ def tick(*, dry: bool = False) -> int:
             st["healed_at"] = st.get("healed_at") or now
             st["last_heal"] = how
             notes.append(f"heal={how}")
-            if not dry and how.startswith(("expand", "navigate", "vault")):
+            if not dry and how.startswith(("expand", "navigate", "vault", "opened")):
                 time.sleep(20)
                 state2, _ = probe(ep)
                 notes.append(f"recheck={state2}")
@@ -323,6 +353,12 @@ def self_test() -> int:
     assert step(st, "rows0", now=5) == ["heal"]             # no second page this break; heal keeps trying
     assert step(st, "ok", now=6) == ["recovered"] and st["consecutive_bad"] == 0
     assert step(st, "signed_out", now=7) == [] and step(st, "ok", now=8) == []   # blip <3 never acts
+    # page_missing: open one Team Chat tab at 2nd tick; cooldown via last_open_at
+    pm: dict = {}
+    assert step(pm, "page_missing", now=1) == []
+    assert step(pm, "page_missing", now=2) == ["heal"]
+    assert heal(MINI_ZOOM, "page_missing", {}, dry=True) == "would_open_team_chat_tab"
+    assert heal(MINI_ZOOM, "page_missing", {"last_open_at": 1e12}, dry=True) == "open_tab_cooldown"
     try:
         _guard("http://127.0.0.1:18822")
         raise AssertionError("18822 guard failed")
