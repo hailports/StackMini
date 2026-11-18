@@ -344,7 +344,9 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         if board == nil { board = SetupBoard() }
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
-        if SetupBoard.needsLicense() {
+        // First-run and menu "Open setup" keep the full wizard when no key exists yet.
+        // A saved key that is expired or malformed opens the recovery screen.
+        if SetupBoard.hasExpiredOrInvalidLicense() {
             board?.showLicense()
         } else {
             board?.licenseOnly = false

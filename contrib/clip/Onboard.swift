@@ -78,16 +78,54 @@ final class SetupBoard: NSObject, NSWindowDelegate {
 
     static let pricingURL = URL(string: "https://www.paisty.com/pricing")!
 
-    static func needsLicense() -> Bool {
+    enum LicenseState {
+        case missing, valid, expiredOrInvalid
+    }
+
+    static func hexData(_ hex: String) -> Data? {
+        let s = hex.lowercased()
+        guard !s.isEmpty, s.count % 2 == 0, s.allSatisfy({ $0.isHexDigit }) else { return nil }
+        var data = Data(capacity: s.count / 2)
+        var i = s.startIndex
+        while i < s.endIndex {
+            let j = s.index(i, offsetBy: 2)
+            guard let byte = UInt8(s[i..<j], radix: 16) else { return nil }
+            data.append(byte)
+            i = j
+        }
+        return data
+    }
+
+    /// Tokens are hex(json).hex(sig), not JWT. Lifetime keys use exp 0.
+    static func licenseState() -> LicenseState {
         let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".config/paiste/license")
         guard let key = try? String(contentsOf: url, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
-              key.contains("."), key.count > 40, key.count < 4000 else { return true }
-        let parts = key.split(separator: ".")
-        guard parts.count >= 2,
-              let payload = Data(base64Encoded: String(parts[1]).replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/") + String(repeating: "=", count: (4 - parts[1].count % 4) % 4)),
-              let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
-              let exp = json["exp"] as? NSNumber else { return false }
-        return exp.doubleValue <= Date().timeIntervalSince1970
+              !key.isEmpty else { return .missing }
+        guard key.contains("."), key.count > 40, key.count < 4000 else { return .expiredOrInvalid }
+        let parts = key.split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2,
+              let payload = hexData(String(parts[0])),
+              let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else { return .expiredOrInvalid }
+        let exp: Double
+        if let number = json["exp"] as? NSNumber {
+            exp = number.doubleValue
+        } else if let value = json["exp"] as? Double {
+            exp = value
+        } else if let value = json["exp"] as? Int {
+            exp = Double(value)
+        } else {
+            return .expiredOrInvalid
+        }
+        if exp == 0 || exp > Date().timeIntervalSince1970 { return .valid }
+        return .expiredOrInvalid
+    }
+
+    static func needsLicense() -> Bool {
+        licenseState() != .valid
+    }
+
+    static func hasExpiredOrInvalidLicense() -> Bool {
+        licenseState() == .expiredOrInvalid
     }
 
     /// OpenAI-compatible chat services. The address and a starting model fill in; the model stays editable.
