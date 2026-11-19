@@ -5,6 +5,14 @@ on:
   pull_request:
 
 jobs:
+  public-terms:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: internal terms, paths and commit messages
+        run: python3 scripts/public_terms_check.py --messages HEAD
   test:
     strategy:
       fail-fast: false

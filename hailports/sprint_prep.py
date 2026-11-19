@@ -867,7 +867,8 @@ def search_knowledge_base(title: str) -> str:
     root = stack_home()
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
-    from tools import knowledge_base_query as wb
+    import importlib
+    wb = importlib.import_module(os.environ.get("HAILPORTS_KB_MODULE", "tools.knowledge_base_query"))
     result = wb.ask(clip(title, 180), k=3, scope="all", graph=False)
     if not isinstance(result, dict) or result.get("blocked"):
         return ""

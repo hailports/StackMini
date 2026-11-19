@@ -42,16 +42,3 @@ Logs go to `~/.local/state/jev/jev.jsonl` (question ids, ok/ms/err, caller, host
 Treat only confident scores as decisive (`noul` >= 0.9 or <= 0.1). A mid score, a timeout, or `null` leaves the caller's existing behavior. Never block a task on this call.
 
 `hailports.jev_gates` is the decision layer: local-answer quality, a pre-route check, a done-check, a risk check before a mutation, whether a pack answers a question, a draft gate, and noise triage. Draft staging fails closed only on a confident fail. Everything else fails open.
-
-## Social queue gates
-
-`hailports.social_jev` is an optional fail-open check before a social draft is queued. Callers use a `social-*` caller field. One miss does not block the existing path.
-
-- `draft_quality` (`social-draft`) — specific and finished, not a stub
-- `voice_ok` (`social-voice`) — plain human speech, no AI tells
-- `hook_ok` (`social-hook`) — a concrete first line
-- `unsafe` (`social-risk`) — harassment, a pile-on, a money promise, or a private-system leak
-- `near_duplicate` (`social-dedupe`) — the same claim as a recent line
-- `before_queue` (`social-queue`) — those checks together. A post can fail the hook. A reply or comment does not. A short react is risk only
-
-Confident scores only (`noul` >= 0.9 or <= 0.1). `hold()` is the production entry and loads recent lines when the caller does not pass any. `JEV_DISABLE=1` turns the calls off. Secrets are masked. Legal, finance, and credential text is not sent.
