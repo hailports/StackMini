@@ -98,6 +98,12 @@ _SOCIAL = (
 _UNSURE = ("i don't know", "i do not know", "not sure", "cannot tell", "low confidence", "insufficient")
 _FOOTER_AT = ("## STANDING RULE",)
 _PREP_HINT = re.compile(r"\b(?:prep|brief|ticket|hold status)\b|\b\d{5,}\b", re.I)
+# Live knowledge_base (:8079/v1/ask) for lookup-shaped asks — not packed/stale context.
+_WB_HINT = re.compile(
+    r"\b(?:crm|knowledge[ _-]?base|wiki|ticket|"
+    r"who owns|status of|assigned(?:_to)?|owner of)\b|\b\d{5,6}\b",
+    re.I,
+)
 
 
 def router_disabled() -> bool:
@@ -165,7 +171,9 @@ def _clip(text: str, limit: int) -> str:
 def local_user_delta(task: str, stakes: str, evidence: str) -> str:
     """Stable instruction prefix, then a short delta (cache-friendly)."""
     clean = split_footer(task)[0]
-    ev = _clip(evidence, 700) or "(none)"
+    # Live knowledge_base hits need more room than prep snippets; still clipped.
+    ev_limit = 1800 if (evidence or "").lstrip().startswith("KNOWLEDGE_BASE") else 700
+    ev = _clip(evidence, ev_limit) or "(none)"
     return (
         LOCAL_ASK_PREFIX
         + "\nSTAKES: "
@@ -175,6 +183,12 @@ def local_user_delta(task: str, stakes: str, evidence: str) -> str:
         + "\nEVIDENCE:\n"
         + ev
         + "\n"
+        + (
+            "If EVIDENCE starts with KNOWLEDGE_BASE, answer ONLY from those live hits "
+            "(cite ref). Do not invent ticket fields.\n"
+            if (evidence or "").lstrip().startswith("KNOWLEDGE_BASE")
+            else ""
+        )
     )
 
 
@@ -226,9 +240,21 @@ def _confidence(obj: dict | None, answer: str) -> float:
     return 0.7
 
 
-def policy_decision(task: str, local_text: str, *, extra_high: list[str] | None = None, backend: str = "local") -> dict:
+def policy_decision(
+    task: str,
+    local_text: str,
+    *,
+    extra_high: list[str] | None = None,
+    backend: str = "local",
+    stakes_override: str | None = None,
+    stake_why_override: str | None = None,
+) -> dict:
     """Apply the conservative contract to one local reply. No network."""
     stakes, stake_why = classify_stakes(task, extra_high)
+    if stakes_override in {"low", "high", "unsure"}:
+        stakes = stakes_override
+        if stake_why_override:
+            stake_why = stake_why_override
     obj = parse_model_json(local_text)
     answer = ""
     model_why = ""
@@ -261,8 +287,16 @@ def policy_decision(task: str, local_text: str, *, extra_high: list[str] | None 
     if stakes == "unsure":
         return pack("need_premium", why or "stakes_unsure", "")
     # Low-end: finish locally when the text is actually usable.
+    # Live knowledge_base lookups: prefer the usable answer even if the model
+    # hedged with decision=need_premium (it often does when EVIDENCE is rich).
     if model_decision == "need_premium" and not _usable(answer):
         return pack("need_premium", why or "local_unusable", "")
+    if (
+        model_decision == "need_premium"
+        and _usable(answer)
+        and stake_why == "knowledge_base_live_lookup"
+    ):
+        return pack("complete_local", "knowledge_base_live_usable", answer)
     if conf < 0.55 and not _usable(answer):
         return pack("need_premium", why or "low_confidence", "")
     if _usable(answer):
@@ -322,6 +356,60 @@ def _sha(text: str) -> str:
 
 def want_prep(task: str) -> bool:
     return bool(_PREP_HINT.search(split_footer(task)[0]))
+
+
+def want_knowledge_base(task: str) -> bool:
+    return bool(_WB_HINT.search(split_footer(task)[0]))
+
+
+def fetch_knowledge_base(cfg: dict, task: str) -> str:
+    """Live knowledge_base search via :8079/v1/ask. Empty on miss/error (fail-open)."""
+    if os.environ.get("LOCAL_FIRST_KNOWLEDGE_BASE", "1").strip() in {"0", "off", "no"}:
+        return ""
+    if not want_knowledge_base(task):
+        return ""
+    base = str(
+        cfg.get("knowledge_base_url")
+        or os.environ.get("KNOWLEDGE_BASE_URL")
+        or ""
+    ).rstrip("/")
+    if not base:
+        return ""
+    q = _clip(split_footer(task)[0], 220).replace("\n", " ").strip()
+    if len(q) < 3:
+        return ""
+    from urllib.parse import urlencode
+
+    url = base + "/v1/ask?" + urlencode({"q": q, "scope": "all", "k": "3"})
+    cmd = ["curl", "-sS", "--max-time", "20", url]
+    socks = str(cfg.get("socks_proxy") or "").strip()
+    if socks and "127.0.0.1" not in base and "localhost" not in base:
+        cmd[1:1] = ["--socks5-hostname", socks]
+    try:
+        proc = subprocess.run(cmd, text=True, capture_output=True, timeout=25)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    raw = (proc.stdout or "").strip()
+    if not raw.startswith("{"):
+        return ""
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return ""
+    hits = data.get("hits") if isinstance(data, dict) else None
+    if not isinstance(hits, list) or not hits:
+        return ""
+    lines = ["KNOWLEDGE_BASE (live :8079):"]
+    for hit in hits[:3]:
+        if not isinstance(hit, dict):
+            continue
+        ref = str(hit.get("ref") or hit.get("n") or "")[:80]
+        title = str(hit.get("title") or "")[:160]
+        text = str(hit.get("text") or hit.get("snippet") or "")[:420]
+        lines.append(f"- ref={ref} | {title}")
+        if text:
+            lines.append("  " + text.replace("\n", " "))
+    return _clip("\n".join(lines), 1600)
 
 
 def fetch_prep(cfg: dict, task: str) -> str:
@@ -869,15 +957,28 @@ def route_task(task: str, *, caller: str = "cli", fetch=None, config: dict | Non
                 "premium_out_saved": int(hit.get("premium_out_saved") or coop.estimate_tokens(answer)),
             }
             return _finish_route(cfg, result, task, execute_paid)
+    evidence = ""
+    wb = ""
+    if fetch is None:
+        wb = fetch_knowledge_base(cfg, task)
+        if wb:
+            evidence = wb
+            # Live knowledge_base lookups are safe to finish locally even when the
+            # keyword stakes classifier says unsure (ticket ids alone ≠ high).
+            if stakes == "unsure" and klass != "build":
+                stakes, stake_why = "low", "knowledge_base_live_lookup"
     if stakes in {"high", "unsure"}:
         result = _skipped_or_coop(task, stakes, stake_why, extra, cfg, fetch, caller)
         result["class"] = klass
         return _finish_route(cfg, result, task, execute_paid)
-    evidence = ""
     if fetch is None and config is None:
-        evidence = fetch_prep(cfg, task)
+        prep = fetch_prep(cfg, task)
+        if prep:
+            evidence = (evidence + ("\n" + prep if evidence else prep)).strip()
     elif fetch is None and cfg.get("prep_url"):
-        evidence = fetch_prep(cfg, task)
+        prep = fetch_prep(cfg, task)
+        if prep:
+            evidence = (evidence + ("\n" + prep if evidence else prep)).strip()
     prompt = local_user_delta(task, stakes, evidence)
     priority = 0 if caller in {"grok", "cli", "cursor", "claude", "codex", "cursor-agent", "agent"} else 2
     if fetch is None:
@@ -894,10 +995,31 @@ def route_task(task: str, *, caller: str = "cli", fetch=None, config: dict | Non
         result["usage"] = {}
     else:
         local_text = str(local.get("text") or "")
-        result = policy_decision(task, local_text, extra_high=extra, backend=backend)
+        result = policy_decision(
+            task,
+            local_text,
+            extra_high=extra,
+            backend=backend,
+            stakes_override=stakes,
+            stake_why_override=stake_why,
+        )
         result["usage"] = local.get("usage") or {}
         result["elapsed_s"] = local.get("elapsed_s")
         result = _jev_after_local(task, local_text, result, caller)
+        # If Jev/policy still emptied a usable knowledge_base-backed answer, restore it.
+        if (
+            wb
+            and result.get("decision") != "complete_local"
+            and stake_why == "knowledge_base_live_lookup"
+        ):
+            obj = parse_model_json(local_text) or {}
+            ans = str(obj.get("answer") or "").strip() or str(local_text or "").strip()
+            if _usable(ans):
+                result["decision"] = "complete_local"
+                result["answer"] = ans
+                result["why"] = "knowledge_base_live_restore"
+                result["stakes"] = "low"
+                result["brief"] = build_brief("low", "knowledge_base_live_restore", ans)
     result["caller"] = caller
     result["class"] = klass
     _remember(cfg, task, result, "low_local")
