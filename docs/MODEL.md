@@ -1,6 +1,30 @@
 # Model and server build
 
-## Live chat server on 2026-11-15
+## Live chat server on 2026-11-19
+
+The reference chat server is now Qwen3.6-35B-A3B (Unsloth UD-Q2_K_XL GGUF, 12.29 GB) on the Splash 1.7.0 engine, with the BF16 vision projector (0.90 GB) and the DFlash2 speculative draft (1.05 GB). Context is 65536. Text, images and native PDF parts are accepted.
+
+- `scripts/gemma_serve.sh` routes `gd_model_variant=splash` to `scripts/splash_serve.sh`. The engine listens on 127.0.0.1:18085 with `--max-memory 18G`, `--idle-release off` and a 4 GB SSD prompt cache. Weights must sit on the internal volume: launchd jobs could not read the removable volume and the engine hung in a directory scan.
+- `scripts/splash_shim.py` keeps 127.0.0.1:18080 llama.cpp-compatible for existing clients: `/health` (503 while loading), `/slots`, `/props` (n_ctx, vision), `/metrics` with `llamacpp:*` counters rebuilt from per-request timings, native `/completion` (with streaming), and field rewrites (`n_predict`, `repeat_penalty`, top-level `json_schema`, file and http image URLs become data URLs). llama-only fields are dropped; GBNF `grammar` is dropped and counted, so use `json_schema`. A client disconnect during prefill closes the upstream stream so the engine cancels. The argv carries `--tag mlx-qwen-llama-server --port 18080` so existing process guards still match.
+- `scripts/fit_context.py` runs in the shim before forwarding: dedupe repeated messages, drop tool schemas the conversation never names, strip base64 blobs and whitespace from older turns, head+tail truncate long tool outputs, then drop the oldest turns (with their tool results) behind a one-line note. The latest user message and its images and files are kept whole unless it alone exceeds the window. Requests that still do not fit get a 400 `context_length_exceeded`, never an over-cap forward. Logs record counts only. `SHIM_FIT=0` turns it off.
+- `scripts/rollback_splash_to_minicpm.sh` writes the previous variant and alias flags back and restarts the launch agent; the previous serve script and weights are untouched.
+
+Measured on the reference machine (same prompts, same day):
+
+| | Previous (MiniCPM-V 4.7, IQ3_XS) | Splash + Qwen3.6 Q2_K_XL |
+| --- | --- | --- |
+| Short-prompt decode | 46 tokens/s (suite mean) | 68 tokens/s mean, 55-86 range, under live traffic |
+| Vision TTFT (screenshot / chart / photo) | 4.5 / 3.4 / 7.6 s | 2.2 / 1.4 / 4.9 s |
+| Context | 16384 (25k prompt rejected) | 65536 |
+| 12.5k / 25k / 51k / 63k prompt decode | 34 / - / - / - tokens/s | 52 / 47 / 41 / 38 tokens/s |
+| 12.5k / 25k / 51k / 63k prompt TTFT | 34 s / - / - / - | 26 / 59 / 141 / 239 s |
+| Needle in 12k / 24k / 48k document | found / rejected / rejected | found / found / found |
+| CSV count (truth 11) | 10 | 11 |
+| Native PDF (page-2 fact) | not supported | correct |
+
+An 84k-token prompt with a 256k cap exhausted memory and the engine restarted itself in about 30 s; a 63k prompt was stable with no swap growth, so the cap is 65536 and the trimmer keeps requests under it.
+
+## Previous chat server on 2026-11-15
 
 The reference chat server is Gemma 4 26B-A4B QAT. It is text only. Context is 8192. There is no MTP and no vision projector. The server reports one alias, `Gemma-4-26B-A4B-it-QAT`. Input modality is text. The process name stays `mlx-qwen-llama-server`. It listens on 127.0.0.1 port 18080 only. Do not start a second chat model beside it.
 

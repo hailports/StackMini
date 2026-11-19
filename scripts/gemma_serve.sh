@@ -19,6 +19,11 @@ read_flag() {
 # Shootout / dual-path: LaunchAgents writes are agent-denylisted; route by flag.
 # gd_model_variant=minicpm -> MiniCPM serve (16384/dspark). gemma (default) stays here.
 VARIANT=$(read_flag "$HOME/claude-stack/data/flags/gd_model_variant" "gemma")
+if [ "$VARIANT" = "splash" ]; then
+  # 2026-11-19: Qwen3.6-35B-A3B on Splash behind the llama-compatible shim on :18080.
+  echo "VARIANT_ROUTE splash" >&2
+  exec "$HOME/claude-stack/bin/splash_serve.sh"
+fi
 if [ "$VARIANT" = "minicpm" ]; then
   echo "VARIANT_ROUTE minicpm" >&2
   exec "$HOME/claude-stack/bin/minicpm_serve.sh"
