@@ -188,6 +188,9 @@ final class PaistyUpdater {
         }
         let pid = ProcessInfo.processInfo.processIdentifier
         let backup = parent.appendingPathComponent(".paisty-previous.app")
+        // Tests swap the app without starting it again.
+        let relaunch = ProcessInfo.processInfo.environment["PAISTY_UPDATE_NO_RELAUNCH"] == nil
+        let open = relaunch ? "open '\(current.path)'" : ":"
         let script = """
         #!/bin/sh
         while kill -0 \(pid) 2>/dev/null; do sleep 0.3; done
@@ -196,10 +199,10 @@ final class PaistyUpdater {
         if mv '\(app.path)' '\(current.path)'; then
           xattr -dr com.apple.quarantine '\(current.path)' 2>/dev/null
           rm -rf '\(backup.path)'
-          open '\(current.path)'
+          \(open)
         else
           mv '\(backup.path)' '\(current.path)'
-          open '\(current.path)'
+          \(open)
         fi
         """
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("paisty-swap.sh")
