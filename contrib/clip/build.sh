@@ -28,7 +28,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 VERSION="${PAISTY_VERSION:-1.1.$(git -C "$HERE" rev-list --count HEAD 2>/dev/null || echo 0)}"
 BUILD="${PAISTY_BUILD:-$(git -C "$HERE" rev-list --count HEAD 2>/dev/null || echo 1)}"
-FEED="${PAISTY_FEED:-https://www.paisty.com/update/paisty-update.json}"
+FEED="${PAISTY_FEED:-https://www.paisty.com/api/update/paisty-update.json}"
 FEEDTOKEN="${PAISTY_FEED_TOKEN:-}"
 PUBKEY="${PAISTY_ED_PUBLIC_KEY:-$(cat "$HERE/update-public-key.txt" 2>/dev/null || true)}"
 PLIST_PATH="$APP/Contents/Info.plist"

@@ -3,7 +3,7 @@
 
     PAISTY_ED_PRIVATE_KEY="$(cat key.pem)" python3 contrib/clip/sign_update.py \
         --zip dist/paisty-update.zip --version 1.1.900 --build 900 \
-        --url https://www.paisty.com/update/paisty-update-900.zip \
+        --url https://www.paisty.com/api/update/paisty-update-900.zip \
         --out dist/paisty-update.json
 
 The app verifies this signature with the public key in contrib/clip/update-public-key.txt,

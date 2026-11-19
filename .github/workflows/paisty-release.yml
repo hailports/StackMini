@@ -2,7 +2,7 @@ name: paisty-release
 
 # Every push to main that touches the app builds paisty, signs the self-update feed and
 # uploads it to the R2 bucket behind paisty.com. The disk image is only reachable through the
-# email form (/dl); the update feed (/update/*) answers only to installed copies.
+# email form (/dl); the update feed (/api/update/*) answers only to installed copies.
 # Installed copies pick an update up on their next check (at launch, then every 6 hours).
 on:
   push:
@@ -76,7 +76,7 @@ jobs:
         env:
           PAISTY_ED_PRIVATE_KEY: ${{ secrets.PAISTY_ED_PRIVATE_KEY }}
         run: |
-          URL="https://www.paisty.com/update/paisty-update-$PAISTY_BUILD.zip"
+          URL="https://www.paisty.com/api/update/paisty-update-$PAISTY_BUILD.zip"
           python contrib/clip/sign_update.py --zip dist/paisty-update.zip --version "$PAISTY_VERSION" \
             --build "$PAISTY_BUILD" --url "$URL" --notes "$(git log -1 --format=%s)" --out dist/paisty-update.json
       - name: publish to R2

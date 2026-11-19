@@ -8,8 +8,8 @@ import CryptoKit
 final class PaistyUpdater {
     static let shared = PaistyUpdater()
     static let autoKey = "paistyAutoUpdate"
-    static let defaultFeed = "https://www.paisty.com/update/paisty-update.json"
-    static let urlPrefix = "https://www.paisty.com/update/"
+    static let defaultFeed = "https://www.paisty.com/api/update/paisty-update.json"
+    static let urlPrefix = "https://www.paisty.com/api/update/"
     static let tokenHeader = "X-Paisty-Update"
 
     var timer: Timer?
