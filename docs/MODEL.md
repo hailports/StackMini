@@ -13,14 +13,23 @@ Measured on the reference machine (same prompts, same day):
 
 | | Previous (MiniCPM-V 4.7, IQ3_XS) | Splash + Qwen3.6 Q2_K_XL |
 | --- | --- | --- |
-| Short-prompt decode | 46 tokens/s (suite mean) | 68 tokens/s mean, 55-86 range, under live traffic |
+| Real-traffic decode, same day (median, answers of 100+ tokens) | 45.9 tokens/s (291 answers) | 71.9 tokens/s (99 answers); every answer at 40+ |
+| Real-traffic prefill (median, prompts of 500+ tokens) | 385 tokens/s | 522 tokens/s |
+| 16-prompt suite decode (mean) | 46.1 tokens/s | 67.9 tokens/s (54.7-86.2) |
+| 16-prompt suite usefulness (of 32) | 25.5 | 26.5 |
 | Vision TTFT (screenshot / chart / photo) | 4.5 / 3.4 / 7.6 s | 2.2 / 1.4 / 4.9 s |
 | Context | 16384 (25k prompt rejected) | 65536 |
-| 12.5k / 25k / 51k / 63k prompt decode | 34 / - / - / - tokens/s | 52 / 47 / 41 / 38 tokens/s |
+| 12.5k / 25k / 51k / 63k prompt decode | 33.7 / - / - / - tokens/s | 51.6 / 47.4 / 41.2 / 37.5 tokens/s |
 | 12.5k / 25k / 51k / 63k prompt TTFT | 34 s / - / - / - | 26 / 59 / 141 / 239 s |
 | Needle in 12k / 24k / 48k document | found / rejected / rejected | found / found / found |
 | CSV count (truth 11) | 10 | 11 |
 | Native PDF (page-2 fact) | not supported | correct |
+
+![Before/after speed](img/splash_speed_before_after.png)
+
+![Context sweep](img/splash_context_sweep.png)
+
+The numbers behind both charts are in `data/splash_2026-11-19.json`; `scripts/splash_charts.py` redraws them.
 
 An 84k-token prompt with a 256k cap exhausted memory and the engine restarted itself in about 30 s; a 63k prompt was stable with no swap growth, so the cap is 65536 and the trimmer keeps requests under it.
 

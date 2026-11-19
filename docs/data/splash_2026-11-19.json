@@ -1,0 +1,30 @@
+{
+  "measured_on": "2026-11-19",
+  "hardware": "Apple M4 (base), 24 GB unified memory",
+  "before": {"engine": "llama.cpp Metal", "model": "MiniCPM-V 4.7 35B-A3B", "quant": "IQ3_XS GGUF", "weights_bytes": 14483689408,
+             "mmproj_bytes": 910491648, "draft_bytes": 237004800, "context": 16384},
+  "after": {"engine": "Splash 1.7.0", "model": "Qwen3.6-35B-A3B", "quant": "UD-Q2_K_XL GGUF", "weights_bytes": 12290628576,
+            "mmproj_bytes": 902822624, "draft_bytes": 1052513456, "context": 65536},
+  "live_traffic_same_day": {
+    "before": {"window_ct": "00:00-14:20", "answers_100plus": 291, "median_decode": 45.9, "p10": 39.4, "p90": 56.7, "share_ge_40": 89, "median_prefill_500plus": 384.8, "prefill_n": 1118},
+    "after":  {"window_ct": "14:51-15:55", "answers_100plus": 99, "median_decode": 71.9, "p10": 61.4, "p90": 94.8, "share_ge_40": 100, "median_prefill_500plus": 522.2, "prefill_n": 83}
+  },
+  "suite_16_prompts": {"before_decode_mean": 46.1, "after_decode_mean": 67.9, "after_range": [54.7, 86.2],
+                        "usefulness_of_32": {"before": 25.5, "after": 26.5}},
+  "soak_metrics_after": {"decode_tokens": 37989, "decode_seconds": 497.46, "prefill_tokens": 181395, "prefill_seconds": 439.83},
+  "vision_ttft_s": {"labels": ["screenshot", "chart", "photo"], "before": [4.52, 3.41, 7.61], "after": [2.21, 1.44, 4.86]},
+  "context_sweep_after": [
+    {"prompt_tokens": 12548, "ttft_s": 25.92, "decode": 51.6, "prefill": 485.2},
+    {"prompt_tokens": 25148, "ttft_s": 58.78, "decode": 47.4, "prefill": 428.3},
+    {"prompt_tokens": 50749, "ttft_s": 140.62, "decode": 41.2, "prefill": 310.8},
+    {"prompt_tokens": 62600, "ttft_s": 238.8, "decode": 37.5, "prefill": 262.5}
+  ],
+  "context_sweep_before": [{"prompt_tokens": 12548, "ttft_s": 33.98, "decode": 33.7, "prefill": 370.2}],
+  "context_limit_before_rejected": 25148,
+  "over_cap_failure_prompt_tokens": 84000,
+  "needle": {"before": {"12k": true, "24k": "rejected", "48k": "rejected"}, "after": {"12k": true, "24k": true, "48k": true}},
+  "csv_count_truth_11": {"before": 10, "after": 11},
+  "native_pdf_page2_fact": {"before": "not supported", "after": "correct"},
+  "trimmer": {"history_in": 296113, "history_out": 44929, "history_ms": 337, "single_in": 84041, "single_out": 62153, "single_ms": 171},
+  "cutover_downtime_s": 292
+}

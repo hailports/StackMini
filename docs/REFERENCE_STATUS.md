@@ -10,7 +10,7 @@ Overall at audit time: working, with caveats. The model, the brain query paths, 
 
 | Component | Status | Evidence |
 | --- | --- | --- |
-| Chat model (llama-server, loopback 18080, proxy 8080) | working | `/health` ok. The IQ3_XS file is loaded with 16384 context and `--n-cpu-moe 0`. Average decode from the `/metrics` counters is about 53.7 tokens/s. |
+| Chat model (loopback 18080, proxy 8080) | working (updated 2026-11-19) | Since 2026-11-19 the server is Qwen3.6-35B-A3B UD-Q2_K_XL on Splash behind a llama-compatible shim, 65536 context, vision on. Median real-traffic decode 71.9 tokens/s the same day (was 45.9 on the previous MiniCPM-V IQ3_XS server, which had 16384 context; at this audit its `/metrics` average was about 53.7 tokens/s). See `MODEL.md`. |
 | Model door on the overlay address (8787) | working | `/health` ok. Paid inference is off. Spend is 0. |
 | Embedding server (8097) | working | `/health` ok. All 832,948 vector chunks have embeddings. |
 | Brain ask API (8079) and MCP HTTP (8089) | working | Cited hits come back in about 3 to 6 s from the mini and from the helper box over SOCKS. |
@@ -28,7 +28,7 @@ Overall at audit time: working, with caveats. The model, the brain query paths, 
 | Calendar blocker and mirror | fixed after audit | Same dead path, fixed in 9 tools. The mirror ran: 3 created, 1 updated. The blocker dry run plans 11 blocks. |
 | Synced-drive and warehouse corpora | blocked / not built | The synced-drive cycle exits 1 on purpose, because 3 cloud-only placeholder files cannot be read (EDEADLK). The warehouse has a query tool but no ingest source. |
 | Incremental vector index | caveat | The last run exited with `database is locked`. |
-| Memory budget | caveat | 24 GB machine. About 14.5 GB is the model. Free memory is about 15% and swap is about 4.2 of 5.1 GB. The governor skips ingest and nightly jobs with "pressure" or "lane-busy". |
+| Memory budget | caveat | 24 GB machine. About 14.5 GB was the model at audit time (12.3 GB weights plus a 0.9 GB projector and a 1.05 GB draft since 2026-11-19). Free memory is about 15% and swap is about 4.2 of 5.1 GB. The governor skips ingest and nightly jobs with "pressure" or "lane-busy". |
 | Legacy overlay proxy map (one port) and legacy service proxy | stale | One map points at a backend that is not listening. The legacy proxy reports all of its old services unreachable. |
 | Document-share crawl retry | caveat (waiting on memory) | The dead path is fixed. A new drain job runs every 20 min, 10 files per wake, under the existing guards (15% free, swap at most 3400 MB). 764 files are still waiting; free memory was 9 to 13%. |
 | Repo-sync job | fixed after audit | The governor no longer pauses this job mid-run, and the job retries a command once if it was paused. One run finished with exit 0. Publish stays held. |
