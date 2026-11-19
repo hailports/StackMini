@@ -11,8 +11,10 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <plist version="1.0">
 <dict>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>__VERSION__</string>
+  <key>CFBundleVersion</key><string>__BUILD__</string>
+  <key>PaistyFeedURL</key><string>__FEED__</string>
+  <key>PaistyEdPublicKey</key><string>__PUBKEY__</string>
   <key>CFBundleExecutable</key><string>paisty</string>
   <key>CFBundleIdentifier</key><string>com.hailports.paiste</string>
   <key>CFBundleName</key><string>paisty</string>
@@ -23,6 +25,12 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
-swiftc -O -framework Cocoa -framework ApplicationServices -framework ScreenCaptureKit -framework Vision -o "$APP/Contents/MacOS/paisty" "$HERE/PaisteMenu.swift" "$HERE/PastePath.swift" "$HERE/ReplyHint.swift" "$HERE/Onboard.swift"
+VERSION="${PAISTY_VERSION:-1.1.$(git -C "$HERE" rev-list --count HEAD 2>/dev/null || echo 0)}"
+BUILD="${PAISTY_BUILD:-$(git -C "$HERE" rev-list --count HEAD 2>/dev/null || echo 1)}"
+FEED="${PAISTY_FEED:-https://github.com/hailports/StackMini/releases/download/paisty-mac/paisty-update.json}"
+PUBKEY="${PAISTY_ED_PUBLIC_KEY:-$(cat "$HERE/update-public-key.txt" 2>/dev/null || true)}"
+PLIST_PATH="$APP/Contents/Info.plist"
+sed -e "s|__VERSION__|$VERSION|" -e "s|__BUILD__|$BUILD|" -e "s|__FEED__|$FEED|" -e "s|__PUBKEY__|$PUBKEY|" "$PLIST_PATH" > "$PLIST_PATH.tmp" && mv "$PLIST_PATH.tmp" "$PLIST_PATH"
+swiftc -O -framework Cocoa -framework ApplicationServices -framework ScreenCaptureKit -framework Vision -framework CryptoKit -o "$APP/Contents/MacOS/paisty" "$HERE/PaisteMenu.swift" "$HERE/PastePath.swift" "$HERE/ReplyHint.swift" "$HERE/Onboard.swift" "$HERE/Updater.swift"
 sh "$HERE/icon.sh" "$APP"
 echo "built $APP"

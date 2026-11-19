@@ -1,0 +1,85 @@
+name: paisty-release
+
+# Every push to main that touches the app builds paisty, signs the self-update feed and
+# publishes it. Installed copies pick it up on their next check (at launch, then every 6 hours).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "contrib/clip/**"
+      - "hailports/clip/**"
+      - "hailports/llm.py"
+      - "hailports/config.py"
+      - "hailports/chat_badge.py"
+      - "hailports/promptui.py"
+      - "hailports/__init__.py"
+      - ".github/workflows/paisty-release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: paisty-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: clip tests
+        env:
+          HAILPORTS_NO_KEYCHAIN: "1"
+          HAILPORTS_PROMPT: plain
+        run: |
+          python -m pip install -q -e ".[dev]" cryptography
+          python -m pytest -q tests/test_clip_compose.py tests/test_clip_hops.py tests/test_clip.py
+      - name: bundled python
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          ~/.local/bin/uv python install 3.12
+          PY=$(dirname "$(dirname "$(~/.local/bin/uv python find 3.12)")")
+          echo "PAISTY_PYTHON_PREFIX=$PY" >> "$GITHUB_ENV"
+      - name: version
+        run: |
+          BUILD=$(git rev-list --count HEAD)
+          echo "PAISTY_BUILD=$BUILD" >> "$GITHUB_ENV"
+          echo "PAISTY_VERSION=1.1.$BUILD" >> "$GITHUB_ENV"
+      - name: build app, disk image and update zip
+        env:
+          PAISTY_OUT: ${{ github.workspace }}/dist
+        run: sh contrib/clip/package.sh
+      - name: leak gate
+        env:
+          PATTERNS: ${{ secrets.PAISTY_LEAK_PATTERNS }}
+        run: |
+          if [ -z "$PATTERNS" ]; then echo "::warning::PAISTY_LEAK_PATTERNS not set; leak gate skipped"; exit 0; fi
+          printf '%s\n' "$PATTERNS" > /tmp/leak.re
+          mkdir -p /tmp/unz && ditto -x -k dist/paisty-update.zip /tmp/unz
+          if grep -rlaiE -f /tmp/leak.re /tmp/unz; then echo "identity strings in the app"; exit 1; fi
+          echo clean
+      - name: sign update feed
+        env:
+          PAISTY_ED_PRIVATE_KEY: ${{ secrets.PAISTY_ED_PRIVATE_KEY }}
+        run: |
+          TAG="paisty-v$PAISTY_VERSION"
+          URL="https://github.com/hailports/StackMini/releases/download/$TAG/paisty-update.zip"
+          python contrib/clip/sign_update.py --zip dist/paisty-update.zip --version "$PAISTY_VERSION" \
+            --build "$PAISTY_BUILD" --url "$URL" --notes "$(git log -1 --format=%s)" --out dist/paisty-update.json
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" dist/paisty.dmg dist/paisty-update.zip dist/paisty-update.json \
+            --title "paisty $PAISTY_VERSION" --notes "$(git log -1 --format=%s)" --target "$GITHUB_SHA"
+          # The rolling release the website and installed apps read.
+          gh release view paisty-mac >/dev/null 2>&1 || gh release create paisty-mac --title paisty --notes "Latest paisty for Mac."
+          gh release upload paisty-mac dist/paisty.dmg dist/paisty-update.zip dist/paisty-update.json --clobber
+          gh release edit paisty-mac --notes "paisty $PAISTY_VERSION ($(git rev-parse --short HEAD)). Installed copies update themselves." --latest

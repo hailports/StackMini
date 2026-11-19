@@ -41,7 +41,7 @@ def _cfg(path: str, base_url: str, model: str) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="paiste", description="Draft from the text near the cursor. Nothing is sent.")
-    parser.add_argument("action", nargs="?", default="draft", choices=["draft", "auto", "menu", "check", "onboard", "drafts", "redo"])
+    parser.add_argument("action", nargs="?", default="draft", choices=["draft", "auto", "menu", "check", "onboard", "drafts", "redo", "shot"])
     parser.add_argument("--id", default="")
     parser.add_argument("--scene", default="")
     parser.add_argument("--inbox", default="")
@@ -62,6 +62,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--connect", default="")
     parser.add_argument("--login", default="")
     parser.add_argument("--use", default="")
+    parser.add_argument("--image", action="append", default=[])
     args = parser.parse_args(argv)
     cfg = _cfg(args.route, args.base_url, args.model)
     if args.action == "onboard":
@@ -69,6 +70,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.action in {"drafts", "redo"}:
         from hailports.clip.drafts import cmd as drafts_cmd
         return drafts_cmd(args.action, args, cfg)
+    if args.action == "shot":
+        from hailports.clip.run import draft_screenshot
+        if not args.image:
+            print("shot needs --image")
+            return 2
+        return draft_screenshot(args.image, args.base_url, args.model, args.copy, cfg)
     if args.action == "menu":
         print("Build contrib/paiste/build.sh and open Paiste.app. The menu title is Paiste.")
         return 0

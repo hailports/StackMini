@@ -96,6 +96,35 @@ def _context_note(cfg: dict | None) -> str:
     return path.read_text(encoding="utf-8", errors="replace").strip()[:6000]
 
 
+def _brain_notes(cfg: dict | None, text: str) -> str:
+    """Only the configured notes helper. Code and docs are searched by compose itself."""
+    paiste = (cfg or {}).get("paiste") or {}
+    raw = str(paiste.get("lookup_cmd") or "").strip()
+    path = Path(raw).expanduser() if raw else Path()
+    if not text.strip() or not raw or not path.is_file():
+        return ""
+    try:
+        proc = subprocess.run([str(path)], input=lookup_query(text), text=True, capture_output=True, timeout=25)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return proc.stdout.strip()[:4000] if proc.returncode == 0 else ""
+
+
+def full_draft(doc: dict, route: dict, rules: str) -> tuple[str, str]:
+    """The full-context path. Returns (reply, hop). Empty reply means fall back."""
+    from hailports.clip import compose
+    hop = {"name": ""}
+    hops = endpoints_from(route)
+
+    def run_model(messages: list[dict]) -> str:
+        text, name = complete(hops, messages)
+        hop["name"] = name
+        return text
+
+    text, _ctx, _attempts = compose.draft(doc, route, rules, run_model, lookup=lambda q: _brain_notes(route, q))
+    return (text if reply_ok(text) else ""), hop["name"]
+
+
 def lookup_query(text: str, limit: int = 2200) -> str:
     """Keep the ask. On a long window the questions sit past the first 500 characters."""
     flat = " ".join((text or "").split())
@@ -192,6 +221,31 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
             "Use what was already said. Draft the reply to what is still open.\n\n"
             + rules
         )
+    from hailports.clip import compose
+    if compose.wants_full(doc, route):
+        try:
+            text, hop_name = full_draft(doc, route, rules)
+        except ModelOffline as exc:
+            print("model offline: " + str(exc))
+            return 2
+        except Exception:  # the older path still runs if the full path breaks
+            text, hop_name = "", ""
+        if text:
+            try:
+                mark = Path.home() / ".config" / "paiste" / "last-hop"
+                mark.write_text(hop_name + "\n", encoding="utf-8")
+                mark.chmod(0o600)
+            except OSError:
+                pass
+            try:
+                from hailports.clip.drafts import append as remember_draft
+                remember_draft(text, hop=hop_name, app=str(doc.get("app") or ""), scene=doc)
+            except OSError:
+                pass
+            if copy:
+                copy_text(text)
+            print(text)
+            return 0
     if "Search all connected mail" not in rules:
         rules = (
             "Search all connected mail, all connected calendar events, and all connected notes. "
@@ -330,6 +384,22 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
         copy_text(text)
     print(text)
     return 0 if text else 2
+
+
+def draft_screenshot(paths: list[str], base_url: str, model: str, copy: bool, cfg: dict | None = None) -> int:
+    """A screenshot or pasted image of a thread in, a draft out."""
+    from hailports.clip import screenshot
+    route = cfg or {"llm": {"base_url": base_url, "model": model or "local"}}
+    hops = endpoints_from(route)
+    try:
+        doc = screenshot.scene_for([Path(p) for p in paths], lambda m: complete(hops, m)[0])
+    except ModelOffline as exc:
+        print("model offline: " + str(exc))
+        return 2
+    if not (doc.get("field_text") or "").strip():
+        print("empty")
+        return 2
+    return draft_scene(doc, base_url, model, copy, cfg)
 
 
 def _route_dest(args):

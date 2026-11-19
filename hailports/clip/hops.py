@@ -80,8 +80,10 @@ def ssh_argv(host: str, remote_url: str) -> list[str]:
     url = remote_url.rstrip("/") + "/chat/completions"
     return [
         "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
-        host, "curl", "-sS", "-m", "110",
+        host, "curl", "-sS", "-m", "240",
         "-H", "Content-Type: application/json",
+        # A paisty click is a person waiting. Ask a priority proxy to treat it as chat.
+        "-H", "X-Chat-Priority: 1",
         "-d", "@-", url,
     ]
 
@@ -114,6 +116,19 @@ def _http(endpoint: dict, messages: list[dict]) -> str:
 
 
 def _ssh(endpoint: dict, messages: list[dict], run=None) -> str:
+    """One retry on an empty or error reply: a busy local server can drop one request."""
+    try:
+        text = _ssh_once(endpoint, messages, run)
+    except ModelOffline:
+        text = ""
+    if str(text or "").strip():
+        return text
+    import time as _time
+    _time.sleep(1.5)
+    return _ssh_once(endpoint, messages, run)
+
+
+def _ssh_once(endpoint: dict, messages: list[dict], run=None) -> str:
     payload = json.dumps({
         "model": endpoint["model"],
         "messages": messages,
@@ -141,7 +156,7 @@ def _bin_ok(binary: str) -> bool:
 # Claude sends this much system and this much user, as two fields. A joined
 # prompt must not be shorter than that, or the thread at the end of the user
 # turn is the part that gets cut.
-_CONTEXT_CAP = 6000
+_CONTEXT_CAP = 48000
 
 
 def same_context(system: str, user: str) -> tuple[str, str]:

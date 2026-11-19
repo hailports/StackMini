@@ -292,16 +292,18 @@ def test_connected_premium_leads_the_local():
 
 def test_every_hop_keeps_the_thread_past_a_long_system_prompt():
     """Codex used to join system+user and keep the first 8000 chars, which cut the thread."""
-    from hailports.clip.hops import claude_argv, cursor_prompt, joined_prompt, same_context
+    from hailports.clip.hops import _CONTEXT_CAP, claude_argv, cursor_prompt, joined_prompt, same_context
 
     screen = "ONSCREEN-TOKEN out of town the whole weekend of the 21st"
-    system = "S" * 7000
+    system = "S" * (_CONTEXT_CAP + 1000)
     user = ("R" * 2500) + "\nOn screen:\n" + screen
-    assert len(user) <= 6000
+    assert len(user) <= _CONTEXT_CAP
     assert len(system) + len(user) > 8000
     kept_system, kept_user = same_context(system, user)
     assert screen in kept_user
-    assert len(kept_system) == 6000 and len(kept_user) <= 6000
+    assert len(kept_system) == _CONTEXT_CAP and len(kept_user) <= _CONTEXT_CAP
+    # Full-context drafts (thread + attachments + notes) need far more than the old 6000.
+    assert _CONTEXT_CAP >= 32000
     claude = claude_argv("/usr/bin/claude", system, user)
     assert screen in claude[-1]
     assert screen in claude[claude.index("--system-prompt") + 1] or screen in claude[-1]
@@ -313,6 +315,23 @@ def test_every_hop_keeps_the_thread_past_a_long_system_prompt():
     assert "viewing a communication" in cursor
     # The old slice kept the system head and dropped this tail.
     assert screen not in (system + "\n\n" + user).strip()[:8000]
+
+
+def test_ssh_hop_asks_for_chat_priority_and_retries_once(monkeypatch):
+    from hailports.clip import hops
+    argv = hops.ssh_argv("brain", "http://127.0.0.1:8080/v1")
+    assert "X-Chat-Priority: 1" in argv
+    calls = []
+
+    def run(argv, payload):
+        calls.append(1)
+        if len(calls) == 1:
+            return b'{"choices":[{"message":{"content":""}}]}'
+        return b'{"choices":[{"message":{"content":"hey there"}}]}'
+
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    out = hops._ssh({"ssh_host": "brain", "base_url": "http://127.0.0.1:8080/v1", "model": "m"}, [{"role": "user", "content": "x"}], run=run)
+    assert out == "hey there" and len(calls) == 2
 
 
 def test_a_hop_that_cannot_see_the_message_falls_through(monkeypatch):

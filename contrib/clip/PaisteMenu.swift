@@ -69,6 +69,8 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
             openSetup()
         }
         UserDefaults.standard.register(defaults: [Self.glowKey: true])
+        PaistyUpdater.shared.isBusy = { [weak self] in self?.busy ?? false }
+        PaistyUpdater.shared.start()
         Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
             self?.remember()
         }
@@ -585,11 +587,69 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         look.target = self
         look.state = Self.lookupsOn() ? .on : .off
         menu.addItem(look)
+        let shot = NSMenuItem(title: "Draft from copied screenshot", action: #selector(draftFromScreenshot), keyEquivalent: "")
+        shot.target = self
+        shot.isEnabled = !busy && Self.pasteboardImage() != nil
+        menu.addItem(shot)
+        menu.addItem(.separator())
+        let updater = PaistyUpdater.shared
+        menu.addItem(header("paisty \(updater.currentVersion) (\(updater.currentBuild))"))
+        let check = NSMenuItem(title: "Check for updates", action: #selector(checkUpdates), keyEquivalent: "")
+        check.target = self
+        menu.addItem(check)
+        let autoUpdate = NSMenuItem(title: "Install updates automatically", action: #selector(toggleAutoUpdate(_:)), keyEquivalent: "")
+        autoUpdate.target = self
+        autoUpdate.state = updater.autoOn ? .on : .off
+        menu.addItem(autoUpdate)
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit paisty", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
         quit.target = NSApp
         menu.addItem(quit)
         return menu
+    }
+
+    @objc func checkUpdates() {
+        PaistyUpdater.shared.check(userAsked: true)
+    }
+
+    @objc func toggleAutoUpdate(_ sender: NSMenuItem) {
+        let on = !PaistyUpdater.shared.autoOn
+        UserDefaults.standard.set(on, forKey: PaistyUpdater.autoKey)
+        sender.state = on ? .on : .off
+    }
+
+    static func pasteboardImage() -> Data? {
+        let board = NSPasteboard.general
+        if let png = board.data(forType: .png) { return png }
+        if let tiff = board.data(forType: .tiff), let rep = NSBitmapImageRep(data: tiff) {
+            return rep.representation(using: .png, properties: [:])
+        }
+        if let urls = board.readObjects(forClasses: [NSURL.self], options: [.urlReadingContentsConformToTypes: ["public.image"]]) as? [URL],
+           let first = urls.first, let data = try? Data(contentsOf: first),
+           let rep = NSBitmapImageRep(data: data) {
+            return rep.representation(using: .png, properties: [:])
+        }
+        return nil
+    }
+
+    /// A screenshot of a thread on the clipboard in, a ready draft on the clipboard out.
+    @objc func draftFromScreenshot() {
+        guard !busy, let png = Self.pasteboardImage() else { return }
+        busy = true
+        startSpin()
+        let pid = lastPID
+        DispatchQueue.global(qos: .userInitiated).async {
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("paisty-shot-\(Int(Date().timeIntervalSince1970)).png")
+            try? png.write(to: url)
+            defer { try? FileManager.default.removeItem(at: url) }
+            let run = Self.runPaiste(["shot", "--image", url.path], timeout: 240)
+            guard run.status == 0, !run.out.isEmpty else {
+                DispatchQueue.main.async { self.fail(run.out == "license" ? "License needed" : "No draft from that screenshot") }
+                return
+            }
+            let path = self.deliver(run.out, pid: pid, field: nil)
+            DispatchQueue.main.async { self.finish(path: path, note: "screenshot") }
+        }
     }
 
     func header(_ title: String) -> NSMenuItem {
@@ -1150,7 +1210,77 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         var focused: CFTypeRef?
         guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
               let element = focused else { return "{}" }
-        return payload(element as! AXUIElement, appName: NSRunningApplication(processIdentifier: pid)?.localizedName ?? "")
+        let text = payload(element as! AXUIElement, appName: NSRunningApplication(processIdentifier: pid)?.localizedName ?? "")
+        return withWindowText(text, pid: pid)
+    }
+
+    /// Mail and chat windows carry pictures and tables that accessibility text leaves out
+    /// ("see the asterisk below"). Read the window once with on-device Vision and add it.
+    static let ocrApps = ["com.microsoft.outlook", "com.apple.mail", "com.tinyspeck.slackmacgap", "com.microsoft.teams",
+                          "us.zoom.xos", "com.readdle.smartemail", "com.superhuman", "com.google.chrome", "com.apple.safari"]
+
+    static func withWindowText(_ scene: String, pid: pid_t) -> String {
+        let bundle = (NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? "").lowercased()
+        guard ocrApps.contains(where: { bundle.hasPrefix($0) }), CGPreflightScreenCaptureAccess(),
+              let data = scene.data(using: .utf8),
+              var doc = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return scene }
+        let ocr = windowOCR(pid: pid)
+        if ocr.isEmpty { return scene }
+        doc["window_ocr"] = String(ocr.prefix(20000))
+        guard let out = try? JSONSerialization.data(withJSONObject: doc), let text = String(data: out, encoding: .utf8) else { return scene }
+        return text
+    }
+
+    static func windowOCR(pid: pid_t) -> String {
+        var lines: [String] = []
+        let wait = DispatchSemaphore(value: 0)
+        Task.detached {
+            lines = await readWindow(pid: pid)
+            wait.signal()
+        }
+        if wait.wait(timeout: .now() + 5) == .timedOut { return "" }
+        return lines.joined(separator: "\n")
+    }
+
+    static func readWindow(pid: pid_t) async -> [String] {
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) else { return [] }
+        let windows = content.windows.filter {
+            $0.owningApplication?.processID == pid && $0.isOnScreen && $0.frame.width > 240 && $0.frame.height > 160
+        }
+        guard let window = windows.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }) else { return [] }
+        let filter = SCContentFilter(desktopIndependentWindow: window)
+        let config = SCStreamConfiguration()
+        config.width = max(1, Int(window.frame.width * 2))
+        config.height = max(1, Int(window.frame.height * 2))
+        config.showsCursor = false
+        config.capturesAudio = false
+        guard let image = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) else { return [] }
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = true
+        try? VNImageRequestHandler(cgImage: image).perform([request])
+        let items = (request.results ?? []).compactMap { obs -> (CGRect, String)? in
+            guard let text = obs.topCandidates(1).first?.string else { return nil }
+            return (obs.boundingBox, text)
+        }
+        // Top to bottom, then left to right; one line per row.
+        let sorted = items.sorted { a, b in
+            abs(a.0.maxY - b.0.maxY) < 0.006 ? a.0.minX < b.0.minX : a.0.maxY > b.0.maxY
+        }
+        var out: [String] = []
+        var row: [String] = []
+        var rowY: CGFloat = -1
+        for (box, text) in sorted {
+            if rowY >= 0 && abs(box.maxY - rowY) < 0.006 {
+                row.append(text)
+            } else {
+                if !row.isEmpty { out.append(row.joined(separator: "  ")) }
+                row = [text]
+                rowY = box.maxY
+            }
+        }
+        if !row.isEmpty { out.append(row.joined(separator: "  ")) }
+        return out
     }
 
     static func payload(_ el: AXUIElement, appName: String) -> String {

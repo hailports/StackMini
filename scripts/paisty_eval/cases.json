@@ -1,0 +1,1142 @@
+[
+ {
+  "id": "tier_rule",
+  "title": "Asterisk rule on tiered targets, data in an attached workbook",
+  "subject": "RE: Program Goals - North",
+  "me": "Jordan Reyes, Jordan",
+  "thread": [
+   {
+    "from": "Hale, Morgan",
+    "to": [
+     "Reyes, Jordan"
+    ],
+    "cc": [
+     "Brandt, Casey",
+     "Vance, Robin"
+    ],
+    "date": "Thursday, November 19, 2026 at 4:01 PM",
+    "body": "Hi Jordan \u2013\n\nI haven't had time to go in and check, but does your logic build in the \"asterisk\" below for Level 3 targets? If not, we will probably have to adjust, and reload.\n\nThanks!\nMorgan"
+   },
+   {
+    "from": "Reyes, Jordan",
+    "to": [
+     "Hale, Morgan",
+     "Brandt, Casey",
+     "Vance, Robin"
+    ],
+    "date": "Thursday, November 19, 2026 11:16 AM",
+    "body": "thanks all-\n\nall goals are now loaded. please let me know if you encounter anything unexpected."
+   },
+   {
+    "from": "Brandt, Casey",
+    "to": [
+     "Reyes, Jordan"
+    ],
+    "date": "Thursday, November 19, 2026 7:37 AM",
+    "body": "Pat, would you please forward the tech goals to Jordan to ensure we get the right version. Thanks, Casey."
+   },
+   {
+    "from": "Reyes, Jordan",
+    "to": [
+     "Hale, Morgan",
+     "Brandt, Casey"
+    ],
+    "date": "Wednesday, November 18, 2026 2:40 PM",
+    "body": "I have the goals from Morgan & Robin. Casey, can you send me the tech goals that Pat sent to you?"
+   },
+   {
+    "from": "Hale, Morgan",
+    "to": [
+     "Reyes, Jordan",
+     "Brandt, Casey"
+    ],
+    "cc": [
+     "Vance, Robin"
+    ],
+    "date": "Monday, November 16, 2026 at 2:37 PM",
+    "body": "Hi Casey / Jordan \u2013\n\nAttached is a file with the '26-27 program goals for the North dealers.\n\nWhat is the best way to get them uploaded?\n\nThanks!\nMorgan"
+   }
+  ],
+  "attachments_shown": [],
+  "screenshot": true,
+  "inline_image": [
+   "* Level 3: goals $300K-$1M = goal + $300K; goals over $1M = 120% of goal"
+  ],
+  "files": [
+   {
+    "kind": "xlsx",
+    "name": "Program Goals - North 26-27.xlsx",
+    "sheets": {
+     "North": [
+      [
+       "TM",
+       "Dealer #",
+       "Dealer Name",
+       "'25-'26 Revenue",
+       "'26-'27 Revenue Goal"
+      ],
+      [
+       "Lee Park",
+       1000,
+       "Prairie Pump Co",
+       228574.91,
+       300000
+      ],
+      [
+       "Sam Ortiz",
+       1001,
+       "North Fork Supply",
+       303941.06,
+       450000
+      ],
+      [
+       "Lee Park",
+       1002,
+       "Bluestem Ag",
+       1110560.68,
+       1200000
+      ],
+      [
+       "Sam Ortiz",
+       1003,
+       "Cedar Flats Supply",
+       1590545.36,
+       2500000
+      ],
+      [
+       "Lee Park",
+       1004,
+       "Red Mesa Water",
+       65095.58,
+       75000
+      ],
+      [
+       "Sam Ortiz",
+       1005,
+       "Dry Creek Pivots",
+       93941.34,
+       120000
+      ],
+      [
+       "Lee Park",
+       1006,
+       "Sandhill Supply",
+       78624.93,
+       125000
+      ],
+      [
+       "Sam Ortiz",
+       1007,
+       "Granite Ag Services",
+       106714.73,
+       125000
+      ],
+      [
+       "Lee Park",
+       1008,
+       "Lone Oak Pumps",
+       108280.87,
+       175000
+      ],
+      [
+       "Sam Ortiz",
+       1009,
+       "Willow Bend Farm Supply",
+       179701.03,
+       220000
+      ],
+      [
+       "Lee Park",
+       1010,
+       "Elm Ridge Water",
+       174605.12,
+       275000
+      ],
+      [
+       "Sam Ortiz",
+       1011,
+       "Kestrel Ridge Ag",
+       516285.21,
+       800000
+      ],
+      [
+       "Lee Park",
+       1012,
+       "Ironwood Supply",
+       487355.76,
+       600000
+      ],
+      [
+       "Sam Ortiz",
+       1013,
+       "Harbor Plains Co-op",
+       3141620.79,
+       3100000
+      ]
+     ]
+    }
+   },
+   {
+    "kind": "text",
+    "name": "repo/docs/goal-targets.md",
+    "text": "# Goal targets\n\nLevel targets for the dealer program.\n\n```text\nlevel 1 = ROUND(goal * 0.90, 0)\nlevel 2 = ROUND(goal, 0)\nlevel 3 = ROUND(goal + 300000, 0)\n          when 300000 <= goal <= 1000000\n        = ROUND(goal * 1.20, 0)\n          otherwise\n```\n"
+   }
+  ],
+  "rubric": {
+   "include": [
+    [
+     "yes",
+     "yep",
+     "already built",
+     "built in",
+     "builds in"
+    ],
+    [
+     "600k",
+     "600,000"
+    ],
+    [
+     "120%",
+     "1.2"
+    ],
+    [
+     "red mesa"
+    ],
+    [
+     "dry creek"
+    ],
+    [
+     "elm ridge"
+    ],
+    [
+     "300k",
+     "300,000"
+    ]
+   ],
+   "exclude": [
+    "(?i)\\b(?:does not|doesn't|isn't|not) (?:build|built|include)",
+    "(?i)\\bsend (?:me )?(?:the |an )?updated file",
+    "(?im)^\\s*(?:hey |hi )?casey\\b",
+    "(?i)\\bpat\\b"
+   ],
+   "address": [
+    "Morgan"
+   ]
+  },
+  "reference": "hey Morgan -- yep, that's already built in. any goal from $300k to $1m gets level 3 at goal + $300k, and over $1m gets 120%. ex. prairie pump co is at $300k with level 3 at $600k. the one thing it doesn't do is force the $300k minimum. 7 dealers came in under it: red mesa water ($75k), dry creek pivots ($120k), sandhill supply and granite ag services ($125k), lone oak pumps ($175k), willow bend farm supply ($220k) and elm ridge water ($275k). want me to bump those up to $300k? then their level 3 would land at $600k."
+ },
+ {
+  "id": "stale_ask",
+  "title": "Old ask already handled; newest asks when it goes live",
+  "subject": "RE: Price file load",
+  "me": "Jordan Reyes, Jordan",
+  "screenshot": false,
+  "files": [],
+  "attachments_shown": [],
+  "thread": [
+   {
+    "from": "Quinn, Dana",
+    "to": [
+     "Reyes, Jordan"
+    ],
+    "cc": [
+     "Ochoa, Rich"
+    ],
+    "date": "Tuesday, November 17, 2026 at 9:12 AM",
+    "body": "Hi Jordan,\n\nThanks for loading these. When will the new prices show up for the dealers in the portal?\n\nDana"
+   },
+   {
+    "from": "Reyes, Jordan",
+    "to": [
+     "Quinn, Dana",
+     "Ochoa, Rich"
+    ],
+    "date": "Monday, November 16, 2026 4:40 PM",
+    "body": "thanks Rich, got the file. the new price file is loaded in the system as of 4:30 pm today. the portal refresh runs nightly at 2 am."
+   },
+   {
+    "from": "Ochoa, Rich",
+    "to": [
+     "Reyes, Jordan"
+    ],
+    "date": "Monday, November 16, 2026 1:05 PM",
+    "body": "Jordan, attached is the final price file. Can you load it today?"
+   },
+   {
+    "from": "Reyes, Jordan",
+    "to": [
+     "Ochoa, Rich"
+    ],
+    "date": "Monday, November 16, 2026 9:00 AM",
+    "body": "Rich, can you send me the final price file when it's ready?"
+   }
+  ],
+  "rubric": {
+   "include": [
+    [
+     "2 am",
+     "2am",
+     "tonight",
+     "overnight",
+     "nightly"
+    ],
+    [
+     "tomorrow",
+     "wednesday",
+     "nov 18",
+     "november 18",
+     "morning"
+    ]
+   ],
+   "exclude": [
+    "(?im)^\\s*(?:hey |hi )?rich\\b",
+    "(?i)send (?:me )?the (?:final )?price file",
+    "(?i)can you load"
+   ],
+   "address": [
+    "Dana"
+   ]
+  },
+  "reference": "hey Dana -- the prices were loaded yesterday at 4:30 pm, and the portal refresh runs nightly at 2 am, so dealers should already see them as of this morning. if anyone still sees old prices, send me the dealer # and I'll check."
+ },
+ {
+  "id": "two_people",
+  "title": "Two people, two different asks, csv attached",
+  "subject": "RE: Orders on inactive accounts",
+  "me": "Jordan Reyes, Jordan",
+  "screenshot": true,
+  "attachments_shown": [
+   "inactive_orders_2026-11-18.csv"
+  ],
+  "files": [
+   {
+    "kind": "csv",
+    "name": "inactive_orders_2026-11-18.csv",
+    "rows": [
+     [
+      "Order",
+      "Account",
+      "Account Status",
+      "Amount"
+     ],
+     [
+      "SO-1001",
+      "Birch Lane Ag",
+      "Inactive",
+      12500
+     ],
+     [
+      "SO-1002",
+      "Cobalt Farms",
+      "Inactive",
+      8400
+     ],
+     [
+      "SO-1003",
+      "Delta Row Supply",
+      "Active",
+      15000
+     ],
+     [
+      "SO-1004",
+      "Elk Run Co",
+      "Inactive",
+      3100
+     ],
+     [
+      "SO-1005",
+      "Fox Hollow",
+      "Active",
+      22000
+     ],
+     [
+      "SO-1006",
+      "Cobalt Farms",
+      "Inactive",
+      1600
+     ]
+    ]
+   }
+  ],
+  "thread": [
+   {
+    "from": "Lind, Avery",
+    "to": [
+     "Reyes, Jordan"
+    ],
+    "cc": [
+     "Moss, Taylor"
+    ],
+    "date": "Wednesday, November 18, 2026 at 3:20 PM",
+    "body": "Jordan - how many of those orders are on inactive accounts, and what's the total dollar amount?"
+   },
+   {
+    "from": "Moss, Taylor",
+    "to": [
+     "Reyes, Jordan"
+    ],
+    "cc": [
+     "Lind, Avery"
+    ],
+    "date": "Wednesday, November 18, 2026 at 2:55 PM",
+    "body": "Jordan, can you also tell me which accounts they are so I can reach out?"
+   },
+   {
+    "from": "Reyes, Jordan",
+    "to": [
+     "Lind, Avery",
+     "Moss, Taylor"
+    ],
+    "date": "Wednesday, November 18, 2026 at 11:00 AM",
+    "body": "attached is the list of open orders with account status."
+   }
+  ],
+  "rubric": {
+   "include": [
+    [
+     "4 orders",
+     "four orders",
+     "4 of"
+    ],
+    [
+     "25,600",
+     "25.6k",
+     "$25,600",
+     "25600"
+    ],
+    [
+     "birch lane"
+    ],
+    [
+     "cobalt"
+    ],
+    [
+     "elk run"
+    ]
+   ],
+   "exclude": [
+    "(?i)delta row",
+    "(?i)fox hollow"
+   ],
+   "address": [
+    "Avery",
+    "Taylor"
+   ]
+  },
+  "reference": "hey Avery -- 4 of the 6 orders are on inactive accounts, $25,600 total.\n\nTaylor -- they're birch lane ag (SO-1001, $12,500), cobalt farms (SO-1002 and SO-1006, $10,000 together) and elk run co (SO-1004, $3,100)."
+ },
+ {
+  "id": "pdf_notice",
+  "title": "Notice deadline from a PDF contract",
+  "subject": "RE: Telematics renewal",
+  "me": "Jordan Reyes, Jordan",
+  "screenshot": false,
+  "attachments_shown": [
+   "Telematics Services Agreement.pdf"
+  ],
+  "files": [
+   {
+    "kind": "pdf",
+    "name": "Telematics Services Agreement.pdf",
+    "lines": [
+     "Telematics Services Agreement",
+     "Section 4. Term. The initial term ends on March 31, 2027.",
+     "Section 5. Renewal. The term renews automatically for 12 months unless either party gives",
+     "at least 60 days prior written notice of non-renewal.",
+     "Section 6. Fees. Annual fee: $48,000, payable in advance."
+    ]
+   }
+  ],
+  "thread": [
+   {
+    "from": "Park, Sydney",
+    "to": [
+     "Reyes, Jordan"
+    ],
+    "date": "Thursday, November 19, 2026 at 10:02 AM",
+    "body": "Jordan, if we don't want this to auto-renew, what's the last day we can give notice? Contract attached."
+   }
+  ],
+  "rubric": {
+   "include": [
+    [
+     "january 30",
+     "jan 30",
+     "1/30"
+    ],
+    [
+     "60 days"
+    ],
+    [
+     "march 31"
+    ]
+   ],
+   "exclude": [
+    "(?i)january 31|jan 31",
+    "(?i)send (?:me )?the contract"
+   ],
+   "address": [
+    "Sydney"
+   ]
+  },
+  "reference": "hey Sydney -- the term ends march 31, 2027 and we need 60 days' written notice, so the last day is january 30, 2027. if we're not renewing, I'd send it a week or two before that."
+ },
+ {
+  "id": "docx_spec",
+  "title": "Does the spec cover two features (one yes, one no)",
+  "subject": "RE: Dealer portal spec v2",
+  "me": "Jordan Reyes, Jordan",
+  "screenshot": false,
+  "attachments_shown": [
+   "Dealer Portal Spec v2.docx"
+  ],
+  "files": [
+   {
+    "kind": "docx",
+    "name": "Dealer Portal Spec v2.docx",
+    "paras": [
+     "Dealer Portal Spec v2",
+     "1. Scope: order status, invoices and warranty claims.",
+     "2. Login: single sign-on (SSO) through the company identity provider, with MFA.",
+     "3. Reports: order history viewable on screen and printable to PDF.",
+     "4. Out of scope: bulk exports, price edits."
+    ]
+   }
+  ],
+  "thread": [
+   {
+    "from": "Nash, Riley",
+    "to": [
+     "Reyes, Jordan"
+    ],
+    "date": "Wednesday, November 18, 2026 at 8:44 AM",
+    "body": "Hi Jordan, quick one: does v2 cover SSO and export to Excel? Need to tell the dealer council."
+   }
+  ],
+  "rubric": {
+   "include": [
+    [
+     "sso",
+     "single sign-on"
+    ],
+    [
+     "mfa",
+     "section 2"
+    ],
+    [
+     "excel"
+    ],
+    [
+     "pdf",
+     "out of scope",
+     "bulk export"
+    ]
+   ],
+   "exclude": [
+    "(?i)excel (?:export )?is (?:included|covered)",
+    "(?i)covers (?:both|sso and excel)"
+   ],
+   "address": [
+    "Riley"
+   ]
+  },
+  "reference": "hey Riley -- SSO yes: section 2 has single sign-on through our identity provider with MFA. excel export no: reports are on screen and print to PDF, and bulk exports are listed as out of scope. if the council needs excel, I can scope it as an add-on."
+ },
+ {
+  "id": "image_table",
+  "title": "Table inside a pasted image",
+  "subject": "RE: Q3 region results",
+  "me": "Jordan Reyes, Jordan",
+  "screenshot": false,
+  "attachments_shown": [
+   "q3_regions.png"
+  ],
+  "files": [
+   {
+    "kind": "png",
+    "name": "q3_regions.png",
+    "title": "Q3 results vs target",
+    "rows": [
+     [
+      "Region",
+      "Actual",
+      "Target"
+     ],
+     [
+      "West",
+      "$1,240,000",
+      "$1,200,000"
+     ],
+     [
+      "Central",
+      "$860,000",
+      "$950,000"
+     ],
+     [
+      "East",
+      "$1,010,000",
+      "$1,000,000"
+     ]
+    ]
+   }
+  ],
+  "thread": [
+   {
+    "from": "Diaz, Cam",
+    "to": [
+     "Reyes, Jordan"
+    ],
+    "date": "Monday, November 16, 2026 at 5:10 PM",
+    "body": "Jordan, from the table in q3_regions.png - which region missed target and by how much?"
+   }
+  ],
+  "rubric": {
+   "include": [
+    [
+     "central"
+    ],
+    [
+     "90k",
+     "90,000"
+    ]
+   ],
+   "exclude": [
+    "(?i)west missed|east missed"
+   ],
+   "address": [
+    "Cam"
+   ]
+  },
+  "reference": "hey Cam -- central is the only one that missed: $860k against a $950k target, so $90k short. west beat by $40k and east by $10k."
+ },
+ {
+  "id": "cap_exists",
+  "title": "Asks if logic is missing a cap that the code has",
+  "subject": "RE: Discount logic",
+  "me": "Jordan Reyes, Jordan",
+  "screenshot": false,
+  "attachments_shown": [],
+  "files": [
+   {
+    "kind": "text",
+    "name": "repo/src/discounts.py",
+    "text": "MAX_DISCOUNT = 0.15  # level 2 cap\n\ndef level_2_discount(list_price, pct):\n    # level 2 discount is capped at 15% of list\n    return list_price * min(pct, MAX_DISCOUNT)\n"
+   }
+  ],
+  "thread": [
+   {
+    "from": "Ross, Jamie",
+    "to": [
+     "Reyes, Jordan"
+    ],
+    "date": "Tuesday, November 17, 2026 at 1:30 PM",
+    "body": "Jordan, is the Level 2 discount logic missing the cap? A dealer said they got 20% off."
+   }
+  ],
+  "rubric": {
+   "include": [
+    [
+     "15%",
+     "0.15",
+     "15 %"
+    ],
+    [
+     "cap"
+    ]
+   ],
+   "exclude": [
+    "(?i)\\b(?:is|it's) missing the cap",
+    "(?i)no cap"
+   ],
+   "address": [
+    "Jamie"
+   ]
+  },
+  "reference": "hey Jamie -- no, the cap is there: level 2 discounts are capped at 15% of list in the code. a 20% discount wouldn't come from that path, so it's likely a manual override or a different promo. send me the order # and I'll trace it."
+ },
+ {
+  "id": "unknown_honest",
+  "title": "Ask about a fact nobody has",
+  "subject": "RE: Pivot parts shipment",
+  "me": "Jordan Reyes, Jordan",
+  "screenshot": false,
+  "attachments_shown": [],
+  "files": [],
+  "thread": [
+   {
+    "from": "Kerr, Avery",
+    "to": [
+     "Reyes, Jordan"
+    ],
+    "date": "Thursday, November 19, 2026 at 9:15 AM",
+    "body": "Jordan, did the vendor confirm the ship date for the gearbox order yet?"
+   },
+   {
+    "from": "Reyes, Jordan",
+    "to": [
+     "Kerr, Avery"
+    ],
+    "date": "Wednesday, November 18, 2026 at 3:00 PM",
+    "body": "I've asked the vendor to confirm a ship date for the gearbox order and will pass it on."
+   }
+  ],
+  "rubric": {
+   "include": [
+    [
+     "not yet",
+     "haven't",
+     "no confirmation",
+     "still waiting",
+     "no word",
+     "nothing yet"
+    ]
+   ],
+   "exclude": [
+    "(?i)\\b(?:ships?|shipping|confirmed) (?:on|for) (?:mon|tue|wed|thu|fri|nov|dec|\\d)",
+    "(?i)\\byes\\b"
+   ],
+   "address": [
+    "Avery"
+   ]
+  },
+  "reference": "hey Avery -- not yet, the vendor hasn't confirmed a ship date. I'll follow up with them today and send it as soon as I have it."
+ },
+ {
+  "id": "chat_dupes",
+  "title": "Chat thread asking if an import file has duplicates",
+  "subject": "contacts import",
+  "me": "Jordan Reyes, Jordan",
+  "screenshot": false,
+  "attachments_shown": [
+   "contacts_import.csv"
+  ],
+  "files": [
+   {
+    "kind": "csv",
+    "name": "contacts_import.csv",
+    "rows": [
+     [
+      "Email",
+      "Name",
+      "Dealer #"
+     ],
+     [
+      "a.ng",
+      "A. Ng",
+      "2001"
+     ],
+     [
+      "b.ruiz",
+      "B. Ruiz",
+      "2002"
+     ],
+     [
+      "a.ng",
+      "A. Ng",
+      "2001"
+     ],
+     [
+      "c.oduya",
+      "C. Oduya",
+      "2003"
+     ],
+     [
+      "d.fox",
+      "D. Fox",
+      "2004"
+     ],
+     [
+      "b.ruiz",
+      "B. Ruiz",
+      "2002"
+     ]
+    ]
+   }
+  ],
+  "chat": "Priya Shah  10:02 AM\nhey Jordan, uploading contacts_import.csv tonight. can you check if it has duplicates first?\nJordan Reyes  10:05 AM\nsure, looking now",
+  "thread": [],
+  "rubric": {
+   "include": [
+    [
+     "2 duplicate",
+     "two duplicate",
+     "2 dupes",
+     "2 rows",
+     "two rows"
+    ],
+    [
+     "a.ng"
+    ],
+    [
+     "b.ruiz"
+    ]
+   ],
+   "exclude": [
+    "(?i)no duplicates"
+   ],
+   "address": [
+    "Priya"
+   ]
+  },
+  "reference": "hey Priya -- yes, 2 duplicates: a.ng and b.ruiz each appear twice. drop those two rows and it's 4 unique contacts, good to upload."
+ },
+ {
+  "id": "two_sheets",
+  "title": "Totals per tab in a workbook",
+  "subject": "RE: Territory budgets",
+  "me": "Jordan Reyes, Jordan",
+  "screenshot": false,
+  "attachments_shown": [
+   "Territory Budgets 2027.xlsx"
+  ],
+  "files": [
+   {
+    "kind": "xlsx",
+    "name": "Territory Budgets 2027.xlsx",
+    "sheets": {
+     "East": [
+      [
+       "Territory",
+       "Budget"
+      ],
+      [
+       "E1",
+       410000
+      ],
+      [
+       "E2",
+       385000
+      ],
+      [
+       "E3",
+       505000
+      ]
+     ],
+     "West": [
+      [
+       "Territory",
+       "Budget"
+      ],
+      [
+       "W1",
+       620000
+      ],
+      [
+       "W2",
+       280000
+      ]
+     ]
+    }
+   }
+  ],
+  "thread": [
+   {
+    "from": "Fry, Morgan",
+    "to": [
+     "Reyes, Jordan"
+    ],
+    "date": "Friday, November 13, 2026 at 11:11 AM",
+    "body": "Jordan, can you confirm the totals for the East and West tabs before I send this up?"
+   }
+  ],
+  "rubric": {
+   "include": [
+    [
+     "1.3m",
+     "1,300,000",
+     "1.30m"
+    ],
+    [
+     "900k",
+     "900,000"
+    ]
+   ],
+   "exclude": [],
+   "address": [
+    "Morgan"
+   ]
+  },
+  "reference": "hey Morgan -- confirmed: east totals $1.3m (E1 $410k, E2 $385k, E3 $505k) and west totals $900k (W1 $620k, W2 $280k), $2.2m combined."
+ },
+ {
+  "id": "cc_only_one",
+  "title": "Big cc list, one direct ask",
+  "subject": "RE: Warranty claim backlog",
+  "me": "Jordan Reyes, Jordan",
+  "screenshot": true,
+  "attachments_shown": [],
+  "files": [],
+  "thread": [
+   {
+    "from": "Stone, Blair",
+    "to": [
+     "Reyes, Jordan",
+     "Kim, Hayden",
+     "Wu, Emery"
+    ],
+    "cc": [
+     "Banks, Logan"
+    ],
+    "date": "Wednesday, November 18, 2026 at 4:45 PM",
+    "body": "All - backlog is down to 42 claims from 118 last week. Jordan, can you confirm the auto-approve rule for claims under $500 is still on?"
+   },
+   {
+    "from": "Reyes, Jordan",
+    "to": [
+     "Stone, Blair"
+    ],
+    "date": "Monday, November 9, 2026 at 8:00 AM",
+    "body": "the auto-approve rule for warranty claims under $500 went live this morning."
+   }
+  ],
+  "rubric": {
+   "include": [
+    [
+     "$500",
+     "500"
+    ],
+    [
+     "still on",
+     "still live",
+     "yes",
+     "it's on",
+     "still active"
+    ]
+   ],
+   "exclude": [
+    "(?im)^\\s*(?:hey |hi )?(?:hayden|emery|logan)\\b"
+   ],
+   "address": [
+    "Blair"
+   ]
+  },
+  "reference": "hey Blair -- yes, the auto-approve rule for claims under $500 is still on; it's been live since nov 9. nice work on the backlog, 118 down to 42."
+ },
+ {
+  "id": "tier_rule_screenshot",
+  "title": "Same asterisk case from a screenshot only",
+  "subject": "RE: Program Goals - North",
+  "me": "Jordan Reyes, Jordan",
+  "thread": [
+   {
+    "from": "Hale, Morgan",
+    "to": [
+     "Reyes, Jordan"
+    ],
+    "cc": [
+     "Brandt, Casey",
+     "Vance, Robin"
+    ],
+    "date": "Thursday, November 19, 2026 at 4:01 PM",
+    "body": "Hi Jordan \u2013\n\nI haven't had time to go in and check, but does your logic build in the \"asterisk\" below for Level 3 targets? If not, we will probably have to adjust, and reload.\n\nThanks!\nMorgan"
+   },
+   {
+    "from": "Reyes, Jordan",
+    "to": [
+     "Hale, Morgan",
+     "Brandt, Casey",
+     "Vance, Robin"
+    ],
+    "date": "Thursday, November 19, 2026 11:16 AM",
+    "body": "thanks all-\n\nall goals are now loaded. please let me know if you encounter anything unexpected."
+   },
+   {
+    "from": "Brandt, Casey",
+    "to": [
+     "Reyes, Jordan"
+    ],
+    "date": "Thursday, November 19, 2026 7:37 AM",
+    "body": "Pat, would you please forward the tech goals to Jordan to ensure we get the right version. Thanks, Casey."
+   },
+   {
+    "from": "Reyes, Jordan",
+    "to": [
+     "Hale, Morgan",
+     "Brandt, Casey"
+    ],
+    "date": "Wednesday, November 18, 2026 2:40 PM",
+    "body": "I have the goals from Morgan & Robin. Casey, can you send me the tech goals that Pat sent to you?"
+   },
+   {
+    "from": "Hale, Morgan",
+    "to": [
+     "Reyes, Jordan",
+     "Brandt, Casey"
+    ],
+    "cc": [
+     "Vance, Robin"
+    ],
+    "date": "Monday, November 16, 2026 at 2:37 PM",
+    "body": "Hi Casey / Jordan \u2013\n\nAttached is a file with the '26-27 program goals for the North dealers.\n\nWhat is the best way to get them uploaded?\n\nThanks!\nMorgan"
+   }
+  ],
+  "attachments_shown": [],
+  "screenshot": true,
+  "inline_image": [
+   "* Level 3: goals $300K-$1M = goal + $300K; goals over $1M = 120% of goal"
+  ],
+  "files": [
+   {
+    "kind": "xlsx",
+    "name": "Program Goals - North 26-27.xlsx",
+    "sheets": {
+     "North": [
+      [
+       "TM",
+       "Dealer #",
+       "Dealer Name",
+       "'25-'26 Revenue",
+       "'26-'27 Revenue Goal"
+      ],
+      [
+       "Lee Park",
+       1000,
+       "Prairie Pump Co",
+       228574.91,
+       300000
+      ],
+      [
+       "Sam Ortiz",
+       1001,
+       "North Fork Supply",
+       303941.06,
+       450000
+      ],
+      [
+       "Lee Park",
+       1002,
+       "Bluestem Ag",
+       1110560.68,
+       1200000
+      ],
+      [
+       "Sam Ortiz",
+       1003,
+       "Cedar Flats Supply",
+       1590545.36,
+       2500000
+      ],
+      [
+       "Lee Park",
+       1004,
+       "Red Mesa Water",
+       65095.58,
+       75000
+      ],
+      [
+       "Sam Ortiz",
+       1005,
+       "Dry Creek Pivots",
+       93941.34,
+       120000
+      ],
+      [
+       "Lee Park",
+       1006,
+       "Sandhill Supply",
+       78624.93,
+       125000
+      ],
+      [
+       "Sam Ortiz",
+       1007,
+       "Granite Ag Services",
+       106714.73,
+       125000
+      ],
+      [
+       "Lee Park",
+       1008,
+       "Lone Oak Pumps",
+       108280.87,
+       175000
+      ],
+      [
+       "Sam Ortiz",
+       1009,
+       "Willow Bend Farm Supply",
+       179701.03,
+       220000
+      ],
+      [
+       "Lee Park",
+       1010,
+       "Elm Ridge Water",
+       174605.12,
+       275000
+      ],
+      [
+       "Sam Ortiz",
+       1011,
+       "Kestrel Ridge Ag",
+       516285.21,
+       800000
+      ],
+      [
+       "Lee Park",
+       1012,
+       "Ironwood Supply",
+       487355.76,
+       600000
+      ],
+      [
+       "Sam Ortiz",
+       1013,
+       "Harbor Plains Co-op",
+       3141620.79,
+       3100000
+      ]
+     ]
+    }
+   },
+   {
+    "kind": "text",
+    "name": "repo/docs/goal-targets.md",
+    "text": "# Goal targets\n\nLevel targets for the dealer program.\n\n```text\nlevel 1 = ROUND(goal * 0.90, 0)\nlevel 2 = ROUND(goal, 0)\nlevel 3 = ROUND(goal + 300000, 0)\n          when 300000 <= goal <= 1000000\n        = ROUND(goal * 1.20, 0)\n          otherwise\n```\n"
+   }
+  ],
+  "rubric": {
+   "include": [
+    [
+     "yes",
+     "yep",
+     "already built",
+     "built in",
+     "builds in"
+    ],
+    [
+     "600k",
+     "600,000"
+    ],
+    [
+     "120%",
+     "1.2"
+    ],
+    [
+     "red mesa"
+    ],
+    [
+     "dry creek"
+    ],
+    [
+     "elm ridge"
+    ],
+    [
+     "300k",
+     "300,000"
+    ]
+   ],
+   "exclude": [
+    "(?i)\\b(?:does not|doesn't|isn't|not) (?:build|built|include)",
+    "(?i)\\bsend (?:me )?(?:the |an )?updated file",
+    "(?im)^\\s*(?:hey |hi )?casey\\b",
+    "(?i)\\bpat\\b"
+   ],
+   "address": [
+    "Morgan"
+   ]
+  },
+  "reference": "hey Morgan -- yep, that's already built in. any goal from $300k to $1m gets level 3 at goal + $300k, and over $1m gets 120%. ex. prairie pump co is at $300k with level 3 at $600k. the one thing it doesn't do is force the $300k minimum. 7 dealers came in under it: red mesa water ($75k), dry creek pivots ($120k), sandhill supply and granite ag services ($125k), lone oak pumps ($175k), willow bend farm supply ($220k) and elm ridge water ($275k). want me to bump those up to $300k? then their level 3 would land at $600k.",
+  "screenshot_only": true
+ }
+]

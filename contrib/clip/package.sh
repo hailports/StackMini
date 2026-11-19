@@ -27,8 +27,10 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <plist version="1.0">
 <dict>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>__VERSION__</string>
+  <key>CFBundleVersion</key><string>__BUILD__</string>
+  <key>PaistyFeedURL</key><string>__FEED__</string>
+  <key>PaistyEdPublicKey</key><string>__PUBKEY__</string>
   <key>CFBundleExecutable</key><string>paisty</string>
   <key>CFBundleIdentifier</key><string>com.hailports.paiste</string>
   <key>CFBundleName</key><string>paisty</string>
@@ -39,7 +41,13 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
-swiftc -O -framework Cocoa -framework ApplicationServices -framework ScreenCaptureKit -framework Vision -o "$APP/Contents/MacOS/paisty" "$HERE/PaisteMenu.swift" "$HERE/PastePath.swift" "$HERE/ReplyHint.swift" "$HERE/Onboard.swift"
+VERSION="${PAISTY_VERSION:-1.1.$(git -C "$HERE" rev-list --count HEAD 2>/dev/null || echo 0)}"
+BUILD="${PAISTY_BUILD:-$(git -C "$HERE" rev-list --count HEAD 2>/dev/null || echo 1)}"
+FEED="${PAISTY_FEED:-https://github.com/hailports/StackMini/releases/download/paisty-mac/paisty-update.json}"
+PUBKEY="${PAISTY_ED_PUBLIC_KEY:-$(cat "$HERE/update-public-key.txt" 2>/dev/null || true)}"
+PLIST_PATH="$APP/Contents/Info.plist"
+sed -e "s|__VERSION__|$VERSION|" -e "s|__BUILD__|$BUILD|" -e "s|__FEED__|$FEED|" -e "s|__PUBKEY__|$PUBKEY|" "$PLIST_PATH" > "$PLIST_PATH.tmp" && mv "$PLIST_PATH.tmp" "$PLIST_PATH"
+swiftc -O -framework Cocoa -framework ApplicationServices -framework ScreenCaptureKit -framework Vision -framework CryptoKit -o "$APP/Contents/MacOS/paisty" "$HERE/PaisteMenu.swift" "$HERE/PastePath.swift" "$HERE/ReplyHint.swift" "$HERE/Onboard.swift" "$HERE/Updater.swift"
 sh "$HERE/icon.sh" "$APP"
 cp "$ROOT/hailports/__init__.py" "$ROOT/hailports/llm.py" "$ROOT/hailports/chat_badge.py" "$ROOT/hailports/config.py" "$ROOT/hailports/promptui.py" "$APP/Contents/Resources/py/hailports/"
 cp "$ROOT/hailports/clip/"*.py "$APP/Contents/Resources/py/hailports/clip/"
@@ -64,6 +72,12 @@ codesign --force --sign "$SIGN" --timestamp=none --deep "$APP"
 mkdir -p "$DMGSRC/root"
 cp -R "$APP" "$DMGSRC/root/paisty.app"
 ln -s /Applications "$DMGSRC/root/Applications"
-hdiutil create -volname paisty -srcfolder "$DMGSRC/root" -ov -format UDZO "$HOME/Downloads/paisty.dmg"
+OUT="${PAISTY_OUT:-$HOME/Downloads}"
+mkdir -p "$OUT"
+hdiutil create -volname paisty -srcfolder "$DMGSRC/root" -ov -format UDZO "$OUT/paisty.dmg"
+# The self-update payload: the same signed app, zipped for ditto.
+rm -f "$OUT/paisty-update.zip"
+ditto -c -k --keepParent "$APP" "$OUT/paisty-update.zip"
+printf '%s\n%s\n' "$VERSION" "$BUILD" > "$OUT/paisty-version.txt"
 rm -rf "$STAGE" "$DMGSRC"
-echo "wrote $HOME/Downloads/paisty.dmg"
+echo "wrote $OUT/paisty.dmg $OUT/paisty-update.zip ($VERSION build $BUILD)"
