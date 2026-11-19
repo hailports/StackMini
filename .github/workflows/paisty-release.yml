@@ -1,7 +1,9 @@
 name: paisty-release
 
 # Every push to main that touches the app builds paisty, signs the self-update feed and
-# publishes it. Installed copies pick it up on their next check (at launch, then every 6 hours).
+# uploads it to the R2 bucket behind paisty.com. The disk image is only reachable through the
+# email form (/dl); the update feed (/update/*) answers only to installed copies.
+# Installed copies pick an update up on their next check (at launch, then every 6 hours).
 on:
   push:
     branches: [main]
@@ -15,6 +17,8 @@ on:
       - "hailports/__init__.py"
       - ".github/workflows/paisty-release.yml"
   workflow_dispatch:
+  schedule:
+    - cron: "17 9 * * *"
 
 permissions:
   contents: write
@@ -25,6 +29,7 @@ concurrency:
 
 jobs:
   release:
+    if: github.event_name != 'schedule'
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -54,7 +59,10 @@ jobs:
       - name: build app, disk image and update zip
         env:
           PAISTY_OUT: ${{ github.workspace }}/dist
-        run: sh contrib/clip/package.sh
+          PAISTY_FEED_TOKEN: ${{ secrets.PAISTY_FEED_TOKEN }}
+        run: |
+          if [ -z "$PAISTY_FEED_TOKEN" ]; then echo "PAISTY_FEED_TOKEN missing"; exit 1; fi
+          sh contrib/clip/package.sh
       - name: leak gate
         env:
           PATTERNS: ${{ secrets.PAISTY_LEAK_PATTERNS }}
@@ -68,18 +76,38 @@ jobs:
         env:
           PAISTY_ED_PRIVATE_KEY: ${{ secrets.PAISTY_ED_PRIVATE_KEY }}
         run: |
-          TAG="paisty-v$PAISTY_VERSION"
-          URL="https://github.com/hailports/StackMini/releases/download/$TAG/paisty-update.zip"
+          URL="https://www.paisty.com/update/paisty-update-$PAISTY_BUILD.zip"
           python contrib/clip/sign_update.py --zip dist/paisty-update.zip --version "$PAISTY_VERSION" \
             --build "$PAISTY_BUILD" --url "$URL" --notes "$(git log -1 --format=%s)" --out dist/paisty-update.json
-          echo "TAG=$TAG" >> "$GITHUB_ENV"
-      - name: publish
+      - name: publish to R2
+        env:
+          R2_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT: ${{ secrets.R2_ACCOUNT_ID }}
+        run: |
+          R2_ENDPOINT="https://$R2_ACCOUNT.r2.cloudflarestorage.com/paisty-downloads"
+          put() {
+            code=$(curl -s -o /dev/null -w "%{http_code}" --aws-sigv4 "aws:amz:auto:s3" --user "$R2_ID:$R2_SECRET" \
+              -H "content-type: $3" -T "$1" "$R2_ENDPOINT/$2")
+            echo "$2 $code"
+            [ "$code" = "200" ]
+          }
+          # The zip first, the feed last, so a copy never sees a feed whose file is not there yet.
+          put dist/paisty-update.zip "updates/paisty-update-$PAISTY_BUILD.zip" application/zip
+          put dist/paisty.dmg paisty.dmg application/x-apple-diskimage
+          put dist/paisty-update.json updates/paisty-update.json application/json
+
+  # Copies from 1.1.139 and 1.1.140 read a feed on GitHub. A bridge release there moves them to the
+  # R2 feed once; after the cutoff it is deleted so nothing is downloadable without the form.
+  retire-bridge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: delete the GitHub bridge after the cutoff
         env:
           GH_TOKEN: ${{ github.token }}
+          CUTOFF: "2026-11-27"
         run: |
-          gh release create "$TAG" dist/paisty.dmg dist/paisty-update.zip dist/paisty-update.json \
-            --title "paisty $PAISTY_VERSION" --notes "$(git log -1 --format=%s)" --target "$GITHUB_SHA"
-          # The rolling release the website and installed apps read.
-          gh release view paisty-mac >/dev/null 2>&1 || gh release create paisty-mac --title paisty --notes "Latest paisty for Mac."
-          gh release upload paisty-mac dist/paisty.dmg dist/paisty-update.zip dist/paisty-update.json --clobber
-          gh release edit paisty-mac --notes "paisty $PAISTY_VERSION ($(git rev-parse --short HEAD)). Installed copies update themselves." --latest
+          if [ "$(date -u +%Y-%m-%d)" \< "$CUTOFF" ]; then echo "bridge kept until $CUTOFF"; exit 0; fi
+          for tag in paisty-bridge paisty-mac; do
+            gh release delete "$tag" -R "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null && echo "deleted $tag" || echo "no $tag"
+          done

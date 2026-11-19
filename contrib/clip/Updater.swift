@@ -8,8 +8,9 @@ import CryptoKit
 final class PaistyUpdater {
     static let shared = PaistyUpdater()
     static let autoKey = "paistyAutoUpdate"
-    static let defaultFeed = "https://github.com/hailports/StackMini/releases/download/paisty-mac/paisty-update.json"
-    static let urlPrefix = "https://github.com/hailports/StackMini/releases/download/"
+    static let defaultFeed = "https://www.paisty.com/update/paisty-update.json"
+    static let urlPrefix = "https://www.paisty.com/update/"
+    static let tokenHeader = "X-Paisty-Update"
 
     var timer: Timer?
     var checking = false
@@ -28,6 +29,18 @@ final class PaistyUpdater {
         if let set = ProcessInfo.processInfo.environment["PAISTY_UPDATE_FEED"], !set.isEmpty { return URL(string: set) }
         let raw = Bundle.main.object(forInfoDictionaryKey: "PaistyFeedURL") as? String ?? Self.defaultFeed
         return URL(string: raw)
+    }
+
+    /// Baked in at build time. The update endpoint serves only to copies that carry it.
+    var feedToken: String {
+        Bundle.main.object(forInfoDictionaryKey: "PaistyFeedToken") as? String ?? ""
+    }
+
+    func request(_ url: URL, timeout: TimeInterval) -> URLRequest {
+        var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
+        req.setValue("paisty/\(currentVersion)", forHTTPHeaderField: "User-Agent")
+        if !feedToken.isEmpty { req.setValue(feedToken, forHTTPHeaderField: Self.tokenHeader) }
+        return req
     }
 
     var publicKey: Curve25519.Signing.PublicKey? {
@@ -101,8 +114,7 @@ final class PaistyUpdater {
             return
         }
         checking = true
-        var req = URLRequest(url: feed, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
-        req.setValue("paisty/\(currentVersion)", forHTTPHeaderField: "User-Agent")
+        let req = request(feed, timeout: 20)
         URLSession.shared.dataTask(with: req) { [weak self] data, resp, err in
             guard let self else { return }
             defer { self.checking = false }
@@ -129,7 +141,7 @@ final class PaistyUpdater {
     }
 
     func download(_ offer: Offer) {
-        URLSession.shared.downloadTask(with: offer.url) { [weak self] tmp, resp, err in
+        URLSession.shared.downloadTask(with: request(offer.url, timeout: 300)) { [weak self] tmp, resp, err in
             guard let self else { return }
             guard let tmp, err == nil, (resp as? HTTPURLResponse)?.statusCode == 200,
                   let data = try? Data(contentsOf: tmp, options: .mappedIfSafe) else {
