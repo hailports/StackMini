@@ -108,7 +108,7 @@ hailports chat
 hailports serve
 ```
 
-Add `--model tiny` for a plumbing-sized GGUF, `small` under 8 GB, `balanced` for a 7B text model, or `vision` for MiniCPM-V 4.7 when you have about 20 GB and Metal or CUDA. The reference Mac mini itself now runs Qwen3.6-35B-A3B on the Splash engine (64K context, vision, about 72 tokens/s median on real traffic); see `docs/MODEL.md` for that setup and the before/after numbers.
+Add `--model tiny` for a plumbing-sized GGUF, `small` under 8 GB, `balanced` for a 7B text model, or `vision` for MiniCPM-V 4.7 when you have about 20 GB and Metal or CUDA. On those machines `auto` also picks MiniCPM-V 4.7, because it is the portable llama.cpp build the installer can download anywhere; the installer does not set up Splash yet. The reference Mac mini itself now runs Qwen3.6-35B-A3B on the Splash engine (64K context, vision, about 72 tokens/s median on real traffic); see `docs/MODEL.md` for that setup and the before/after numbers.
 
 Copy `config.example.yaml` if you want to edit by hand. Leave the token fields as `CHANGE_ME`. Put real tokens in the environment names from `.env.example`. A value in the yaml file is ignored.
 

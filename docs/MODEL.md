@@ -51,7 +51,7 @@ Apple M4, 10 cores (4 performance, 6 efficiency), 24 GB unified memory. No seria
 
 ## Previous chat model
 
-This is the previous vision server. It is the rollback target, and the installer still picks `mix_q3gud_im` for other 20 GB+ machines. It is not the process on port 18080.
+This is the previous vision server. It is the rollback target, and the installer still picks (as its portable llama.cpp build; it does not install Splash) `mix_q3gud_im` for other 20 GB+ machines. It is not the process on port 18080.
 
 As of the 2026-11-09 audit the reference machine served the IQ3_XS file below. The `mix_q3gud_im` file is kept beside it as the fallback.
 

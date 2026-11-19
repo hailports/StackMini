@@ -7,7 +7,10 @@ from dataclasses import dataclass
 
 from hailports_setup.detect import Hardware
 
-# Reference vision weights. Byte size matches the published file.
+# Portable vision weights for llama.cpp. Byte size matches the published file.
+# The installer's 20 GB+ pick. The reference Mac mini has run Qwen3.6-35B-A3B on
+# the Splash engine since 2026-11-19 (docs/MODEL.md); the installer does not set
+# Splash up, and this build is also that machine's rollback.
 VISION_URL = (
     "https://huggingface.co/openbmb/MiniCPM-V-4.7-35B-A3B-gguf/resolve/main/"
     "MiniCPM-V-4_7-35B-A3B-mix_q3gud_im.gguf"
