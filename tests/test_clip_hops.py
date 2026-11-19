@@ -804,3 +804,12 @@ def test_retry_keeps_the_conversation_and_drops_an_emptied_reply(tmp_path, monke
     assert code == 2
     assert capsys.readouterr().out.strip() == "empty"
     assert len(seen) == 2
+
+
+def test_lookup_query_carries_the_whole_thread_ask_first():
+    thread = "Subject: dealer goals " + ("earlier reply text " * 300) + " middle fact ZEBRA42 " + ("more " * 200) + " can you confirm the cap?"
+    query = lookup_query(thread)
+    assert query.startswith(query[:600]) and "can you confirm the cap?" in query[:600]
+    assert "Subject: dealer goals" in query
+    assert "ZEBRA42" in query
+    assert len(query) <= 6000

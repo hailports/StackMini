@@ -125,12 +125,17 @@ def full_draft(doc: dict, route: dict, rules: str) -> tuple[str, str]:
     return (text if reply_ok(text) else ""), hop["name"]
 
 
-def lookup_query(text: str, limit: int = 2200) -> str:
-    """Keep the ask. On a long window the questions sit past the first 500 characters."""
+def lookup_query(text: str, limit: int = 6000) -> str:
+    """The whole thread, ask first. The open ask sits at the end of a window, so it leads;
+    then the top of the thread (subject, who), then the rest of the thread up to the limit."""
     flat = " ".join((text or "").split())
-    if len(flat) <= limit:
+    if len(flat) <= 1600:
         return flat
-    return (flat[-1500:] + "\n" + flat[:400])[:limit]
+    head = flat[:1800]
+    ask = flat[-600:]
+    middle = flat[1800:-600]
+    room = max(0, limit - len(ask) - len(head) - 2)
+    return ((ask + "\n" + head + "\n" + middle[-room:]) if room else (ask + "\n" + head))[:limit]
 
 
 def _lookup_notes(cfg: dict | None, text: str) -> str:

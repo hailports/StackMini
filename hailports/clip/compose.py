@@ -187,7 +187,8 @@ def gather(doc: dict, cfg: dict | None, lookup=None, extra_dirs: list[Path] | No
     notes = []
     if lookup is not None:
         try:
-            brain = str(lookup(ask + "\n" + ctx.subject) or "").strip()
+            # The notes helper gets the ask plus the whole thread (and screenshot text), not only the ask.
+            brain = str(lookup(ask + "\n" + ctx.subject + "\n" + (ctx.thread_block or ctx.screen or "")) or "").strip()
         except Exception:  # a lookup failure must not stop the draft
             brain = ""
         if brain:
