@@ -1,0 +1,10 @@
+#!/bin/zsh
+# q4: open a Qwen 4 Max chat session (free, Nous Portal via Hermes Agent). Hosted.
+#   q4            interactive chat
+#   q4 "question" one-shot answer
+#   q4 -c         continue the last session
+HERMES="$(command -v hermes || echo $HOME/.local/bin/hermes)"
+MODEL="${HERMES_QWEN_MODEL:-qwen/qwen4-max:free}"
+if [[ "$1" == "-c" ]]; then shift; exec "$HERMES" --provider nous -m "$MODEL" --continue chat "$@"; fi
+if [[ $# -gt 0 ]]; then exec "$HOME/claude-stack/bin/hermes-qwen4" "$*"; fi
+exec "$HERMES" --provider nous -m "$MODEL" chat

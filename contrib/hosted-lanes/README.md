@@ -22,6 +22,8 @@ hermes-qwen4 --agent "Write a test for x.py" # one-shot `hermes chat -q`, tools 
 hermes-qwen4 --status                        # signed in? proxy up?
 ```
 
+`q4` is the short way in: `q4` opens an interactive `hermes chat` on `qwen/qwen4-max:free`, `q4 "question"` gives a one-shot answer through `hermes-qwen4`, and `q4 -c` continues the last session.
+
 Raw mode starts `hermes proxy` on `127.0.0.1:8645` the first time it is needed and leaves it running. It does not install a login item.
 
 Exit codes: `0` answer printed, `2` usage, `3` sign-in needed, `4` refused by the guard, `5` upstream error or the free window ended. A router should move to the next lane on `3` or `5`.
