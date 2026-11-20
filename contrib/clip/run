@@ -41,7 +41,7 @@ def _cfg(path: str, base_url: str, model: str) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="paiste", description="Draft from the text near the cursor. Nothing is sent.")
-    parser.add_argument("action", nargs="?", default="draft", choices=["draft", "auto", "menu", "check", "onboard", "drafts", "redo", "shot"])
+    parser.add_argument("action", nargs="?", default="draft", choices=["draft", "auto", "menu", "check", "onboard", "drafts", "redo", "shot", "locate"])
     parser.add_argument("--id", default="")
     parser.add_argument("--scene", default="")
     parser.add_argument("--inbox", default="")
@@ -63,7 +63,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--login", default="")
     parser.add_argument("--use", default="")
     parser.add_argument("--image", action="append", default=[])
+    parser.add_argument("--prior", default="", help="file with paisty's last draft for this window (redraft)")
+    parser.add_argument("--field", default="", help="file with the reply box text (locate)")
     args = parser.parse_args(argv)
+    if args.action == "locate":
+        from hailports.clip.owndraft import plan
+        field_text = Path(args.field).read_text(encoding="utf-8") if args.field else ""
+        prior = Path(args.prior).read_text(encoding="utf-8") if args.prior else ""
+        print(json.dumps(plan(field_text, prior)))
+        return 0
     cfg = _cfg(args.route, args.base_url, args.model)
     if args.action == "onboard":
         return cmd_onboard(args, cfg)
@@ -110,7 +118,10 @@ def main(argv: list[str] | None = None) -> int:
     if not raw.strip():
         print("Pass --scene or a JSON scene on stdin.")
         return 2
-    return draft_scene(json.loads(raw), args.base_url, args.model, args.copy, cfg)
+    doc = json.loads(raw)
+    if args.prior and Path(args.prior).is_file():
+        doc["prior_text"] = Path(args.prior).read_text(encoding="utf-8")
+    return draft_scene(doc, args.base_url, args.model, args.copy, cfg)
 
 
 if __name__ == "__main__":

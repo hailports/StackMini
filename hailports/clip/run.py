@@ -200,6 +200,11 @@ def _pin_rules(messages: list[dict], rules: str) -> list[dict]:
 
 
 def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | None = None) -> int:
+    prior_text = str(doc.pop("prior_text", "") or "").strip()
+    if prior_text:
+        # A redraft: paisty's own placed draft is not their message. Take it out and note it.
+        from hailports.clip import owndraft
+        doc = owndraft.strip_scene(doc, prior_text)
     prepared = prepare(scene_from(doc), folders=source_dirs(cfg))
     if not prepared.get("ok"):
         print(prepared.get("reason") or "empty")
@@ -296,6 +301,9 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
             "Code lines outrank an older note when they disagree. "
             "Do not mention a person, a company, or a task from a note unless this message asks about it.\n" + found[:2200]
         )
+    if doc.get("prior_draft"):
+        from hailports.clip import owndraft
+        parts.append(owndraft.prior_note(doc["prior_draft"]))
     note = "\n\n".join(parts).strip()
     if note:
         from hailports.clip.scene import runner_context

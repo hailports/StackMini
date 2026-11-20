@@ -28,8 +28,10 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
     var pastePID: pid_t = 0
     var pasteAt = Date.distantPast
     let mark = PaisteApp.paperclip()
-    var spinTimer: Timer?
-    var spinAngle: CGFloat = 0
+    var spinTimer: Timer?          // the thinking pulse timer (kept name: the glow checks it)
+    var pulse = PulseMachine()
+    var pulseStart = Date()
+    var windowDrafts: [String: LastDraft] = [:]
     let log = Logger(subsystem: "com.hailports.paiste", category: "click")
     // Reply hint: a soft pulse when the front window likely needs a reply.
     var glowTimer: Timer?
@@ -82,36 +84,61 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         return true
     }
 
+    /// Thinking: the paperclip breathes and soft rings move outward. Never a spinner, which reads
+    /// as stuck or broken. Reduce Motion gets a slow opacity breath only.
     func startSpin() {
         stopGlow()
         spinTimer?.invalidate()
-        spinAngle = 0
-        item?.button?.appearsDisabled = false
-        item?.button?.image = wheel(0)
-        item?.button?.toolTip = "paisty"
-        spinTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            self.spinAngle += 30
-            self.item?.button?.image = self.wheel(self.spinAngle)
+        pulse.send(.start)
+        pulseStart = Date()
+        guard let button = item?.button else { return }
+        button.appearsDisabled = false
+        button.alphaValue = 1
+        button.toolTip = "paisty is thinking…"
+        button.setAccessibilityLabel("paisty is thinking")
+        button.image = Self.thinkingImage(PulseSpec.frame(at: 0, reduceMotion: Self.reduceMotion))
+        spinTimer = Timer(timeInterval: 1.0 / PulseSpec.fps, repeats: true) { [weak self] _ in
+            guard let self, let button = self.item?.button else { return }
+            let t = Date().timeIntervalSince(self.pulseStart)
+            button.image = Self.thinkingImage(PulseSpec.frame(at: t, reduceMotion: Self.reduceMotion))
         }
+        // Common modes: the pulse keeps moving while a menu is open.
+        RunLoop.main.add(spinTimer!, forMode: .common)
     }
 
     func stopSpin() {
         spinTimer?.invalidate()
         spinTimer = nil
+        item?.button?.alphaValue = 1
+        item?.button?.setAccessibilityLabel("paisty")
     }
 
-    func wheel(_ angle: CGFloat) -> NSImage {
-        let side: CGFloat = 18
-        let image = NSImage(size: NSSize(width: side, height: side))
-        image.lockFocus()
-        let path = NSBezierPath()
-        path.appendArc(withCenter: NSPoint(x: side / 2, y: side / 2), radius: 6.5, startAngle: angle, endAngle: angle + 280)
-        path.lineWidth = 2
-        path.lineCapStyle = .round
-        NSColor.labelColor.setStroke()
-        path.stroke()
-        image.unlockFocus()
+    static var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
+    /// One frame of the pulse as a template image, so it follows the light or dark menu bar.
+    static func thinkingImage(_ frame: PulseFrame) -> NSImage {
+        let side = PulseSpec.canvas
+        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in
+            let centre = NSPoint(x: side / 2, y: side / 2)
+            for ring in frame.rings where ring.alpha > 0.01 {
+                let r = ring.radius
+                let circle = NSBezierPath(ovalIn: NSRect(x: centre.x - r, y: centre.y - r, width: 2 * r, height: 2 * r))
+                circle.lineWidth = ring.width
+                NSColor.black.withAlphaComponent(ring.alpha).setStroke()
+                circle.stroke()
+            }
+            let clip = clipPath()
+            var t = AffineTransform()
+            t.translate(x: centre.x, y: centre.y)
+            t.scale(frame.scale)
+            t.translate(x: -clip.bounds.midX, y: -clip.bounds.midY)   // centre the paperclip
+            let weight = clip.lineWidth
+            clip.transform(using: t)
+            clip.lineWidth = weight * frame.scale
+            NSColor.black.withAlphaComponent(frame.opacity).setStroke()
+            clip.stroke()
+            return true
+        }
         image.isTemplate = true
         return image
     }
@@ -241,6 +268,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         guard let button = item?.button else { return }
         glowSig = sig
         glowStart = Date()
+        pulse.send(.hintOn)
         button.image = glowMark
         button.toolTip = "A reply may be needed — click to draft"
         glowTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 15.0, repeats: true) { [weak self] _ in
@@ -260,6 +288,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         glowTimer?.invalidate()
         glowTimer = nil
         glowSig = ""
+        pulse.send(.hintOff)
         if let button = item?.button {
             button.alphaValue = 1
             if spinTimer == nil && button.image === glowMark {
@@ -376,11 +405,83 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
 
     @objc func click() {
         let event = NSApp.currentEvent
-        if event?.type == .rightMouseUp || event?.modifierFlags.contains(.option) == true {
+        let gesture = event?.type == .rightMouseUp || event?.modifierFlags.contains(.option) == true
+        let window = Self.windowKey(pid: frontPID)
+        switch ClickRouter.decide(menuGesture: gesture, busy: busy, last: windowDrafts[window], window: window, now: Date()) {
+        case .menu:
             showMenu()
             return
+        case .ignore:
+            return
+        case .offerRedraft:
+            if let last = windowDrafts[window] { showRedraftPopup(last) }
+            return
+        case .draft:
+            startDraft(prior: nil, window: window)
         }
-        if busy { return }
+    }
+
+    /// "pid|bundle|window title": paisty keeps one last draft per window.
+    static func windowKey(pid: pid_t) -> String {
+        guard pid != 0 else { return "" }
+        let app = AXUIElementCreateApplication(pid)
+        var title = ""
+        if let win = PastePath.element(app, kAXFocusedWindowAttribute) {
+            title = PastePath.str(win, kAXTitleAttribute) ?? ""
+        }
+        let bundle = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? "?"
+        return "\(pid)|\(bundle)|\(title)"
+    }
+
+    /// Second click on a window paisty already drafted for.
+    func showRedraftPopup(_ last: LastDraft) {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        let head = NSMenuItem(title: last.placed ? "paisty drafted a reply here" : "paisty copied a reply for this window", action: nil, keyEquivalent: "")
+        head.isEnabled = false
+        menu.addItem(head)
+        let redo = NSMenuItem(title: "Redraft", action: #selector(redraftChosen(_:)), keyEquivalent: "r")
+        redo.target = self
+        redo.representedObject = last.window
+        redo.toolTip = "Reads the screen again, keeps your edits, and replaces the earlier draft"
+        menu.addItem(redo)
+        let copy = NSMenuItem(title: "Copy again", action: #selector(copyAgainChosen(_:)), keyEquivalent: "c")
+        copy.target = self
+        copy.representedObject = last.window
+        menu.addItem(copy)
+        menu.addItem(.separator())
+        let cancel = NSMenuItem(title: "Cancel", action: nil, keyEquivalent: "\u{1b}")
+        cancel.isEnabled = true
+        menu.addItem(cancel)
+        guard let item, let button = item.button else { return }
+        item.menu = menu
+        button.performClick(nil)
+        item.menu = nil
+    }
+
+    @objc func redraftChosen(_ sender: NSMenuItem) {
+        guard let window = sender.representedObject as? String, let last = windowDrafts[window], !busy else { return }
+        startDraft(prior: last, window: window)
+    }
+
+    @objc func copyAgainChosen(_ sender: NSMenuItem) {
+        guard let window = sender.representedObject as? String, let last = windowDrafts[window] else { return }
+        let board = NSPasteboard.general
+        board.clearContents()
+        board.setString(last.text, forType: .string)
+        item?.button?.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: "Copied")
+        item?.button?.toolTip = "Copied again — press Cmd-V where you want it"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            if !self.busy {
+                self.item?.button?.image = self.mark
+                self.item?.button?.toolTip = "paisty"
+            }
+        }
+    }
+
+    /// Draft for the front window. With `prior`, a redraft: paisty's earlier text on screen is its own,
+    /// the user's edits to it are kept, and the new reply replaces it instead of landing under it.
+    func startDraft(prior: LastDraft?, window: String) {
         if !AXIsProcessTrusted() && !askedPasteAccess {
             askedPasteAccess = true
             openSetup()
@@ -388,6 +489,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         busy = true
         draftSig = seenSig
         startSpin()
+        let priorText = prior?.text ?? ""
         let cached = lastGood
         let cachedAt = lastGoodAt
         let cachedPID = lastPID
@@ -401,7 +503,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
             var text = ""
             var blocked = ""
             if Self.usable(scene) {
-                let drafted = Self.draft(scene)
+                let drafted = Self.draft(scene, prior: priorText)
                 text = drafted.reply
                 blocked = drafted.blocked
             }
@@ -413,7 +515,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
                     let seen = Self.screenText(pid: pid)
                     captureNote = seen.isEmpty ? "screen-empty" : "screen-\(seen.count)"
                     if !seen.isEmpty, let raw = Self.screenScene(seen, pid: pid) {
-                        let drafted = Self.draft(raw)
+                        let drafted = Self.draft(raw, prior: priorText)
                         text = drafted.reply
                         blocked = drafted.blocked
                         if text.isEmpty { captureNote = "screen-unusable" }
@@ -421,9 +523,13 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
                 }
             }
             if !text.isEmpty {
-                let path = self.deliver(text, pid: pid, field: field)
+                let path = prior != nil
+                    ? self.deliverRedraft(text, pid: pid, field: field, prior: prior!)
+                    : self.deliver(text, pid: pid, field: field)
                 DispatchQueue.main.async {
-                    self.finish(path: path, note: captureNote)
+                    ClickRouter.remember(LastDraft(text: text, at: Date(), window: window, path: path),
+                                         in: &self.windowDrafts, now: Date())
+                    self.finish(path: path, note: (prior != nil ? "redraft " : "") + captureNote)
                 }
                 return
             }
@@ -479,12 +585,96 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         return path
     }
 
+    /// Place a redraft over paisty's earlier draft. Call off the main thread. Never appends a second
+    /// reply under the first: when the old draft can't be selected safely it stays on the clipboard.
+    func deliverRedraft(_ text: String, pid: pid_t, field: AXUIElement?, prior: LastDraft) -> String {
+        DispatchQueue.main.sync {
+            let board = NSPasteboard.general
+            board.clearContents()
+            board.setString(text, forType: .string)
+        }
+        guard AXIsProcessTrusted(), pid != 0 else { return "copied-untrusted" }
+        var target = field
+        if target == nil || !Self.alive(target!, pid: pid) {
+            Self.activate(pid)
+            target = Self.focusedInput(pid: pid, deep: true)
+        }
+        let value = target.flatMap { PastePath.str($0, kAXValueAttribute) }
+        var plan: [String: Any] = ["mode": "insert"]
+        if let value {
+            plan = Self.locatePlan(field: value, prior: prior.text)
+        }
+        let mode = ReplaceMode.from(plan: plan, fieldReadable: value != nil, previouslyPlaced: prior.placed)
+        PastePath.note("redraft plan=\(plan["mode"] ?? "?")/\(plan["kind"] ?? "?") mode=\(mode)")
+        switch mode {
+        case .insert:
+            return deliver(text, pid: pid, field: target)
+        case .clipboardOnly:
+            return "copied-redraft"
+        case .replace(let start, let length):
+            guard let el = target else { return "copied-redraft" }
+            return Self.replaceRange(el, start16: start, length16: length, with: text, pid: pid) ?? "copied-redraft"
+        }
+    }
+
+    /// Select the old draft by its range, then put the new text over the selection. Verified by reading back.
+    static func replaceRange(_ el: AXUIElement, start16: Int, length16: Int, with text: String, pid: pid_t) -> String? {
+        var range = CFRange(location: start16, length: length16)
+        guard let axRange = AXValueCreate(.cfRange, &range) else { return nil }
+        AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        guard AXUIElementSetAttributeValue(el, kAXSelectedTextRangeAttribute as CFString, axRange) == .success else { return nil }
+        Thread.sleep(forTimeInterval: 0.08)
+        var raw: CFTypeRef?
+        var got = CFRange(location: -1, length: -1)
+        if AXUIElementCopyAttributeValue(el, kAXSelectedTextRangeAttribute as CFString, &raw) == .success, let raw {
+            AXValueGetValue(raw as! AXValue, .cfRange, &got)
+        }
+        guard got.location == start16, got.length == length16 else {
+            PastePath.note("  replace: selection did not stick")
+            return nil
+        }
+        let probe = PastePath.probe(text)
+        let before = PastePath.hits(probe, in: el)
+        if !PastePath.isWebText(el),
+           AXUIElementSetAttributeValue(el, kAXSelectedTextAttribute as CFString, text as CFString) == .success {
+            Thread.sleep(forTimeInterval: 0.12)
+            if PastePath.hits(probe, in: el) > before { return "ax-replace" }
+        }
+        // WebKit and Electron boxes: Cmd-V over the selection.
+        guard PastePath.ensureFront(pid), PastePath.frontPID() == pid, PastePath.commandV() else { return nil }
+        for _ in 0..<10 {
+            Thread.sleep(forTimeInterval: 0.1)
+            if PastePath.hits(probe, in: el) > before { return "cmdv-replace" }
+        }
+        return nil
+    }
+
+    /// Where paisty's earlier draft sits in the reply box (exact, edited or partial), from the bundled helper.
+    static func locatePlan(field: String, prior: String) -> [String: Any] {
+        let dir = FileManager.default.temporaryDirectory
+        let f = dir.appendingPathComponent("paiste-field.txt")
+        let p = dir.appendingPathComponent("paiste-prior-locate.txt")
+        try? field.data(using: .utf8)?.write(to: f)
+        try? prior.data(using: .utf8)?.write(to: p)
+        defer {
+            try? FileManager.default.removeItem(at: f)
+            try? FileManager.default.removeItem(at: p)
+        }
+        let run = runPaiste(["locate", "--field", f.path, "--prior", p.path], timeout: 10)
+        guard run.status == 0, let data = run.out.data(using: .utf8),
+              let doc = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return ["mode": "insert"] }
+        return doc
+    }
+
     func finish(path: String, note: String = "") {
         stopSpin()
+        pulse.send(.finished)
         markHandled(draftSig)
         let copied = path == "copied" || path == "cmdv-unverified" || path == "copied-untrusted"
         // cmdv-unverified: Cmd-V was sent but the field could not be read back. Do not invite a second paste.
-        let tip = path == "copied-untrusted" ? "Copied. Turn on Accessibility to paste automatically."
+        let tip = path == "copied-redraft" ? "Redraft copied — select your earlier draft and press Cmd-V"
+            : path == "ax-replace" || path == "cmdv-replace" ? "Replaced your earlier draft"
+            : path == "copied-untrusted" ? "Copied. Turn on Accessibility to paste automatically."
             : path == "copied" ? "Copied — click the reply box and press Cmd-V"
             : path == "cmdv-unverified" ? "Pasted? If it is not in the reply box, press Cmd-V" : "Pasted"
         item?.button?.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: tip)
@@ -492,7 +682,9 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         item?.button?.appearsDisabled = false
         log.error("\(copied ? "copied" : "pasted", privacy: .public) \(path, privacy: .public) \(note, privacy: .public)")
         busy = false
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + (path == "copied-redraft" ? 4 : 1.2)) {
+            guard !self.busy else { return }
+            self.pulse.send(.settle)
             self.item?.button?.image = self.mark
             self.item?.button?.toolTip = "paisty"
         }
@@ -500,6 +692,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
 
     func fail(_ hint: String) {
         stopSpin()
+        pulse.send(.failed)
         item?.button?.image = NSImage(systemSymbolName: "questionmark", accessibilityDescription: hint)
         item?.button?.toolTip = hint
         item?.button?.appearsDisabled = false
@@ -1173,11 +1366,16 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         return image
     }
 
-    static func draft(_ scene: String) -> (reply: String, blocked: String) {
+    static func draft(_ scene: String, prior: String = "") -> (reply: String, blocked: String) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("paiste-scene.json")
         try? scene.data(using: .utf8)?.write(to: url)
-        defer { try? FileManager.default.removeItem(at: url) }
-        let task = paisteProcess(["draft", "--scene", url.path])
+        let priorURL = FileManager.default.temporaryDirectory.appendingPathComponent("paiste-prior.txt")
+        if !prior.isEmpty { try? prior.data(using: .utf8)?.write(to: priorURL) }
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(at: priorURL)
+        }
+        let task = paisteProcess(["draft", "--scene", url.path] + (prior.isEmpty ? [] : ["--prior", priorURL.path]))
         let out = Pipe()
         let err = Pipe()
         task.standardOutput = out

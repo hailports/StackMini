@@ -23,7 +23,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from hailports.clip import attach, datafacts, rulenotes
+from hailports.clip import attach, datafacts, owndraft, rulenotes
 from hailports.clip import thread as threadmod
 
 QUALITY_RULES = """How to write this reply:
@@ -63,9 +63,14 @@ class Context:
     plan: str = ""
     files: list[str] = field(default_factory=list)
 
+    prior: dict = field(default_factory=dict)
+    prior_block: str = ""
+
     def sources(self) -> str:
+        # The user's own edits to an earlier draft count as source facts.
+        edited = str(self.prior.get("placed") or "") if self.prior.get("kind") not in (None, "", "none", "exact") else ""
         return "\n".join([self.screen, self.thread_block, self.attach_block, self.notes_block,
-                          self.facts_block, self.image_block])
+                          self.facts_block, self.image_block, edited])
 
     def has_data(self) -> bool:
         return bool(self.facts_block.strip() or self.attach_block.strip() or self.notes_block.strip())
@@ -138,6 +143,9 @@ def gather(doc: dict, cfg: dict | None, lookup=None, extra_dirs: list[Path] | No
     ctx = Context(me=me)
     ctx.screen = screen_text(doc)
     ctx.subject = _subject(doc, ctx.screen)
+    if isinstance(doc.get("prior_draft"), dict):
+        ctx.prior = doc["prior_draft"]
+        ctx.prior_block = owndraft.prior_note(ctx.prior)
     field_text = str(doc.get("field_text") or "") or ctx.screen
     ctx.thread = threadmod.parse(field_text, me, subject=ctx.subject)
     if not ctx.thread.ok:
@@ -247,6 +255,9 @@ def messages(ctx: Context, rules: str) -> list[dict]:
     if ctx.thread_block and "window_ocr" in extra:
         pass
     task = "Write the reply now. Only the reply text."
+    if ctx.prior_block:
+        blocks.append(ctx.prior_block)
+        task = "Write the reply now: the whole text that replaces your earlier draft. Only the reply text."
     if ctx.people:
         task += " Answer: " + ", ".join(ctx.people) + "."
     user_text = "\n\n".join(blocks) + "\n\n" + task
@@ -323,7 +334,34 @@ def check(text: str, ctx: Context) -> list[str]:
         issues.append("too long; keep it under 120 words unless a list of names is needed.")
     if re.search(r"(?m)^\s*(?:#|\*\*|- \*\*)", body):
         issues.append("no markdown.")
+    issues += _prior_issues(body, ctx)
     return issues
+
+
+def _prior_issues(body: str, ctx: Context) -> list[str]:
+    """A redraft must not copy the earlier draft, answer it, or drop the user's edits."""
+    prior = ctx.prior or {}
+    original = str(prior.get("original") or "").strip()
+    if not original:
+        return []
+    import difflib
+    out = []
+    low = " ".join(body.lower().split())
+    if prior.get("kind") in ("exact", "none") and difflib.SequenceMatcher(
+            None, low, " ".join(original.lower().split())).ratio() > 0.93:
+        out.append("this is a copy of your earlier draft; write a better version")
+    if prior.get("kind") in ("edited", "partial") and prior.get("placed"):
+        # Numbers, amounts and dates the user typed in are facts: they must survive the redraft.
+        missing = [w.strip(".,") for w in prior.get("added") or [] if re.search(r"\d", w) and w.strip(".,") not in low]
+        cut = [w.strip(".,") for w in prior.get("removed") or [] if re.search(r"\d", w) and w.strip(".,") in low
+               and w.strip(".,") not in ctx.screen.lower()]
+        if missing:
+            out.append("keep the user's edits: " + ", ".join(sorted(set(missing))[:8]))
+        if cut:
+            out.append("the user cut these from your draft; leave them out: " + ", ".join(sorted(set(cut))[:8]))
+    if re.search(r"(?i)\b(your (earlier|previous) draft|thanks for (the|your) draft)\b", body):
+        out.append("do not reply to your own earlier draft")
+    return out
 
 
 def score(text: str, ctx: Context) -> int:
@@ -420,7 +458,9 @@ def draft(doc: dict, cfg: dict | None, rules: str, complete, lookup=None, tries:
 
 
 def wants_full(doc: dict, cfg: dict | None) -> bool:
-    """Use the full-context path for threads, files and screenshots."""
+    """Use the full-context path for threads, files, screenshots and redrafts."""
+    if doc.get("prior_draft"):
+        return True
     if doc.get("images") or doc.get("image_b64") or doc.get("window_ocr"):
         return True
     text = str(doc.get("field_text") or "") + "\n" + str(doc.get("selection") or "")
