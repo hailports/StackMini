@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+"""Daily local-versus-premium tally: calls and tokens per engine, for the premium-burn board.
+
+Local: the resident engine's /metrics counters (requests, prefill input tokens, decode output
+tokens), kept as a per-day delta that survives engine restarts. Premium: Claude Code, Codex and
+Cursor CLI session logs under $HOME written today (sessions, plus tokens where the log has them).
+Paisty: engine-log.jsonl rows today (local pass, local gate fail, premium fallback).
+Writes <runtime>/local_vs_premium_daily.json (today + 14 days) and, with --meters, folds today
+into budget_meters.json under "local_vs_premium". Stdlib only; reads logs, sends nothing.
+"""
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import os
+import re
+import socket
+import time
+import urllib.request
+from datetime import datetime
+from pathlib import Path
+
+HOME = Path.home()
+METRICS = os.environ.get("LOCAL_METRICS_URL", "http://127.0.0.1:18085/metrics")
+KEYS = {"requests": "splash_requests_completed_total",
+        "in": "splash_prefill_input_tokens_total",
+        "out": "splash_decode_output_tokens_total"}
+
+
+def _today() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def _midnight() -> float:
+    return time.mktime(time.strptime(_today(), "%Y-%m-%d"))
+
+
+def read_metrics(url: str = METRICS) -> dict | None:
+    try:
+        with urllib.request.urlopen(url, timeout=4) as r:
+            text = r.read().decode("utf-8", "replace")
+    except Exception:
+        return None
+    out = {}
+    for k, name in KEYS.items():
+        m = re.search(r"(?m)^" + re.escape(name) + r"\s+([0-9.eE+]+)\s*$", text)
+        if m:
+            out[k] = int(float(m.group(1)))
+    return out or None
+
+
+def local_today(state: dict, now: dict | None) -> dict:
+    """state: {date, carry{}, last{}, base{}}. Counter drops mean a restart: carry the old total."""
+    day = _today()
+    if state.get("date") != day:
+        last = state.get("last") or {}
+        state.clear()
+        state.update(date=day, carry={k: 0 for k in KEYS}, base=dict(last) if last else {}, last=dict(last))
+        # Without a snapshot from before midnight the first reading of the day is the base.
+    if now:
+        last = state.get("last") or {}
+        if not state.get("base"):
+            state["base"] = dict(now)
+        for k in KEYS:
+            if k in last and now.get(k, 0) < last[k]:
+                state["carry"][k] = state["carry"].get(k, 0) + last[k] - state["base"].get(k, 0)
+                state["base"][k] = 0
+        state["last"] = dict(now)
+    last, base, carry = state.get("last") or {}, state.get("base") or {}, state.get("carry") or {}
+    return {k: max(0, carry.get(k, 0) + last.get(k, 0) - base.get(k, 0)) for k in KEYS} | {"engine_up": bool(now)}
+
+
+def claude_today(root: Path) -> dict:
+    t0 = _midnight()
+    s = {"sessions": 0, "in": 0, "out": 0}
+    for f in glob.glob(str(root / ".claude/projects/*/*.jsonl")):
+        if os.path.getmtime(f) < t0:
+            continue
+        used = False
+        try:
+            for line in open(f, encoding="utf-8", errors="replace"):
+                if '"usage"' not in line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                u = (d.get("message") or {}).get("usage") or {}
+                if not u:
+                    continue
+                used = True
+                s["in"] += int(u.get("input_tokens", 0)) + int(u.get("cache_creation_input_tokens", 0)) + int(u.get("cache_read_input_tokens", 0))
+                s["out"] += int(u.get("output_tokens", 0))
+        except OSError:
+            continue
+        s["sessions"] += 1 if used else 0
+    return s
+
+
+def codex_today(root: Path) -> dict:
+    t0 = _midnight()
+    s = {"sessions": 0, "in": 0, "out": 0}
+    for home in (".codex", ".codex-personal"):
+        for f in glob.glob(str(root / home / "sessions/*/*/*/*.jsonl")):
+            if os.path.getmtime(f) < t0:
+                continue
+            s["sessions"] += 1
+            last = None
+            try:
+                for line in open(f, encoding="utf-8", errors="replace"):
+                    if "token_count" in line:
+                        last = line
+            except OSError:
+                continue
+            if last:
+                try:
+                    info = (json.loads(last).get("payload") or {}).get("info") or {}
+                    tot = info.get("total_token_usage") or {}
+                    s["in"] += int(tot.get("input_tokens", 0))
+                    s["out"] += int(tot.get("output_tokens", 0))
+                except (ValueError, AttributeError):
+                    pass
+    return s
+
+
+def cursor_today(root: Path) -> dict:
+    t0 = _midnight()
+    n = 0
+    for d in glob.glob(str(root / ".cursor/chats/*/*")):
+        try:
+            if os.path.getmtime(d) >= t0:
+                n += 1
+        except OSError:
+            pass
+    return {"sessions": n, "in": None, "out": None, "note": "Cursor logs carry no token counts"}
+
+
+def paisty_today(root: Path) -> dict:
+    p = root / ".config/paiste/engine-log.jsonl"
+    day = _today()
+    out = {"local_pass": 0, "local_fail": 0, "premium_fallback": 0, "engines": {}}
+    if not p.exists():
+        return out
+    for line in open(p, encoding="utf-8", errors="replace"):
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if not str(d.get("at", "")).startswith(day):
+            continue
+        g = d.get("gate")
+        key = {"pass": "local_pass", "fail": "local_fail", "fallback": "premium_fallback"}.get(g)
+        if key:
+            out[key] += 1
+        e = str(d.get("engine") or "?")
+        out["engines"][e] = out["engines"].get(e, 0) + (0 if g == "fail" else 1)
+    return out
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--runtime", default=str(HOME / "claude-stack/data/runtime"))
+    ap.add_argument("--role", default="host")
+    ap.add_argument("--meters", action="store_true", help="fold today into budget_meters.json")
+    ap.add_argument("--no-local", action="store_true", help="this host has no local engine")
+    a = ap.parse_args()
+    rt = Path(a.runtime)
+    rt.mkdir(parents=True, exist_ok=True)
+    out_p = rt / "local_vs_premium_daily.json"
+    state_p = rt / "local_vs_premium_state.json"
+    state = json.loads(state_p.read_text()) if state_p.exists() else {}
+    local = None if a.no_local else local_today(state, read_metrics())
+    premium = {"claude": claude_today(HOME), "codex": codex_today(HOME), "cursor": cursor_today(HOME)}
+    row = {"date": _today(), "role": a.role, "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+           "local": local, "premium": premium, "paisty": paisty_today(HOME),
+           "premium_sessions": sum(v["sessions"] for v in premium.values())}
+    if local:
+        row["local_share_of_calls"] = round(local["requests"] / max(1, local["requests"] + row["premium_sessions"]), 3)
+    doc = json.loads(out_p.read_text()) if out_p.exists() else {}
+    hist = [h for h in doc.get("history", []) if h.get("date") != row["date"]][-13:] + [row]
+    doc = {"schema": "local_vs_premium.v1", "today": row, "history": hist}
+    for p, body in ((out_p, doc), (state_p, state)):
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(body, indent=1))
+        os.replace(tmp, p)
+    if a.meters:
+        mp = rt / "budget_meters.json"
+        meters = json.loads(mp.read_text()) if mp.exists() else {}
+        meters["local_vs_premium"] = {**row, "ref": str(out_p)}
+        tmp = mp.with_suffix(".lvp.tmp")
+        tmp.write_text(json.dumps(meters, indent=2))
+        os.replace(tmp, mp)
+    print(json.dumps(row))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

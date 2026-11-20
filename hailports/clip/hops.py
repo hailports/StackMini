@@ -48,7 +48,10 @@ def endpoints_from(cfg: dict) -> list[dict]:
                 remote = str(spec.get("remote_url") or "").strip()
                 if not _HOST.match(host) or not _url_ok(remote):
                     continue
-                hops.append({"name": str(name), "via": "ssh", "ssh_host": host, "base_url": remote, "model": model})
+                hop = {"name": str(name), "via": "ssh", "ssh_host": host, "base_url": remote, "model": model}
+                if isinstance(spec.get("timeout_s"), int) and 5 <= spec["timeout_s"] <= 600:
+                    hop["timeout_s"] = spec["timeout_s"]
+                hops.append(hop)
             elif via in {"cursor", "claude", "codex"}:
                 binary = str(spec.get("bin") or "").strip()
                 if not binary.startswith("/") or ".." in binary:
@@ -59,6 +62,8 @@ def endpoints_from(cfg: dict) -> list[dict]:
                 if not _url_ok(base):
                     continue
                 hop = {"name": str(name), "via": "http", "base_url": base, "model": model}
+                if isinstance(spec.get("timeout_s"), int) and 5 <= spec["timeout_s"] <= 600:
+                    hop["timeout_s"] = spec["timeout_s"]
                 key_file = str(spec.get("key_file") or "")
                 if key_file.startswith("/") and ".." not in key_file:
                     hop["key_file"] = key_file
@@ -74,13 +79,13 @@ def endpoints_from(cfg: dict) -> list[dict]:
     }]
 
 
-def ssh_argv(host: str, remote_url: str) -> list[str]:
+def ssh_argv(host: str, remote_url: str, timeout: int = 240) -> list[str]:
     if not _HOST.match(host) or not _url_ok(remote_url):
         raise ModelOffline("bad ssh hop")
     url = remote_url.rstrip("/") + "/chat/completions"
     return [
         "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
-        host, "curl", "-sS", "-m", "240",
+        host, "curl", "-sS", "-m", str(int(timeout)),
         "-H", "Content-Type: application/json",
         # A paisty click is a person waiting. Ask a priority proxy to treat it as chat.
         "-H", "X-Chat-Priority: 1",
@@ -112,7 +117,8 @@ def read_key(endpoint: dict) -> str:
 
 def _http(endpoint: dict, messages: list[dict]) -> str:
     system, user = same_context(*_split_messages(messages))
-    return chat(endpoint["base_url"], endpoint["model"], user, system=system, key=read_key(endpoint)).text
+    return chat(endpoint["base_url"], endpoint["model"], user, timeout=float(endpoint.get("timeout_s") or 120),
+                system=system, key=read_key(endpoint)).text
 
 
 def _ssh(endpoint: dict, messages: list[dict], run=None) -> str:
@@ -134,7 +140,7 @@ def _ssh_once(endpoint: dict, messages: list[dict], run=None) -> str:
         "messages": messages,
         "temperature": 0.2,
     }).encode("utf-8")
-    argv = ssh_argv(endpoint["ssh_host"], endpoint["base_url"])
+    argv = ssh_argv(endpoint["ssh_host"], endpoint["base_url"], int(endpoint.get("timeout_s") or 240))
     if run is not None:
         raw = run(argv, payload)
     else:

@@ -234,7 +234,10 @@ def _keep_locks(text: str, doc: dict, retry) -> str:
     return locks.enforce(text, plan)
 
 
-def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | None = None) -> int:
+def _draft_scene_once(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | None = None,
+                      out: dict | None = None) -> int:
+    """One draft on the route as given. `out` (when given) gets text and hop, and nothing is remembered."""
+    remember = out is None
     doc = redraft_doc(doc)
     prepared = prepare(scene_from(doc), folders=source_dirs(cfg))
     if not prepared.get("ok"):
@@ -272,6 +275,9 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
         except Exception:  # the older path still runs if the full path breaks
             text, hop_name = "", ""
         if text:
+            if out is not None:
+                out.update(text=text, hop=hop_name, path="full")
+                return 0
             try:
                 mark = Path.home() / ".config" / "paiste" / "last-hop"
                 mark.write_text(hop_name + "\n", encoding="utf-8")
@@ -362,9 +368,10 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
             except ModelOffline:
                 pass
         try:
-            mark = Path.home() / ".config" / "paiste" / "last-hop"
-            mark.write_text(hop + "\n", encoding="utf-8")
-            mark.chmod(0o600)
+            if remember:
+                mark = Path.home() / ".config" / "paiste" / "last-hop"
+                mark.write_text(hop + "\n", encoding="utf-8")
+                mark.chmod(0o600)
         except OSError:
             pass
         gaps = missing_commits(text, sources)
@@ -425,6 +432,9 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
     if not reply_ok(text):
         print("empty")
         return 2
+    if out is not None:
+        out.update(text=text, hop=str(hop or ""), path="quick")
+        return 0
     try:
         from hailports.clip.drafts import append as remember_draft
         remember_draft(text, hop=str(hop or ""), app=str(doc.get("app") or ""), scene=doc)
@@ -434,6 +444,87 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
         copy_text(text)
     print(text)
     return 0 if text else 2
+
+
+
+def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | None = None) -> int:
+    """Local engines first when the saved order puts them first: a draft that fails the gate gets
+    one shorter local rewrite, then the whole draft runs on the premium engines. Nothing is sent."""
+    import contextlib
+    import copy as _copy
+    import io
+    import time as _time
+    from hailports.clip import localfirst
+    plan = localfirst.split(cfg) if cfg else None
+    if not plan:
+        return _draft_scene_once(doc, base_url, model, copy, cfg)
+    local_cfg, premium_cfg = plan
+    kind, cap = localfirst.kind_cap(doc)
+    me = [part.strip() for part in str((cfg.get("paiste") or {}).get("me") or "").split(",") if part.strip()]
+    first = ((me or [""])[0].split() or [""])[0]
+    t0 = _time.time()
+    got: dict = {}
+    why: list[str] = []
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = _draft_scene_once(_copy.deepcopy(doc), base_url, model, False, local_cfg, out=got)
+    except Exception as exc:  # the local engine is down, busy or slow: premium takes it
+        code, why = 2, ["local error " + type(exc).__name__]
+    text = str(got.get("text") or "")
+    if code == 0 and text:
+        why = localfirst.gate(text, kind, cap, me)
+        if why:
+            try:
+                again, _name = complete(endpoints_from(local_cfg),
+                                        localfirst.shorter_messages(text, why, kind, cap, first))
+                from hailports.clip import shape as _shape
+                again = _shape.finish(plain_reply(again), kind, me)
+                if reply_ok(again) and not localfirst.gate(again, kind, cap, me):
+                    text, why = again, []
+                else:
+                    why = ["after shorter retry: " + "; ".join(localfirst.gate(again, kind, cap, me) or ["empty"])]
+            except Exception as exc:
+                why = why + ["shorter retry " + type(exc).__name__]
+    elif not why:
+        why = ["local returned no draft"]
+    ms = int((_time.time() - t0) * 1000)
+    from hailports.clip import shape as _shape
+    if not why:
+        hop = str(got.get("hop") or local_cfg["paiste"]["order"][0])
+        localfirst.log({"engine": hop, "tier": "local", "kind": kind, "words": _shape.words(text),
+                        "gate": "pass", "ms": ms, "app": str(doc.get("app") or "")})
+        try:
+            mark = Path.home() / ".config" / "paiste" / "last-hop"
+            mark.write_text(hop + "\n", encoding="utf-8")
+            mark.chmod(0o600)
+        except OSError:
+            pass
+        try:
+            from hailports.clip.drafts import append as remember_draft
+            remember_draft(text, hop=hop, app=str(doc.get("app") or ""), scene=doc)
+        except OSError:
+            pass
+        if copy:
+            copy_text(text)
+        print(text)
+        return 0
+    localfirst.log({"engine": str(got.get("hop") or local_cfg["paiste"]["order"][0]), "tier": "local",
+                    "kind": kind, "words": _shape.words(text), "gate": "fail", "why": why[:4], "ms": ms,
+                    "app": str(doc.get("app") or "")})
+    t1 = _time.time()
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        code = _draft_scene_once(doc, base_url, model, copy, premium_cfg)
+    printed = buf.getvalue()
+    sys.stdout.write(printed)
+    try:
+        hop = (Path.home() / ".config" / "paiste" / "last-hop").read_text(encoding="utf-8").strip()
+    except OSError:
+        hop = premium_cfg["paiste"]["order"][0]
+    localfirst.log({"engine": hop, "tier": "premium", "kind": kind, "words": _shape.words(printed) if code == 0 else 0,
+                    "gate": "fallback", "ms": int((_time.time() - t1) * 1000), "code": code,
+                    "app": str(doc.get("app") or "")})
+    return code
 
 
 def draft_screenshot(paths: list[str], base_url: str, model: str, copy: bool, cfg: dict | None = None) -> int:

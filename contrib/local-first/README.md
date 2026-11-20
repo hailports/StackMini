@@ -50,3 +50,11 @@ It listens on 127.0.0.1 only. Low-stakes chat can finish there. It cannot start 
 VS Code Chat can add `contrib/local-first/local-first-vscode.example.json` as a custom chat-completions model (Chat: Manage Language Models, Add Models, Custom Endpoint). That does not replace Copilot inline completions.
 
 Cursor's OpenAI base-URL override is not a reliable hook for a loopback door: current reports say those requests leave the machine. Use the `cursor-agent` PATH wrapper when the IDE or a script actually launches that CLI.
+
+## Local versus premium tally
+
+`contrib/local-first/local-premium-tally --meters` (every 15 min from launchd) writes today and the last 14 days to `local_vs_premium_daily.json`: the local engine's requests and tokens from its `/metrics` counters (kept across engine restarts), Claude Code, Codex and Cursor CLI sessions and tokens from their logs, and Paisty's local pass, local gate fail and premium fallback counts from `engine-log.jsonl`. With `--meters` it also folds today into `budget_meters.json` under `local_vs_premium`. `--no-local` on a host without a local engine.
+
+## Paisty local first
+
+Put the local engine first in `paiste.order` (and `preferred`) with the premium engines after it. Every draft then runs on the local engine and must pass the gate: the length cap, `hey <First>,` first, no markdown, no number or list dumps, and `best,` with the first name on email. A failed gate gets one shorter local rewrite; if that fails, or the local engine is down or slower than its `timeout_s`, the draft runs again on the premium engines. `~/.config/paiste/engine-log.jsonl` records the engine, gate result, words and time for each draft.
