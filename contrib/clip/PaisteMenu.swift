@@ -47,6 +47,24 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
     var trustTimer: Timer?
     var askedPasteAccess = false
 
+    /// paisty://activate?k=… from the key email or the thanks page turns the app on.
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSAppleEventManager.shared().setEventHandler(self, andSelector: #selector(openURL(_:reply:)),
+                                                     forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL))
+    }
+
+    @objc func openURL(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
+        guard let raw = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
+              let url = URL(string: raw), let key = PaistyLicense.activationKey(from: url) else { return }
+        if PaistyLicense.save(key) { activated() }
+    }
+
+    func activated() {
+        board?.licenseOnly = false
+        item?.button?.toolTip = "paisty is on"
+        PaistyUpdater.shared.check(userAsked: false)
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -73,6 +91,10 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         UserDefaults.standard.register(defaults: [Self.glowKey: true])
         PaistyUpdater.shared.isBusy = { [weak self] in self?.busy ?? false }
         PaistyUpdater.shared.start()
+        // No key yet: pick up the one the email form just issued to this network. Nothing to paste.
+        if SetupBoard.licenseState() != .valid {
+            PaistyLicense.claimUntilActive { [weak self] in self?.activated() }
+        }
         Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
             self?.remember()
         }
@@ -1582,6 +1604,10 @@ private let paisteDelegate = PaisteApp()
 @main
 enum PaisteMain {
     static func main() {
+        // `paisty --check-update`: ask the feed exactly as the app does, print the answer, exit. Nothing installs.
+        if CommandLine.arguments.contains("--check-update") {
+            exit(PaistyUpdater.shared.dryRun())
+        }
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
         app.delegate = paisteDelegate

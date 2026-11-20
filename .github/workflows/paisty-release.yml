@@ -3,7 +3,12 @@ name: paisty-release
 # Every push to main that touches the app builds paisty, signs the self-update feed and
 # uploads it to the R2 bucket behind paisty.com. The disk image is only reachable through the
 # email form (/dl); the update feed (/api/update/*) answers only to installed copies.
-# Installed copies pick an update up on their next check (at launch, then every 6 hours).
+# Installed copies pick an update up on their next check (20 s after launch, every 3 hours, on wake),
+# with the baked feed token or their own license key. /dl always serves the paisty.dmg uploaded here,
+# so a new download is this build and updates itself from then on.
+#
+# Build numbers are commits x 10. A manual run with `rebuild: 1..9` republishes the same code as the
+# next build up, which is how an update is tested end to end without a commit.
 on:
   push:
     branches: [main]
@@ -17,6 +22,10 @@ on:
       - "hailports/__init__.py"
       - ".github/workflows/paisty-release.yml"
   workflow_dispatch:
+    inputs:
+      rebuild:
+        description: "0 = normal; 1-9 republishes this commit one step up (update test)"
+        default: "0"
   schedule:
     - cron: "17 9 * * *"
 
@@ -44,7 +53,7 @@ jobs:
           HAILPORTS_PROMPT: plain
         run: |
           python -m pip install -q -e ".[dev]" cryptography
-          python -m pytest -q tests/test_clip_compose.py tests/test_clip_hops.py tests/test_clip.py tests/test_clip_owndraft.py tests/test_clip_pulse_swift.py
+          python -m pytest -q tests/test_clip_compose.py tests/test_clip_hops.py tests/test_clip.py tests/test_clip_owndraft.py tests/test_clip_pulse_swift.py tests/test_clip_license.py
       - name: bundled python
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -52,10 +61,18 @@ jobs:
           PY=$(dirname "$(dirname "$(~/.local/bin/uv python find 3.12)")")
           echo "PAISTY_PYTHON_PREFIX=$PY" >> "$GITHUB_ENV"
       - name: version
+        env:
+          REBUILD_INPUT: ${{ github.event.inputs.rebuild }}
         run: |
-          BUILD=$(git rev-list --count HEAD)
+          COUNT=$(git rev-list --count HEAD)
+          REBUILD="${REBUILD_INPUT:-0}"
+          case "$REBUILD" in [0-9]) ;; *) echo "rebuild must be 0-9"; exit 1 ;; esac
+          BUILD=$((COUNT * 10 + REBUILD))
+          VERSION="1.1.$COUNT"
+          [ "$REBUILD" = 0 ] || VERSION="$VERSION.$REBUILD"
           echo "PAISTY_BUILD=$BUILD" >> "$GITHUB_ENV"
-          echo "PAISTY_VERSION=1.1.$BUILD" >> "$GITHUB_ENV"
+          echo "PAISTY_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "version $VERSION build $BUILD"
       - name: build app, disk image and update zip
         env:
           PAISTY_OUT: ${{ github.workspace }}/dist
@@ -96,6 +113,10 @@ jobs:
           put dist/paisty-update.zip "updates/paisty-update-$PAISTY_BUILD.zip" application/zip
           put dist/paisty.dmg paisty.dmg application/x-apple-diskimage
           put dist/paisty-update.json updates/paisty-update.json application/json
+          # The form's download (/dl) streams R2 paisty.dmg. Read it back: it must be this build.
+          curl -s -o dist/served.dmg --aws-sigv4 "aws:amz:auto:s3" --user "$R2_ID:$R2_SECRET" "$R2_ENDPOINT/paisty.dmg"
+          if [ "$(shasum -a 256 < dist/served.dmg)" != "$(shasum -a 256 < dist/paisty.dmg)" ]; then echo "R2 paisty.dmg is not this build"; exit 1; fi
+          echo "form download serves $PAISTY_VERSION ($PAISTY_BUILD)"
 
   # Copies from 1.1.139 and 1.1.140 read a feed on GitHub. A bridge release there moves them to the
   # R2 feed once; after the cutoff it is deleted so nothing is downloadable without the form.

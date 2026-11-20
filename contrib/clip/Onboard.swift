@@ -101,23 +101,11 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".config/paiste/license")
         guard let key = try? String(contentsOf: url, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
               !key.isEmpty else { return .missing }
-        guard key.contains("."), key.count > 40, key.count < 4000 else { return .expiredOrInvalid }
-        let parts = key.split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false)
-        guard parts.count == 2,
-              let payload = hexData(String(parts[0])),
-              let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else { return .expiredOrInvalid }
-        let exp: Double
-        if let number = json["exp"] as? NSNumber {
-            exp = number.doubleValue
-        } else if let value = json["exp"] as? Double {
-            exp = value
-        } else if let value = json["exp"] as? Int {
-            exp = Double(value)
-        } else {
-            return .expiredOrInvalid
-        }
-        if exp == 0 || exp > Date().timeIntervalSince1970 { return .valid }
-        return .expiredOrInvalid
+        return licenseState(of: key, device: PaistyLicense.deviceID)
+    }
+
+    static func licenseState(of key: String, device: String, now: Date = Date()) -> LicenseState {
+        PaistyLicense.valid(key, device: device, now: now) ? .valid : .expiredOrInvalid
     }
 
     static func needsLicense() -> Bool {
@@ -392,7 +380,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
     @objc func saveLicense() {
         capture()
         let key = (fields["license"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard key.contains("."), key.count > 40, key.count < 4000 else {
+        guard PaistyLicense.plausible(key) else {
             statusField.stringValue = "That key was not kept."
             return
         }
@@ -443,7 +431,12 @@ final class SetupBoard: NSObject, NSWindowDelegate {
                 let reason = json["reason"] as? String ?? ""
                 if error == nil, code == 200, json["ok"] as? Bool == true {
                     self.trialFailure = false
-                    self.statusField.stringValue = "Check your email for the key"
+                    self.statusField.stringValue = "Turning paisty on…"
+                    PaistyLicense.claimUntilActive { [weak self] in
+                        self?.licenseOnly = false
+                        self?.statusField.stringValue = "paisty is on. Nothing to paste."
+                        self?.render()
+                    }
                 } else {
                     self.trialFailure = true
                     switch (code, reason) {

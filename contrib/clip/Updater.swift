@@ -4,7 +4,12 @@ import CryptoKit
 /// Self-update. Every build on main publishes a signed feed; installed copies check it and
 /// replace themselves in place. The feed and the zip are verified with an Ed25519 key that is
 /// compiled into the app, and the zip's SHA-256 must match the signed feed. Nothing about the
-/// user is sent: the request is a plain GET of a public file.
+/// user is sent beyond the app's own key: the request is a GET with the baked feed token and the
+/// license key, either of which opens the feed.
+///
+/// When: 20 s after launch, every 3 hours, and on wake when the last check is older than that.
+/// Install: swap the bundle in place, then relaunch: launchd's KeepAlive restarts a launchd copy,
+/// anything else is reopened by a detached shell.
 final class PaistyUpdater {
     static let shared = PaistyUpdater()
     static let autoKey = "paistyAutoUpdate"
@@ -14,6 +19,7 @@ final class PaistyUpdater {
 
     var timer: Timer?
     var checking = false
+    var lastCheck: Date?
     /// The app tells the updater when a draft is running so an install never interrupts one.
     var isBusy: () -> Bool = { false }
 
@@ -40,6 +46,7 @@ final class PaistyUpdater {
         var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
         req.setValue("paisty/\(currentVersion)", forHTTPHeaderField: "User-Agent")
         if !feedToken.isEmpty { req.setValue(feedToken, forHTTPHeaderField: Self.tokenHeader) }
+        for (name, value) in PaistyLicense.feedHeaders() { req.setValue(value, forHTTPHeaderField: name) }
         return req
     }
 
@@ -55,10 +62,15 @@ final class PaistyUpdater {
     }
 
     func start() {
-        let delay = Double(ProcessInfo.processInfo.environment["PAISTY_UPDATE_DELAY"] ?? "") ?? 45
+        let delay = Double(ProcessInfo.processInfo.environment["PAISTY_UPDATE_DELAY"] ?? "") ?? UpdateSchedule.firstCheck
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.check(userAsked: false) }
-        timer = Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: UpdateSchedule.every, repeats: true) { [weak self] _ in
             self?.check(userAsked: false)
+        }
+        // A Mac that slept through the timer checks when it wakes.
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self, UpdateSchedule.due(lastCheck: self.lastCheck) else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 30) { self.check(userAsked: false) }
         }
     }
 
@@ -114,6 +126,7 @@ final class PaistyUpdater {
             return
         }
         checking = true
+        lastCheck = Date()
         let req = request(feed, timeout: 20)
         URLSession.shared.dataTask(with: req) { [weak self] data, resp, err in
             guard let self else { return }
@@ -198,38 +211,66 @@ final class PaistyUpdater {
             try? FileManager.default.copyItem(at: app, to: dest)
             return
         }
-        let pid = ProcessInfo.processInfo.processIdentifier
+        // Swap in place while running (the old binary stays mapped), so nothing depends on a helper
+        // outliving this process: launchd kills a job's leftover children when it exits.
+        let fm = FileManager.default
         let backup = parent.appendingPathComponent(".paisty-previous.app")
-        // Tests swap the app without starting it again.
-        let relaunch = ProcessInfo.processInfo.environment["PAISTY_UPDATE_NO_RELAUNCH"] == nil
-        let open = relaunch ? "open '\(current.path)'" : ":"
-        let script = """
-        #!/bin/sh
-        while kill -0 \(pid) 2>/dev/null; do sleep 0.3; done
-        rm -rf '\(backup.path)'
-        mv '\(current.path)' '\(backup.path)' || exit 1
-        if mv '\(app.path)' '\(current.path)'; then
-          xattr -dr com.apple.quarantine '\(current.path)' 2>/dev/null
-          rm -rf '\(backup.path)'
-          \(open)
-        else
-          mv '\(backup.path)' '\(current.path)'
-          \(open)
-        fi
-        """
-        let path = FileManager.default.temporaryDirectory.appendingPathComponent("paisty-swap.sh")
+        try? fm.removeItem(at: backup)
         do {
-            try script.write(to: path, atomically: true, encoding: .utf8)
+            try fm.moveItem(at: current, to: backup)
         } catch {
-            log("swap script write failed")
+            log("swap failed: could not move the running copy aside")
             return
         }
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/bin/sh")
-        task.arguments = [path.path]
-        do { try task.run() } catch { log("swap launch failed"); return }
-        log("installing \(offer.version) (\(offer.build)); relaunching")
+        do {
+            try fm.moveItem(at: app, to: current)
+        } catch {
+            try? fm.moveItem(at: backup, to: current)
+            log("swap failed: restored \(currentVersion)")
+            return
+        }
+        Self.run("/usr/bin/xattr", ["-dr", "com.apple.quarantine", current.path])
+        try? fm.removeItem(at: backup)
+        let env = ProcessInfo.processInfo.environment
+        if env["PAISTY_UPDATE_NO_RELAUNCH"] == nil && !UpdateSchedule.underLaunchd(env) {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/sh")
+            task.arguments = ["-c", "sleep 1; /usr/bin/open \"$0\"", current.path]
+            try? task.run()
+        }
+        log("installed \(offer.version) (\(offer.build)); relaunching")
         NSApp.terminate(nil)
+    }
+
+    /// `paisty --check-update`. Asks the feed as the app does (baked token + key), and once with the key
+    /// alone, verifies the signature, and prints one line each. Exit 0 when the feed answered and verified.
+    func dryRun() -> Int32 {
+        guard let feed = feedURL, let key = publicKey else { print("no feed or key in this build"); return 2 }
+        func fetch(_ req: URLRequest) -> (Int, Data?) {
+            let sem = DispatchSemaphore(value: 0)
+            var out: (Int, Data?) = (0, nil)
+            URLSession.shared.dataTask(with: req) { data, resp, _ in
+                out = ((resp as? HTTPURLResponse)?.statusCode ?? 0, data)
+                sem.signal()
+            }.resume()
+            _ = sem.wait(timeout: .now() + 25)
+            return out
+        }
+        let both = request(feed, timeout: 20)
+        var keyOnly = both
+        keyOnly.setValue(nil, forHTTPHeaderField: Self.tokenHeader)
+        let (status, data) = fetch(both)
+        let (keyStatus, _) = PaistyLicense.feedHeaders().isEmpty ? (0, nil) : fetch(keyOnly)
+        let device = PaistyLicense.deviceID.isEmpty ? "none" : String(PaistyLicense.deviceID.prefix(6)) + "…"
+        print("installed \(currentVersion) (\(currentBuild)) device \(device) license \(SetupBoard.licenseState())")
+        print("feed http \(status); with the license key alone http \(keyStatus)")
+        guard status == 200, let data, let offer = Self.verifiedOffer(data, key: key) else {
+            print("feed not verified")
+            return 1
+        }
+        let next = offer.build > currentBuild ? "would install \(offer.version) (\(offer.build))" : "up to date"
+        print("feed \(offer.version) (\(offer.build)) signature ok; \(next); auto \(autoOn ? "on" : "off"); every \(Int(UpdateSchedule.every / 3600)) h")
+        return 0
     }
 
     func notify(_ text: String) {

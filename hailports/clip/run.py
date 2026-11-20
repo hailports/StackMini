@@ -59,7 +59,7 @@ def _complete(cfg: dict):
 
 def _instructions(cfg: dict | None) -> str:
     """The writing rules stay off a copied app. A local signer reads a local file. Everyone else asks the license server."""
-    from hailports.clip.gate import read_token, secret_path
+    from hailports.clip.gate import device_id, read_token, secret_path
     local = Path.home() / ".config" / "paiste" / "instructions"
     if secret_path().is_file() and local.is_file():
         return local.read_text(encoding="utf-8", errors="replace").strip()
@@ -72,7 +72,7 @@ def _instructions(cfg: dict | None) -> str:
     try:
         req = urllib.request.Request(
             url,
-            data=json.dumps({"token": token}).encode("utf-8"),
+            data=json.dumps({"token": token, "device": device_id()}).encode("utf-8"),
             headers={"Content-Type": "application/json", "User-Agent": "paisty/1"},
             method="POST",
         )

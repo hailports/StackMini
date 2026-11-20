@@ -5,9 +5,33 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
+import subprocess
 import time
 import urllib.request
 from pathlib import Path
+
+_DEVICE: list[str] = []
+
+
+def device_hash(uuid: str) -> str:
+    """Same as the app: salted SHA-256 of the hardware UUID, 32 hex. The UUID never leaves the Mac."""
+    return hashlib.sha256(("paisty-device:" + uuid.upper()).encode("utf-8")).hexdigest()[:32]
+
+
+def device_id(run=subprocess.run) -> str:
+    if _DEVICE:
+        return _DEVICE[0]
+    value = ""
+    try:
+        out = run(["/usr/sbin/ioreg", "-rd1", "-c", "IOPlatformExpertDevice"], capture_output=True, text=True, timeout=5).stdout
+        match = re.search(r'"IOPlatformUUID"\s*=\s*"([0-9A-Fa-f-]+)"', out or "")
+        value = device_hash(match.group(1)) if match else ""
+    except (OSError, subprocess.SubprocessError):
+        value = ""
+    _DEVICE.append(value)
+    return value
+
 
 def license_path() -> Path:
     return Path.home() / ".config" / "paiste" / "license"
@@ -42,7 +66,7 @@ def _open_token(token: str) -> dict | None:
         return None
 
 
-def verify(token: str, secret: bytes) -> bool:
+def verify(token: str, secret: bytes, device: str | None = None) -> bool:
     try:
         body_hex, sig = token.split(".", 1)
         body = bytes.fromhex(body_hex)
@@ -54,6 +78,9 @@ def verify(token: str, secret: bytes) -> bool:
     try:
         payload = json.loads(body.decode("utf-8"))
     except json.JSONDecodeError:
+        return False
+    dev = str(payload.get("dev") or "")
+    if dev and dev != (device_id() if device is None else device):
         return False
     exp = int(payload.get("exp") or 0)
     return exp == 0 or exp > int(time.time())
@@ -96,7 +123,7 @@ def allowed(cfg: dict | None = None, urlopen=None) -> bool:
     try:
         req = urllib.request.Request(
             url,
-            data=json.dumps({"token": token}).encode("utf-8"),
+            data=json.dumps({"token": token, "device": device_id()}).encode("utf-8"),
             headers={"Content-Type": "application/json", "User-Agent": "paisty/1"},
             method="POST",
         )
