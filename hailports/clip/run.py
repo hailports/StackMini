@@ -477,6 +477,8 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
     import io
     import time as _time
     from hailports.clip import localfirst
+    from hailports.clip import hops as _hops
+    _hops.reset_slow()
     plan = localfirst.split(cfg) if cfg else None
     if not plan:
         return _draft_scene_once(doc, base_url, model, copy, cfg)

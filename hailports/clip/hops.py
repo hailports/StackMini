@@ -56,7 +56,10 @@ def endpoints_from(cfg: dict) -> list[dict]:
                 binary = str(spec.get("bin") or "").strip()
                 if not binary.startswith("/") or ".." in binary:
                     continue
-                hops.append({"name": str(name), "via": via, "bin": binary, "model": via})
+                hop = {"name": str(name), "via": via, "bin": binary, "model": via}
+                if isinstance(spec.get("timeout_s"), int) and 5 <= spec["timeout_s"] <= 600:
+                    hop["timeout_s"] = spec["timeout_s"]
+                hops.append(hop)
             else:
                 base = str(spec.get("base_url") or "").strip()
                 if not _url_ok(base):
@@ -370,7 +373,7 @@ def _cursor(endpoint: dict, messages: list[dict]) -> str:
             cwd=quiet,
             capture_output=True,
             check=False,
-            timeout=90,
+            timeout=int(endpoint.get("timeout_s") or CURSOR_TIMEOUT_S),
             env=premium_env(),
         )
     if done.returncode != 0:
@@ -381,6 +384,16 @@ def _cursor(endpoint: dict, messages: list[dict]) -> str:
     return text
 
 
+CURSOR_TIMEOUT_S = 90
+SLOW_S = 120  # a Cursor call slower than this is not asked again for the same draft
+_SLOW: set = set()
+
+
+def reset_slow() -> None:
+    """Start of a draft: every engine may be asked again."""
+    _SLOW.clear()
+
+
 def complete(endpoints: list[dict], messages: list[dict], http=None, ssh=None) -> tuple[str, str]:
     """Return reply text and the hop name. Raises ModelOffline if every hop fails."""
     if secret_hold(_user_text(messages)):
@@ -388,7 +401,12 @@ def complete(endpoints: list[dict], messages: list[dict], http=None, ssh=None) -
     http_call = http or _http
     ssh_call = ssh or _ssh
     last = "offline"
+    import time as _time
     for endpoint in endpoints:
+        if str(endpoint.get("name") or "") in _SLOW:
+            last = str(endpoint.get("name") or "?") + ":slow"
+            continue
+        t0 = _time.time()
         try:
             via = endpoint.get("via")
             if via == "ssh":
@@ -403,7 +421,11 @@ def complete(endpoints: list[dict], messages: list[dict], http=None, ssh=None) -
                 text = http_call(endpoint, messages)
         except Exception as exc:
             last = str(endpoint.get("name") or "?") + ":" + type(exc).__name__
+            if endpoint.get("via") == "cursor" and _time.time() - t0 > SLOW_S:
+                _SLOW.add(str(endpoint.get("name") or ""))
             continue
+        if endpoint.get("via") == "cursor" and _time.time() - t0 > SLOW_S:
+            _SLOW.add(str(endpoint.get("name") or ""))
         if str(text or "").strip():
             from hailports.clip.scene import strip_scaffold
             cleaned = strip_scaffold(str(text))

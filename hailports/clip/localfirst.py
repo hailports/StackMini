@@ -26,6 +26,7 @@ from pathlib import Path
 from hailports.clip import shape
 
 PREMIUM = {"cursor", "claude", "codex"}
+FIGURES_CURSOR_TIMEOUT_S = 180
 THIN_FLOOR_FROM = 60  # words in their message before a reply under 25 words counts as too thin
 _NUM = re.compile(r"(?<![\w.])\$?\d[\d,]*(?:\.\d+)?%?(?![\w])")
 _LIST = re.compile(r"(?m)^\s*(?:\d+[.)]|[-*•])\s+")
@@ -219,4 +220,8 @@ def premium_first(cfg: dict) -> dict | None:
     out = _copy.deepcopy(cfg)
     out["paiste"]["order"] = prem + [n for n in order if n not in prem]
     out["paiste"]["preferred"] = prem[0]
+    for n in prem:
+        if _via(models[n]) == "cursor":
+            # A thread full of figures is a long prompt: Cursor gets 180 s here (90 s elsewhere).
+            out["paiste"]["models"][n]["timeout_s"] = FIGURES_CURSOR_TIMEOUT_S
     return out

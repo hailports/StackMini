@@ -204,3 +204,31 @@ def test_thin_floor_only_for_long_incoming():
     me = ["Morgan Hale", "Morgan"]
     assert localfirst.gate(short, "email", 180, me, incoming=15) == []
     assert any("too thin" in w for w in localfirst.gate(short, "email", 180, me, incoming=120))
+
+
+def test_figures_route_gives_cursor_180s_plain_keeps_90():
+    out = localfirst.premium_first(_cfg(["local", "cursor"]))
+    from hailports.clip.hops import endpoints_from, CURSOR_TIMEOUT_S
+    assert endpoints_from(out)[0]["timeout_s"] == 180
+    assert "timeout_s" not in endpoints_from(_cfg(["cursor", "local"]))[0] and CURSOR_TIMEOUT_S == 90
+
+
+def test_slow_cursor_is_not_asked_twice(monkeypatch):
+    from hailports.clip import hops
+    clock = {"t": 0.0}
+    monkeypatch.setattr("time.time", lambda: clock["t"])
+    asked = []
+
+    def slow_cursor(endpoint, messages):
+        asked.append("cursor")
+        clock["t"] += 130
+        return "hey Dana, first"
+
+    monkeypatch.setattr(hops, "_cursor", slow_cursor)
+    eps = [{"name": "cursor", "via": "cursor", "bin": "/x"}, {"name": "local", "via": "http", "base_url": "http://x/v1"}]
+    hops.reset_slow()
+    assert hops.complete(eps, [{"role": "user", "content": "q"}], http=lambda e, m: "hey Dana, local")[1] == "cursor"
+    assert hops.complete(eps, [{"role": "user", "content": "q"}], http=lambda e, m: "hey Dana, local")[1] == "local"
+    assert asked == ["cursor"]
+    hops.reset_slow()
+    assert hops.complete(eps, [{"role": "user", "content": "q"}], http=lambda e, m: "x")[1] == "cursor"
