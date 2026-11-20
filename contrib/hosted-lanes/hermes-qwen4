@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+"""hermes-qwen4: a free hosted lane (Qwen4 Max on Nous Portal) through Hermes Agent.
+
+Hosted. Every prompt leaves this machine for Nous Portal and its model partners.
+Never the default for anything; callers opt in by name.
+
+  hermes-qwen4 [--agent] [--model M] [--system S] [PROMPT | -]
+  hermes-qwen4 --status
+
+Raw mode (default) sends one chat completion through `hermes proxy` on loopback
+and prints the answer. --agent runs a one-shot `hermes chat -q` instead (tools on).
+
+Env:
+  HERMES_QWEN_MODEL   model id (default qwen/qwen4-max:free)
+  HERMES_QWEN_GUARD   secrets (default) | gate | off
+                      secrets: refuse credential shapes and private keys
+                      gate:    also run an outside egress gate (HERMES_QWEN_GATE
+                               "module:func", import path HERMES_QWEN_GATE_PATH);
+                               fail-closed if it cannot load
+  HERMES_PROXY_URL    default http://127.0.0.1:8645/v1
+  HERMES_BIN          default: hermes on PATH, then ~/.local/bin/hermes
+  HERMES_QWEN_LOG     receipts (no prompt text), default ~/.hermes-qwen4/receipts.jsonl
+
+Exit: 0 ok, 2 usage, 3 sign-in needed, 4 guard refused, 5 upstream error.
+"""
+import hashlib, importlib, json, os, re, shutil, subprocess, sys, time, urllib.error, urllib.request
+
+MODEL = os.environ.get("HERMES_QWEN_MODEL", "qwen/qwen4-max:free")
+GUARD = os.environ.get("HERMES_QWEN_GUARD", "secrets").strip().lower()
+PROXY = os.environ.get("HERMES_PROXY_URL", "http://127.0.0.1:8645/v1").rstrip("/")
+LOG = os.path.expanduser(os.environ.get("HERMES_QWEN_LOG", "~/.hermes-qwen4/receipts.jsonl"))
+
+SECRET = re.compile(
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----"
+    r"|\b(?:sk|rk|pk)-[A-Za-z0-9_-]{20,}"
+    r"|\bgh[pousr]_[A-Za-z0-9]{30,}"
+    r"|\bgithub_pat_[A-Za-z0-9_]{30,}"
+    r"|\bxox[abposr]-[A-Za-z0-9-]{10,}"
+    r"|\bAKIA[0-9A-Z]{16}\b"
+    r"|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"
+    r"|(?i:\b(?:password|passwd|api[_-]?key|secret|token)\s*[:=]\s*['\"]?[^\s'\"]{8,})"
+)
+
+
+def hermes_bin():
+    b = os.environ.get("HERMES_BIN") or shutil.which("hermes") or os.path.expanduser("~/.local/bin/hermes")
+    if not os.path.exists(b):
+        die(5, "hermes not installed")
+    return b
+
+
+def die(code, msg):
+    sys.stderr.write(f"hermes-qwen4: {msg}\n")
+    sys.exit(code)
+
+
+def receipt(**kw):
+    try:
+        os.makedirs(os.path.dirname(LOG), exist_ok=True)
+        kw["ts"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        with open(LOG, "a") as f:
+            f.write(json.dumps(kw) + "\n")
+    except OSError:
+        pass
+
+
+def guard(text):
+    if GUARD == "off":
+        return True, "off"
+    if SECRET.search(text):
+        return False, "credential shape matched"
+    if GUARD == "gate":
+        spec = os.environ.get("HERMES_QWEN_GATE", "")
+        path = os.environ.get("HERMES_QWEN_GATE_PATH", "")
+        try:
+            if path:
+                sys.path.insert(0, os.path.expanduser(path))
+            mod, fn = spec.split(":", 1)
+            ok, why = getattr(importlib.import_module(mod), fn)(prompt=text)
+            return bool(ok), str(why)
+        except Exception as exc:  # fail closed
+            return False, f"gate unavailable ({type(exc).__name__})"
+    return True, "clear"
+
+
+def http(method, url, body=None, timeout=10):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method, headers={
+        "Content-Type": "application/json", "Authorization": "Bearer local-proxy"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode() or "{}")
+
+
+def proxy_up():
+    try:
+        http("GET", PROXY + "/models", timeout=3)
+        return True
+    except Exception:
+        return False
+
+
+def signed_in():
+    try:
+        out = subprocess.run([hermes_bin(), "proxy", "status"], capture_output=True, text=True, timeout=180).stdout
+    except Exception:
+        return None
+    low = out.lower()
+    if "not logged in" in low or "need attention" in low or "needs attention" in low:
+        return False
+    return "ready" in low
+
+
+def ensure_proxy():
+    if proxy_up():
+        return
+    st = signed_in()
+    if st is False:
+        die(3, "Nous Portal sign-in needed: run `hermes auth add nous --type oauth` on this machine")
+    logdir = os.path.dirname(LOG)
+    os.makedirs(logdir, exist_ok=True)
+    with open(os.path.join(logdir, "proxy.log"), "a") as lf:
+        subprocess.Popen([hermes_bin(), "proxy", "start"], stdout=lf, stderr=lf,
+                         stdin=subprocess.DEVNULL, start_new_session=True)
+    for _ in range(120):
+        time.sleep(1)
+        if proxy_up():
+            return
+    die(5, "hermes proxy did not come up on loopback")
+
+
+def main(argv):
+    agent, system, model, prompt = False, None, MODEL, None
+    it = iter(argv)
+    for a in it:
+        if a in ("-h", "--help"):
+            print(__doc__); return 0
+        if a == "--status":
+            st = signed_in()
+            print(json.dumps({"model": MODEL, "guard": GUARD, "proxy_up": proxy_up(),
+                              "signed_in": st}))
+            return 0 if st else 3
+        if a == "--agent": agent = True
+        elif a == "--model": model = next(it, model)
+        elif a == "--system": system = next(it, None)
+        elif prompt is None: prompt = a
+        else: die(2, "one prompt only (quote it, or pipe it with -)")
+    if prompt in (None, "-"):
+        prompt = sys.stdin.read()
+    if not prompt.strip():
+        die(2, "empty prompt")
+    text = prompt + ("\n" + system if system else "")
+    ok, why = guard(text)
+    h = hashlib.sha256(text.encode()).hexdigest()[:12]
+    if not ok:
+        receipt(lane="hermes-qwen4", model=model, chars=len(text), sha=h, outcome="refused", why=why)
+        die(4, f"refused by guard: {why}")
+    t0 = time.time()
+    if agent:
+        cmd = [hermes_bin(), "chat", "--provider", "nous", "--model", model, "--query-file", "-"]
+        r = subprocess.run(cmd, input=prompt, text=True)
+        receipt(lane="hermes-qwen4", mode="agent", model=model, chars=len(text), sha=h,
+                outcome="ok" if r.returncode == 0 else f"exit {r.returncode}", secs=round(time.time() - t0, 1))
+        return 0 if r.returncode == 0 else 5
+    ensure_proxy()
+    msgs = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]
+    try:
+        resp = http("POST", PROXY + "/chat/completions", {"model": model, "messages": msgs}, timeout=900)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")[:300]
+        receipt(lane="hermes-qwen4", mode="raw", model=model, chars=len(text), sha=h, outcome=f"http {e.code}")
+        if e.code in (401, 403) and "log" in body.lower():
+            die(3, "Nous Portal sign-in needed: run `hermes auth add nous --type oauth`")
+        masked = re.sub(r"(eyJ|sk-)[A-Za-z0-9_.-]+", r"\1****", body)
+        die(5, "upstream HTTP %s: %s" % (e.code, masked))
+    except Exception as exc:
+        receipt(lane="hermes-qwen4", mode="raw", model=model, chars=len(text), sha=h, outcome=type(exc).__name__)
+        die(5, f"upstream error: {type(exc).__name__}")
+    try:
+        out = resp["choices"][0]["message"]["content"] or ""
+    except Exception:
+        die(5, "unexpected response shape")
+    u = resp.get("usage") or {}
+    receipt(lane="hermes-qwen4", mode="raw", model=resp.get("model", model), chars=len(text), sha=h, outcome="ok",
+            secs=round(time.time() - t0, 1), prompt_tokens=u.get("prompt_tokens"), completion_tokens=u.get("completion_tokens"))
+    sys.stdout.write(out.rstrip() + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
