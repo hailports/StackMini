@@ -96,6 +96,40 @@ def _context_note(cfg: dict | None) -> str:
     return path.read_text(encoding="utf-8", errors="replace").strip()[:6000]
 
 
+_LOOKUPS: dict = {}
+
+
+def _lookup_proc(path: Path, query: str, timeout: int = 25) -> tuple[int, str]:
+    """Run the notes helper once per query for a few minutes: routing and drafting share the answer."""
+    import time as _time
+    key = (str(path), query)
+    hit = _LOOKUPS.get(key)
+    if hit and _time.time() - hit[0] < 300:
+        return hit[1], hit[2]
+    try:
+        proc = subprocess.run([str(path)], input=query, text=True, capture_output=True, timeout=timeout)
+        code, out = proc.returncode, proc.stdout or ""
+    except (OSError, subprocess.TimeoutExpired):
+        code, out = 1, ""
+    if len(_LOOKUPS) > 32:
+        _LOOKUPS.clear()
+    _LOOKUPS[key] = (_time.time(), code, out)
+    return code, out
+
+
+def _route_lookup(cfg: dict | None, doc: dict) -> str:
+    """The notes helper's answer for this thread, for the figure-heavy check."""
+    from hailports.clip.localfirst import thread_text
+    paiste = (cfg or {}).get("paiste") or {}
+    raw = str(paiste.get("lookup_cmd") or "").strip()
+    path = Path(raw).expanduser() if raw else Path()
+    text = thread_text(doc)
+    if not text.strip() or not raw or not path.is_file():
+        return ""
+    code, out = _lookup_proc(path, lookup_query(text))
+    return out[:6000] if code == 0 else ""
+
+
 def _brain_notes(cfg: dict | None, text: str) -> str:
     """Only the configured notes helper. Code and docs are searched by compose itself."""
     paiste = (cfg or {}).get("paiste") or {}
@@ -103,11 +137,8 @@ def _brain_notes(cfg: dict | None, text: str) -> str:
     path = Path(raw).expanduser() if raw else Path()
     if not text.strip() or not raw or not path.is_file():
         return ""
-    try:
-        proc = subprocess.run([str(path)], input=lookup_query(text), text=True, capture_output=True, timeout=25)
-    except (OSError, subprocess.TimeoutExpired):
-        return ""
-    return proc.stdout.strip()[:4000] if proc.returncode == 0 else ""
+    code, out = _lookup_proc(path, lookup_query(text))
+    return out.strip()[:4000] if code == 0 else ""
 
 
 def full_draft(doc: dict, route: dict, rules: str) -> tuple[str, str]:
@@ -145,18 +176,9 @@ def _lookup_notes(cfg: dict | None, text: str) -> str:
     raw = str(paiste.get("lookup_cmd") or "").strip()
     path = Path(raw).expanduser() if raw else Path()
     if text.strip() and path.is_file():
-        try:
-            proc = subprocess.run(
-                [str(path)],
-                input=lookup_query(text),
-                text=True,
-                capture_output=True,
-                timeout=25,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            proc = None
-        if proc is not None and proc.returncode == 0:
-            brain = proc.stdout.strip()[:2000]
+        code, out = _lookup_proc(path, lookup_query(text))
+        if code == 0:
+            brain = out.strip()[:2000]
     code = code_notes(text) if text.strip() else ""
     if code:
         code = "Code on this Mac. Use a file, label, or message written here. Do not invent one.\n" + code
@@ -460,6 +482,27 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
         return _draft_scene_once(doc, base_url, model, copy, cfg)
     local_cfg, premium_cfg = plan
     kind, cap = localfirst.kind_cap(doc)
+    heavy, reasons = localfirst.classify(doc, _route_lookup(cfg, doc))
+    if heavy:
+        # Attachments, figures or tables: premium first (cursor, claude, codex), local only if they all fail.
+        routed = localfirst.premium_first(cfg) or cfg
+        t1 = _time.time()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = _draft_scene_once(doc, base_url, model, copy, routed)
+        printed = buf.getvalue()
+        sys.stdout.write(printed)
+        try:
+            hop = (Path.home() / ".config" / "paiste" / "last-hop").read_text(encoding="utf-8").strip()
+        except OSError:
+            hop = routed["paiste"]["order"][0]
+        models = (routed.get("paiste") or {}).get("models") or {}
+        tier = "premium" if localfirst._via(models.get(hop) or {}) in localfirst.PREMIUM else "local"
+        localfirst.log({"engine": hop, "tier": tier, "kind": kind, "route": "figures", "reason": reasons[:4],
+                        "words": localfirst.shape.words(printed) if code == 0 else 0, "gate": "premium_first",
+                        "ms": int((_time.time() - t1) * 1000), "code": code, "app": str(doc.get("app") or "")})
+        return code
+    reasons = ["no attachments, tables or 3+ figures"]
     me = [part.strip() for part in str((cfg.get("paiste") or {}).get("me") or "").split(",") if part.strip()]
     first = ((me or [""])[0].split() or [""])[0]
     t0 = _time.time()
@@ -492,7 +535,8 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
     if not why:
         hop = str(got.get("hop") or local_cfg["paiste"]["order"][0])
         localfirst.log({"engine": hop, "tier": "local", "kind": kind, "words": _shape.words(text),
-                        "gate": "pass", "ms": ms, "app": str(doc.get("app") or "")})
+                        "gate": "pass", "ms": ms, "route": "plain", "reason": reasons,
+                        "app": str(doc.get("app") or "")})
         try:
             mark = Path.home() / ".config" / "paiste" / "last-hop"
             mark.write_text(hop + "\n", encoding="utf-8")
@@ -509,7 +553,7 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
         print(text)
         return 0
     localfirst.log({"engine": str(got.get("hop") or local_cfg["paiste"]["order"][0]), "tier": "local",
-                    "kind": kind, "words": _shape.words(text), "gate": "fail", "why": why[:4], "ms": ms,
+                    "kind": kind, "words": _shape.words(text), "gate": "fail", "why": why[:4], "ms": ms, "route": "plain",
                     "app": str(doc.get("app") or "")})
     t1 = _time.time()
     buf = io.StringIO()
@@ -522,7 +566,7 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
     except OSError:
         hop = premium_cfg["paiste"]["order"][0]
     localfirst.log({"engine": hop, "tier": "premium", "kind": kind, "words": _shape.words(printed) if code == 0 else 0,
-                    "gate": "fallback", "ms": int((_time.time() - t1) * 1000), "code": code,
+                    "gate": "fallback", "route": "plain", "ms": int((_time.time() - t1) * 1000), "code": code,
                     "app": str(doc.get("app") or "")})
     return code
 

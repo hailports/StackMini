@@ -121,3 +121,66 @@ def test_timeout_passes_to_ssh():
     hop = endpoints_from(cfg)[0]
     assert hop["timeout_s"] == 90
     assert "90" in ssh_argv(hop["ssh_host"], hop["base_url"], hop["timeout_s"])
+
+
+PLAIN = ("From: Dana Reyes\nSent: Thursday, November 19, 2026 10:15 AM\nTo: Morgan Hale\nSubject: call\n\n"
+         "hey morgan, can you join the call tomorrow to walk through the portal login flow?\n\n"
+         "Dana Reyes\nMobile +1 217 555 0142\n1234 Main Street, Springfield IL 62701\n")
+FIGS = ("From: Dana\nSent: today\nSubject: totals\n\n"
+        "the C18764 account shows $12,400 and 108 hours, about 14% over plan. why?\n")
+
+
+def test_classify_plain_thread_stays_local():
+    heavy, why = localfirst.classify({"app": "Microsoft Outlook", "field_text": PLAIN})
+    assert not heavy, why
+
+
+def test_classify_figures():
+    heavy, why = localfirst.classify({"app": "Microsoft Outlook", "field_text": FIGS})
+    assert heavy and "figures" in why[0]
+
+
+def test_classify_attachment_and_table():
+    heavy, why = localfirst.classify({"field_text": "hey, see attached: Q3 totals.xlsx please check"})
+    assert heavy and any("attachment" in w for w in why)
+    heavy, why = localfirst.classify({"field_text": "hey can you check"}, "notes: see dealer map.pdf")
+    assert heavy and any("lookup" in w for w in why)
+    heavy, why = localfirst.classify({"field_text": "a | b | c\n1 | 2 | 3\n"})
+    assert heavy and "table" in why
+
+
+def test_premium_first_order():
+    out = localfirst.premium_first(_cfg(["local", "claude", "cursor"]))
+    assert out["paiste"]["order"] == ["cursor", "claude", "local"] and out["paiste"]["preferred"] == "cursor"
+
+
+def test_figure_heavy_goes_premium_first(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("PAISTE_ENGINE_LOG", str(tmp_path / "e.jsonl"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    calls = []
+
+    def once(doc, base_url, model, copy, cfg=None, out=None):
+        calls.append(cfg["paiste"]["order"])
+        print("hey Dana,\n\npremium\n\nbest,\nMorgan")
+        return 0
+
+    monkeypatch.setattr(run, "_draft_scene_once", once)
+    doc = {"app": "Microsoft Outlook", "title": "totals", "field_text": FIGS}
+    assert run.draft_scene(doc, "", "", False, _cfg(["local", "cursor", "claude"])) == 0
+    assert calls == [["cursor", "claude", "local"]]
+    log = (tmp_path / "e.jsonl").read_text()
+    assert '"route": "figures"' in log and "figures in thread" in log
+
+
+def test_plain_thread_logs_route(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("PAISTE_ENGINE_LOG", str(tmp_path / "e.jsonl"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    def once(doc, base_url, model, copy, cfg=None, out=None):
+        out.update(text=GOOD, hop="local")
+        return 0
+
+    monkeypatch.setattr(run, "_draft_scene_once", once)
+    doc = {"app": "Microsoft Outlook", "title": "call", "field_text": PLAIN}
+    assert run.draft_scene(doc, "", "", False, _cfg(["local", "cursor"])) == 0
+    assert '"route": "plain"' in (tmp_path / "e.jsonl").read_text()
