@@ -162,7 +162,7 @@ def test_a_borrowed_status_stays_with_its_author_and_a_no_ask_is_only_thanks():
 
 def test_rules_name_the_person_and_ban_invention():
     rules = draft_rules("Priya", choice=False)
-    assert 'hey Priya --' in rules
+    assert 'hey Priya,' in rules
     assert "hey there" in rules
     assert "Do not invent a time" in rules
     assert "still need" in rules
@@ -174,7 +174,7 @@ def test_rules_name_the_person_and_ban_invention():
     assert "Pick one side" in choice
     ask = rewrite_ask("Priya", choice=False)
     assert ask.startswith("Rewrite that reply")
-    assert "hey Priya --" in ask
+    assert "hey Priya," in ask
     assert "meeting" in ask
     assert "still need" in ask
     assert "proper names" in ask
@@ -441,7 +441,7 @@ def test_draft_pins_the_rules_and_shapes_the_reply(tmp_path, monkeypatch, capsys
     out = capsys.readouterr().out
     assert code == 0
     assert seen and seen[0][0]["content"].startswith("These rules win")
-    assert "hey Priya --" in seen[0][0]["content"]
+    assert "hey Priya," in seen[0][0]["content"]
     assert "board room" not in seen[0][0]["content"]
     assert "hey Priya --" in out
     assert "meeting" not in out.lower()

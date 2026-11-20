@@ -23,19 +23,19 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from hailports.clip import attach, datafacts, owndraft, rulenotes
+from hailports.clip import attach, datafacts, owndraft, rulenotes, shape
 from hailports.clip import thread as threadmod
 
 QUALITY_RULES = """How to write this reply:
 1. Answer the NEWEST message from someone else. Asks from earlier in the thread that a later message already handled are background. Do not answer them again or repeat old requests.
 2. Lead with the direct answer to their question (yes / no / the number), then the reason in one line.
-3. Use the DATA FACTS, ATTACHMENTS and NOTES blocks. Quote the specific figures and names, and give one short worked example when a rule or calculation is involved. Do not stay vague when the facts are there.
+3. Use the DATA FACTS, ATTACHMENTS and NOTES blocks for the facts. Quote one or two key figures, not every figure; give one short worked example only when they asked how a rule or calculation works. Do not stay vague when the facts are there, and do not dump them either.
 4. Never say something is missing, not built, not possible or not there unless a block says so in plain words. A code snippet that does not show a rule is not proof it is missing. When the NOTES or DATA FACTS contain the rule, it is part of the logic: say yes and explain it with the numbers. "Your logic" / "your file" means work I did; the NOTES describe it.
-5. If the data shows exceptions (rows that break a rule, a gap, a conflict), name every one with its value when there are 20 or fewer (group equal values: "a, b, c (all $125k)"), and end with one concrete offer that says what would happen, e.g. "want me to bump those up to $300k? then their level 3 would land at $600k.".
+5. If the data shows exceptions (rows that break a rule, a gap, a conflict) and they asked about them, name them briefly (group equal values: "a, b, c (all $125k)"), and end with one concrete offer that says what would happen, e.g. "want me to bump those up to $300k? then their level 3 would land at $600k.".
    For a worked example, use the WORKED EXAMPLE line (a row where the rule applies), not an exception.
 6. Speak to each person listed under "People to answer", by first name. Skip people with nothing open.
 7. Do not ask for files or information that are already in the thread or the blocks. Do not invent names, numbers, dates, links or promises.
-8. Write as me (I). Plain text, no markdown, no bullet lists unless the list is long, no sign-off, no signature, no subject line. Keep it short: what a busy expert would type."""
+8. Write as me (I). Plain text, no markdown headers or bold. A short numbered list ("1. ...") for steps or a fix. No signature, no subject line. Keep it short: what a busy expert would type."""
 
 _ABSENT = re.compile(
     r"(?i)\b(?:does(?:n'?t| not)|do(?:n'?t| not)|is(?:n'?t| not)|are(?:n'?t| not)|was(?:n'?t| not)|"
@@ -65,6 +65,10 @@ class Context:
 
     prior: dict = field(default_factory=dict)
     prior_block: str = ""
+    kind: str = "email"       # email or chat (shape.surface)
+    target: int = 120         # words
+    cap: int = 180            # hard word cap; over it gets a retry-shorter pass
+    examples: str = ""        # real sent replies, local only
 
     def sources(self) -> str:
         # The user's own edits to an earlier draft count as source facts.
@@ -226,6 +230,10 @@ def gather(doc: dict, cfg: dict | None, lookup=None, extra_dirs: list[Path] | No
     voice_file = str(paiste.get("context_file") or "").strip()
     if voice_file and Path(voice_file).expanduser().is_file():
         ctx.voice = Path(voice_file).expanduser().read_text(encoding="utf-8", errors="replace")[:1800]
+    ctx.kind = shape.surface(doc)
+    incoming = shape.words(shape.newest_message(screen_text(doc)))
+    ctx.target, ctx.cap = shape.word_cap(ctx.kind, incoming)
+    ctx.examples = shape.load_examples(paiste)
     return ctx
 
 
@@ -246,6 +254,10 @@ def messages(ctx: Context, rules: str) -> list[dict]:
         system += f"\n\nYou are {ctx.me[0]}. Never greet yourself and never sign the reply."
     if ctx.voice:
         system += "\n\nVOICE (tone and style only):\n" + ctx.voice
+    if ctx.examples:
+        system += ("\n\nMY REAL SENT REPLIES (copy the shape and tone; never copy a fact, name or number from them):\n"
+                   + ctx.examples)
+    system += "\n\n" + shape.rules(ctx.kind, ctx.target, ctx.cap)
     blocks = []
     if ctx.thread_block:
         blocks.append(ctx.thread_block)
@@ -338,8 +350,7 @@ def check(text: str, ctx: Context) -> list[str]:
         missing = [p for p in ctx.people if p.lower() not in body.lower()]
         if missing:
             issues.append("answer each person with an open ask; missing: " + ", ".join(missing) + ".")
-    if len(body) > 1400:
-        issues.append("too long; keep it under 120 words unless a list of names is needed.")
+    issues += shape.issues(body, ctx.kind, ctx.cap)
     if re.search(r"(?m)^\s*(?:#|\*\*|- \*\*)", body):
         issues.append("no markdown.")
     issues += _prior_issues(body, ctx)
@@ -443,8 +454,8 @@ def draft(doc: dict, cfg: dict | None, rules: str, complete, lookup=None, tries:
     ctx.plan = plan
     if plan:
         last = msgs[-1]
-        note = ("\n\nMY ANALYSIS (use it; the reply must include the direct answer, the key numbers, the example, "
-                "the exceptions and the offer when present):\n" + plan)
+        note = ("\n\nMY ANALYSIS (use it; the reply must lead with the direct answer, use one or two of the key numbers, "
+                "list the fix steps when there are any, and end with the offer; leave the other figures out unless they asked):\n" + plan)
         if isinstance(last["content"], list):
             last["content"][0]["text"] += note
         else:
@@ -468,10 +479,25 @@ def draft(doc: dict, cfg: dict | None, rules: str, complete, lookup=None, tries:
             {"role": "user", "content": "Rewrite the reply. Fix these problems:\n- " + "\n- ".join(probs)
              + "\nKeep everything that was right. Only the reply text."},
         ]
+    if best and shape.words(best) > ctx.cap and not ctx.locks():
+        # Hard length cap: one more retry-shorter pass, kept only when it lands under the cap.
+        shorter = msgs + [
+            {"role": "assistant", "content": best},
+            {"role": "user", "content": shape.issues(best, ctx.kind, ctx.cap)[0] + " Only the reply text."},
+        ]
+        try:
+            again = cleanup(str(complete(shorter) or ""), ctx.me)
+        except Exception:
+            again = ""
+        if again and shape.words(again) <= ctx.cap:
+            attempts.append({"text": again, "issues": check(again, ctx), "score": score(again, ctx)})
+            best = again
     if ctx.locks():
         # Still missing a kept sentence after the retries: splice it back, in order and place.
         from hailports.clip import locks
         best = locks.enforce(best, ctx.lock_plan())
+    if best:
+        best = shape.finish(best, ctx.kind, ctx.me)
     return best, ctx, attempts
 
 

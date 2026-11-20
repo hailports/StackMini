@@ -102,7 +102,9 @@ def test_draft_retries_until_clean():
 
     text, ctx, attempts = compose.draft(doc, {"paiste": {"me": ME}}, "rules", fake, extra_dirs=[FIX],
                                         code_roots=[FIX / "repo" / "docs"])
-    assert text == case["reference"]
+    from hailports.clip import shape
+    assert text == shape.finish(case["reference"], "email", ME.split(", "))
+    assert text.startswith("hey Morgan,") and text.endswith("best,\nJordan")
     assert len(attempts) == 2 and attempts[0]["issues"]
     roles = [m["role"] for m in seen[-1]]
     assert roles == ["system", "user", "assistant", "user"]  # strictly alternating for local servers

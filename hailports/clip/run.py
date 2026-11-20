@@ -460,17 +460,29 @@ def _route_dest(args):
     return Path(raw)
 
 
-def _save_route(dest: Path, route: dict) -> bool:
-    """The one route writer for setup: no duplicate engines, the picked engine first, no write when unchanged."""
+def _save_route(dest: Path, route: dict, pick: str = "", edits: bool = False) -> bool:
+    """The one route writer for setup. The saved order and `preferred` always survive (see
+    routefix.keep_choice); `pick` is an engine the user just chose, `edits` a setup-form save.
+    No duplicate engines, no write when unchanged."""
     from hailports.config import dumps, load_file
-    from hailports.clip.routefix import tidy_route
-    clean = tidy_route(route)
+    from hailports.clip.routefix import keep_choice, tidy_route
+    clean = dict(route or {})
+    old: dict = {}
     if dest.is_file():
         try:
-            if load_file(dest) == clean:
-                return False
+            loaded = load_file(dest)
+            old = loaded if isinstance(loaded, dict) else {}
         except (OSError, ValueError, TypeError):
-            pass
+            old = {}
+    if isinstance(old.get("paiste"), dict) and old["paiste"].get("models"):
+        for key, value in old.items():
+            if key not in clean:
+                clean[key] = value
+        clean["paiste"] = keep_choice(old["paiste"], clean.get("paiste") or {}, pick=pick, edits=edits)
+    else:
+        clean = tidy_route(clean)
+    if old == clean:
+        return False
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(dest.name + ".tmp")
     tmp.write_text(dumps(clean), encoding="utf-8")
@@ -544,7 +556,7 @@ def cmd_onboard(args, cfg) -> int:
         updated["preferred"] = name
         route = dict(cfg)
         route["paiste"] = updated
-        _save_route(dest, route)
+        _save_route(dest, route, pick=name, edits=True)
         print("using")
         return 0
     if getattr(args, "connect", ""):
@@ -690,7 +702,7 @@ def cmd_onboard(args, cfg) -> int:
         return 2
     route = dict(cfg)
     route["paiste"] = updated
-    _save_route(dest, route)
+    _save_route(dest, route, edits=True)
     try:
         dest.chmod(0o600)
     except OSError:
@@ -726,7 +738,7 @@ def cmd_paiste(args, cfg, state: Path) -> int:
         if not str(dest):
             dest = Path.home() / ".config" / "paiste" / "route.yaml"
         dest.parent.mkdir(parents=True, exist_ok=True)
-        _save_route(dest, route)
+        _save_route(dest, route, edits=True)
         print(str(dest))
         print("sent false")
         return 0

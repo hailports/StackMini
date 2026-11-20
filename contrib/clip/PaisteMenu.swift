@@ -4,14 +4,20 @@ import ScreenCaptureKit
 import Vision
 import os
 
+/// The drafting command. A release always runs the Python it ships with, so a fix in the bundle
+/// is the code that runs. PAISTE_CMD (an older launch agent may still set it to a copied checkout)
+/// only wins with PAISTY_DEV=1, or when the bundle has no runner.
 func paisteCommand() -> String {
-    if let set = ProcessInfo.processInfo.environment["PAISTE_CMD"], !set.isEmpty {
+    let env = ProcessInfo.processInfo.environment
+    let set = env["PAISTE_CMD"] ?? ""
+    let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/paiste-run").path
+    if !set.isEmpty, env["PAISTY_DEV"] == "1" {
         return set
     }
-    let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/paiste-run").path
     if FileManager.default.isExecutableFile(atPath: bundled) {
         return bundled
     }
+    if !set.isEmpty { return set }
     return "hailports"
 }
 
@@ -50,6 +56,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
 
     /// paisty://activate?k=… from the key email or the thanks page turns the app on.
     func applicationWillFinishLaunching(_ notification: Notification) {
+        Self.exitIfAlreadyRunning()
         NSAppleEventManager.shared().setEventHandler(self, andSelector: #selector(openURL(_:reply:)),
                                                      forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL))
     }
@@ -823,6 +830,30 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// One paisty per login. A second copy (launch agent KeepAlive plus an update relaunch, or a
+    /// double click) waits a moment for the first to quit, as an update relaunch does, then leaves.
+    static func exitIfAlreadyRunning() {
+        let me = ProcessInfo.processInfo.processIdentifier
+        let id = Bundle.main.bundleIdentifier ?? "com.hailports.paiste"
+        func others() -> [NSRunningApplication] {
+            NSRunningApplication.runningApplications(withBundleIdentifier: id)
+                .filter { $0.processIdentifier != me && !$0.isTerminated }
+        }
+        let deadline = Date().addingTimeInterval(3)
+        while !others().isEmpty && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+        let still = others()
+        if !still.isEmpty {
+            PastePath.note("launch: another paisty is running (pid \(still[0].processIdentifier)); this copy exits")
+            exit(0)
+        }
+    }
+
+    var failClear: DispatchWorkItem?
+
+    /// A failed draft shows the question mark for about 4 s, then the P mark comes back.
+    /// The reason stays in the tooltip until the next click and goes to paste-debug.log.
     func fail(_ hint: String) {
         stopSpin()
         pulse.send(.failed)
@@ -830,6 +861,17 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         item?.button?.toolTip = hint
         item?.button?.appearsDisabled = false
         busy = false
+        PastePath.note("fail: " + hint.replacingOccurrences(of: "\n", with: " "))
+        log.error("fail \(hint, privacy: .public)")
+        failClear?.cancel()
+        let clear = DispatchWorkItem { [weak self] in
+            guard let self, !self.busy, self.spinTimer == nil else { return }
+            self.pulse.send(.settle)
+            self.item?.button?.image = self.mark
+            self.item?.button?.toolTip = "paisty: last draft failed: " + hint
+        }
+        failClear = clear
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: clear)
     }
 
     // MARK: right-click menu

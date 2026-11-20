@@ -78,17 +78,24 @@ def test_different_models_on_same_host_are_not_duplicates():
     assert routefix.tidy_paiste(paiste)["order"] == ["a", "b"]
 
 
-def test_repair_route_backs_up_and_only_writes_on_change(tmp_path):
+def test_repair_route_never_reorders_or_drops(tmp_path):
     path = tmp_path / "route.yaml"
     save_file(path, _corrupted())
+    before = path.read_text()
+    assert routefix.repair_route(path, now=0) is False
+    assert path.read_text() == before
+    assert not list(tmp_path.glob("route.yaml.bak-*"))
+
+
+def test_repair_route_only_fills_missing_order(tmp_path):
+    path = tmp_path / "route.yaml"
+    save_file(path, {"paiste": {"preferred": "cursor", "models": {"cursor": _cursor(), "brain": _ssh()}}})
     assert routefix.repair_route(path, now=0) is True
-    backups = list(tmp_path.glob("route.yaml.bak-*"))
-    assert len(backups) == 1 and "ssh32" in backups[0].read_text()
-    assert load_file(path)["paiste"]["order"] == ["cursor", "brain", "ssh"]
-    before = path.stat().st_mtime_ns
-    assert routefix.repair_route(path) is False
-    assert path.stat().st_mtime_ns == before
     assert len(list(tmp_path.glob("route.yaml.bak-*"))) == 1
+    paiste = load_file(path)["paiste"]
+    assert paiste["order"] == ["cursor", "brain"] and paiste["preferred"] == "cursor"
+    assert paiste["models"]["brain"]["remote_url"] == "http://127.0.0.1:18080/v1"
+    assert routefix.repair_route(path) is False
 
 
 def test_repair_route_ignores_missing_or_odd_files(tmp_path):
@@ -134,7 +141,7 @@ def test_auto_and_answers_after_use_keep_cursor_first(env):
         assert len(ids) == len(set(ids))
 
 
-def test_launch_loader_repairs_route(env, monkeypatch):
+def test_launch_loader_leaves_route_alone(env, monkeypatch):
     save_file(env, _corrupted())
     import importlib.machinery
     import importlib.util
@@ -142,8 +149,10 @@ def test_launch_loader_repairs_route(env, monkeypatch):
     spec = importlib.util.spec_from_loader("clip_run_entry", loader)
     mod = importlib.util.module_from_spec(spec)
     loader.exec_module(mod)
+    before = env.read_text()
     cfg = mod._cfg("", "http://127.0.0.1:1/v1", "local")
-    assert cfg["paiste"]["order"] == ["cursor", "brain", "ssh"]
+    assert env.read_text() == before
+    assert cfg["paiste"]["order"] == _corrupted()["paiste"]["order"]
 
 
 def test_swift_setup_gate(tmp_path):
@@ -170,3 +179,57 @@ def test_dumps_round_trip_of_tidy_route():
     fixed = routefix.tidy_route(_corrupted())
     assert load_file  # loader used above
     assert "ssh2" not in dumps(fixed)
+
+
+def _restored() -> dict:
+    """The work Mac route after the 1550 incident was fixed by hand."""
+    return {"paiste": {"enabled": True, "mail": "front", "notes": "folder",
+                       "order": ["cursor", "brain"], "preferred": "cursor",
+                       "models": {"brain": _ssh(), "cursor": _cursor(), "ssh": _ssh()}}}
+
+
+def test_incident_setup_paths_keep_order_preferred_and_18080(env):
+    save_file(env, _restored())
+    # Setup form save with the local row's address left empty (the old form filled in :8080).
+    answers = env.parent / "answers.json"
+    answers.write_text('{"link": "app", "app": "cursor", "locals": [{"host": "brain", "remote": "", "model": "qwen"}]}')
+    assert _onboard(env, answers=str(answers)) == 0
+    scan = {"suggest": {"ai": {"kind": "local", "host": "brain", "url": "http://127.0.0.1:18080/v1", "name": "qwen"}},
+            "apps": [{"name": "cursor", "drives": True, "status": "signed-in"}], "mail_apps": [], "chat_apps": []}
+    assert cliprun._onboard_auto(_args(auto=True), load_file(env), scan=scan) == 0
+    paiste = load_file(env)["paiste"]
+    assert paiste["preferred"] == "cursor"
+    assert paiste["order"][:2] == ["cursor", "brain"]
+    assert ":8080" not in env.read_text()
+
+
+def test_keep_choice_rules():
+    old = _restored()["paiste"]
+    shuffled = {"order": ["brain", "ssh", "cursor"],
+                "models": {"brain": dict(_ssh(), remote_url="http://127.0.0.1:8080/v1"), "cursor": _cursor(),
+                           "ssh": dict(_ssh(), remote_url="http://127.0.0.1:8080/v1")}}
+    out = routefix.keep_choice(old, shuffled)
+    assert out["order"][:2] == ["cursor", "brain"] and out["preferred"] == "cursor"
+    assert out["models"]["brain"]["remote_url"] == "http://127.0.0.1:18080/v1"
+    edited = routefix.keep_choice(old, shuffled, edits=True)
+    assert edited["order"][:2] == ["cursor", "brain"] and edited["preferred"] == "cursor"
+    assert edited["models"]["brain"]["remote_url"] == "http://127.0.0.1:18080/v1"
+    picked = routefix.keep_choice(old, old, pick="brain")
+    assert picked["order"][0] == "brain" and picked["preferred"] == "brain"
+    added = routefix.keep_choice(old, {"models": {"x": _ssh("other")}, "order": ["x"]})
+    assert added["order"][:2] == ["cursor", "brain"] and "x" in added["order"]
+    assert set(old["models"]) <= set(added["models"])
+
+
+def test_no_8080_default_in_app_sources():
+    for rel in ("hailports/clip/board.py", "contrib/clip/Onboard.swift", "contrib/clip/run"):
+        assert "127.0.0.1:8080" not in (ROOT / rel).read_text(encoding="utf-8"), rel
+
+
+def test_menu_single_instance_fail_reset_and_bundled_runner():
+    menu = (ROOT / "contrib/clip/PaisteMenu.swift").read_text(encoding="utf-8")
+    assert "Self.exitIfAlreadyRunning()" in menu and "runningApplications(withBundleIdentifier:" in menu
+    body = menu[menu.index("func fail(_ hint: String)"):]
+    body = body[:body.index("// MARK: right-click menu")]
+    assert "asyncAfter(deadline: .now() + 4" in body and "PastePath.note(" in body and "self.mark" in body
+    assert 'env["PAISTY_DEV"] == "1"' in menu

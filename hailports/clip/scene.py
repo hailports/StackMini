@@ -668,7 +668,7 @@ def unasked_remedy(reply: str, sources: str) -> bool:
 
 def draft_rules(addressee: str = "", choice: bool = False) -> str:
     """Rules that have to survive a hop that keeps only the front of the prompt."""
-    greet = f"hey {addressee} --" if addressee else "hey <first name> --"
+    greet = f"hey {addressee}," if addressee else "hey <first name>,"
     lines = [
         "These rules win. Write only the reply they will paste.",
         "If they name a record link, a ticket, an asset, a case, a serial, or an error, name that item and the concrete next step. Use the human name or number, never a raw CRM id and never a /lightning/ path. A link already in the thread does not need repeating. Never answer with only I'll take a look. Do not invent a finding, a cause, or a status. Do not say that you have not changed anything.",
@@ -716,7 +716,7 @@ def draft_rules(addressee: str = "", choice: bool = False) -> str:
 
 def rewrite_ask(addressee: str = "", choice: bool = False, points: list[str] | None = None) -> str:
     """The redo turn. Same bar as the first draft."""
-    greet = f"hey {addressee} --" if addressee else "hey <first name> --"
+    greet = f"hey {addressee}," if addressee else "hey <first name>,"
     choice_line = (
         " They asked you to choose. Pick one side in a plain sentence. Do not ask them."
         if choice else ""

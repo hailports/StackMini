@@ -498,7 +498,7 @@ def test_scan_shows_the_server_name_and_skips_wildcards():
     assert ssh_host_names("Host *\nHost brain extra\nHost bad*name\n") == ["brain", "extra"]
 
     def read_local(url):
-        if url == "http://127.0.0.1:8080/v1/models":
+        if url == "http://127.0.0.1:18080/v1/models":
             return body
         return ""
 
@@ -506,12 +506,12 @@ def test_scan_shows_the_server_name_and_skips_wildcards():
 
     def read_ssh(host, url):
         seen.append((host, url))
-        if host == "brain" and url == "http://127.0.0.1:8080/v1/models":
+        if host == "brain" and url == "http://127.0.0.1:18080/v1/models":
             return body
         return ""
 
     rows = scan_models(read_local=read_local, hosts=["brain", "other"], read_ssh=read_ssh)
-    assert rows[0] == {"where": "This Mac", "host": "", "url": "http://127.0.0.1:8080/v1", "model": "desk-model"}
+    assert rows[0] == {"where": "This Mac", "host": "", "url": "http://127.0.0.1:18080/v1", "model": "desk-model"}
     assert rows[1]["host"] == "brain"
     assert rows[1]["model"] == "desk-model"
     assert all(url.startswith("http://127.0.0.1:") for _, url in seen)

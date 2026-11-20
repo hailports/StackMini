@@ -1,7 +1,9 @@
 """Keep route.yaml stable across setup re-runs, relaunches and updates.
 
 One identical engine is one entry. The engine the user picked (`preferred`) stays first.
-Pure functions plus one cheap launch-time repair that writes a backup before it changes anything.
+A write never takes away the user's `order` or `preferred`, never swaps a saved engine address
+for a default, and the launch-time repair only fills keys that are missing (backup first).
+The default local model address is the Mini's :18080; the old :8080 is never written as a default.
 """
 
 from __future__ import annotations
@@ -10,6 +12,8 @@ import time
 from pathlib import Path
 
 _IDENTITY = ("via", "ssh_host", "remote_url", "base_url", "model", "bin")
+DEFAULT_LOCAL_URL = "http://127.0.0.1:18080/v1"
+LEGACY_LOCAL_URLS = ("http://127.0.0.1:8080/v1", "http://localhost:8080/v1")
 
 
 def spec_identity(spec: dict) -> tuple:
@@ -73,8 +77,87 @@ def tidy_route(route: dict) -> dict:
     return out
 
 
+def keep_choice(old: dict | None, new: dict | None, pick: str = "", edits: bool = False) -> dict:
+    """Merge a setup result into the saved settings without overriding the user's choice.
+
+    old    the paiste block on disk; new  what a setup step produced.
+    pick   an engine the user just picked by name (Use cursor): it becomes `preferred` and first.
+    edits  the user edited engines in the setup form: their rows replace the saved rows
+           (removed rows go), but a legacy :8080 default never replaces a saved address.
+    Without edits nothing saved is dropped or changed; new keys and engines are only added.
+    Always: the saved `order` keeps its order, the saved `preferred` stays first, and a new
+    engine identical to a saved one is not added again.
+    """
+    old = dict(old or {})
+    new = dict(new or {})
+    old_models = old.get("models") if isinstance(old.get("models"), dict) else {}
+    if not old_models:
+        return tidy_paiste(new)
+    new_models = new.get("models") if isinstance(new.get("models"), dict) else {}
+    out = dict(new)
+    for key, value in old.items():
+        if key in ("models", "order", "preferred"):
+            continue
+        if not edits or key not in out:
+            out[key] = value
+    models: dict = {}
+    for name, spec in old_models.items():
+        if not isinstance(spec, dict):
+            continue
+        if name in new_models and isinstance(new_models[name], dict):
+            fresh = new_models[name]
+            merged = dict(spec)
+            for key, value in fresh.items():
+                if key not in merged:
+                    merged[key] = value
+                elif edits and value != merged[key]:
+                    if str(value).strip() in LEGACY_LOCAL_URLS and str(merged[key]).strip():
+                        continue
+                    merged[key] = value
+            models[name] = merged
+        elif not edits:
+            models[name] = dict(spec)
+    seen = {spec_identity(spec) for spec in models.values()}
+    for name, spec in new_models.items():
+        if name in models or not isinstance(spec, dict):
+            continue
+        ident = spec_identity(spec)
+        if ident in seen:
+            continue
+        seen.add(ident)
+        models[name] = dict(spec)
+    order: list = []
+    for name in list(old.get("order") or []) + list(new.get("order") or []):
+        name = str(name)
+        if name in models and name not in order:
+            order.append(name)
+    if not order:
+        order = list(models)
+    preferred = str(pick or old.get("preferred") or new.get("preferred") or "").strip().lower()
+    slot = _preferred_slot(preferred, order, models)
+    if slot:
+        order = [slot] + [name for name in order if name != slot]
+    out["models"] = models
+    out["order"] = order
+    if preferred:
+        out["preferred"] = preferred
+    else:
+        out.pop("preferred", None)
+    return out
+
+
+def fill_missing(paiste: dict) -> dict:
+    """Launch repair: add keys that are missing, change nothing that is there."""
+    out = dict(paiste or {})
+    models = out.get("models")
+    if isinstance(models, dict) and models and not out.get("order"):
+        out["order"] = [str(name) for name in models]
+    return out
+
+
 def repair_route(path: Path, now: float | None = None) -> bool:
-    """Dedupe an existing route.yaml in place. Backup first; no write when nothing changed. Never raises."""
+    """Fill missing keys in an existing route.yaml. Never reorders, drops or rewrites what is there.
+    Backup first; no write when nothing is missing. Never raises."""
     from hailports.config import dumps, loads
     try:
         if not path.is_file():
@@ -83,7 +166,8 @@ def repair_route(path: Path, now: float | None = None) -> bool:
         route = loads(text)
         if not isinstance(route, dict) or not isinstance(route.get("paiste"), dict):
             return False
-        fixed = tidy_route(route)
+        fixed = dict(route)
+        fixed["paiste"] = fill_missing(route["paiste"])
         if fixed == route:
             return False
         stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(now if now is not None else time.time()))

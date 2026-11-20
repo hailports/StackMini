@@ -457,7 +457,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
 
     @objc func hint() {
         capture()
-        statusField.stringValue = "Local needs a model already running on this Mac, or on a computer you can ssh to. Host name, then http://127.0.0.1:8080/v1. Paid works online: enter the service URL, model name, and key. Press Connect."
+        statusField.stringValue = "Local needs a model already running on this Mac, or on a computer you can ssh to. Host name, then http://127.0.0.1:18080/v1. Paid works online: enter the service URL, model name, and key. Press Connect."
     }
 
     func save() {
@@ -799,7 +799,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         y = caption("Type the computer and the address. The name shows after it answers.", y)
         for (i, row) in locals.enumerated() {
             y = field("host-\(i)", "ssh host name. Blank if it is on this Mac.", row.host, y)
-            y = field("remote-\(i)", "http://127.0.0.1:8080/v1", row.remote, y)
+            y = field("remote-\(i)", "http://127.0.0.1:18080/v1", row.remote, y)
             y = field("url-\(i)", "Or on this Mac. http://127.0.0.1:11434/v1", row.url, y)
             y = rowButtons(probe: 1000 + i, remove: 3000 + i, showRemove: locals.count > 1, y)
         }
@@ -1428,7 +1428,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         let host = row.host.trimmingCharacters(in: .whitespacesAndNewlines)
         if !host.isEmpty {
             var remote = row.remote.trimmingCharacters(in: .whitespacesAndNewlines)
-            if remote.isEmpty { remote = "http://127.0.0.1:8080/v1" }
+            if remote.isEmpty { remote = "http://127.0.0.1:18080/v1" }
             return "ssh \(host) \(remote)"
         }
         return row.url.trimmingCharacters(in: .whitespacesAndNewlines)

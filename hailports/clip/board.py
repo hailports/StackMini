@@ -97,7 +97,7 @@ def discover(home: Path | None = None) -> dict:
             vault = str(found[0])
             break
     model = ""
-    for url in ("http://127.0.0.1:8080/v1", "http://127.0.0.1:18080/v1"):
+    for url in ("http://127.0.0.1:18080/v1",):
         if _model_up(url):
             model = url
             break
@@ -114,13 +114,12 @@ def discover(home: Path | None = None) -> dict:
 
 
 _LOCAL_URLS = (
-    "http://127.0.0.1:8080/v1",
+    "http://127.0.0.1:18080/v1",
     "http://127.0.0.1:11434/v1",
     "http://127.0.0.1:1234/v1",
-    "http://127.0.0.1:18080/v1",
 )
 _REMOTE_ENDPOINTS = (
-    ("http://127.0.0.1:8080/v1/models", "http://127.0.0.1:8080/v1"),
+    ("http://127.0.0.1:18080/v1/models", "http://127.0.0.1:18080/v1"),
     ("http://127.0.0.1:11434/v1/models", "http://127.0.0.1:11434/v1"),
     ("http://127.0.0.1:11434/api/tags", "http://127.0.0.1:11434/v1"),
     ("http://127.0.0.1:1234/v1/models", "http://127.0.0.1:1234/v1"),
@@ -1227,7 +1226,7 @@ def _local_line(row: dict) -> str:
     remote = str(row.get("remote") or "").strip()
     if host:
         if not remote:
-            remote = "http://127.0.0.1:8080/v1"
+            remote = "http://127.0.0.1:18080/v1"
         return "ssh " + host + " " + remote
     url = str(row.get("url") or "").strip()
     if url:
@@ -1863,7 +1862,7 @@ def guide(io, paiste: dict | None = None, found: dict | None = None) -> dict:
     out["lookup_cmd"] = command if _path_ok(command) else ""
     if command and not out["lookup_cmd"]:
         io.say("That program was not kept.")
-    io.say("Add models in the order Paiste should try them. A local server is http://127.0.0.1:18080/v1. A model already running on another machine is: ssh hostname http://127.0.0.1:8080/v1. A paid service is an https address that ends in /v1. A blank line stops.")
+    io.say("Add models in the order Paiste should try them. A local server is http://127.0.0.1:18080/v1. A model already running on another machine is: ssh hostname http://127.0.0.1:18080/v1. A paid service is an https address that ends in /v1. A blank line stops.")
     order = []
     models = {}
     for index in range(4):
