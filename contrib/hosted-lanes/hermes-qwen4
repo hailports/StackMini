@@ -104,10 +104,13 @@ def signed_in():
         out = subprocess.run([hermes_bin(), "proxy", "status"], capture_output=True, text=True, timeout=180).stdout
     except Exception:
         return None
-    low = out.lower()
-    if "not logged in" in low or "need attention" in low or "needs attention" in low:
-        return False
-    return "ready" in low
+    # only judge the Nous adapter line; other adapters (xai etc.) may be logged out
+    for line in out.lower().splitlines():
+        if "nous" in line and "]" in line:
+            if "not logged in" in line or "attention" in line:
+                return False
+            return "ready" in line
+    return False
 
 
 def ensure_proxy():
