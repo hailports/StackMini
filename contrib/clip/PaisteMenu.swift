@@ -84,11 +84,8 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         if let icon = Bundle.main.url(forResource: "paisty", withExtension: "icns").flatMap(NSImage.init(contentsOf:)) {
             NSApp.applicationIconImage = icon
         }
-        let route = ProcessInfo.processInfo.environment["PAISTE_ROUTE"] ?? (NSHomeDirectory() + "/.config/paiste/route.yaml")
-        let fresh = !FileManager.default.fileExists(atPath: NSHomeDirectory() + "/.config/paiste")
-        if fresh || !FileManager.default.fileExists(atPath: route) || !AXIsProcessTrusted() {
-            openSetup()
-        }
+        // Set up users never get the onboarding again; a grant lost to an update gets one small step.
+        showSetupStep()
         UserDefaults.standard.register(defaults: [Self.glowKey: true])
         PaistyUpdater.shared.isBusy = { [weak self] in self?.busy ?? false }
         PaistyUpdater.shared.start()
@@ -103,7 +100,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
 
     /// Spotlight or Applications relaunch while paisty is already running.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        openSetup()
+        if setupStep() == .reenable { showReenable() } else { openSetup() }
         return true
     }
 
@@ -394,6 +391,38 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: side)
     }
 
+    static let screenGrantKey = "paisty.screenWasGranted"
+    var reenable: ReenableStep?
+
+    func setupStep() -> SetupStep {
+        let route = ProcessInfo.processInfo.environment["PAISTE_ROUTE"] ?? (NSHomeDirectory() + "/.config/paiste/route.yaml")
+        let screen = CGPreflightScreenCaptureAccess()
+        if screen { UserDefaults.standard.set(true, forKey: Self.screenGrantKey) }
+        return SetupGate.decide(routeHasModel: SetupGate.routeHasModel(atPath: route),
+                                licensePresent: SetupBoard.licenseState() != .missing,
+                                axTrusted: AXIsProcessTrusted(),
+                                screenWasGranted: UserDefaults.standard.bool(forKey: Self.screenGrantKey),
+                                screenGranted: screen)
+    }
+
+    func showSetupStep() {
+        switch setupStep() {
+        case .full: openSetup()
+        case .reenable: showReenable()
+        case .nothing: break
+        }
+    }
+
+    func showReenable() {
+        if reenable == nil { reenable = ReenableStep() }
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        reenable?.show { [weak self] in
+            self?.reenable = nil
+            NSApp.setActivationPolicy(.accessory)
+        }
+    }
+
     @objc func openSetup() {
         if board == nil { board = SetupBoard() }
         NSApp.setActivationPolicy(.regular)
@@ -588,7 +617,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
     func startDraft(prior: LastDraft?, window: String, locks: [String: Any]? = nil) {
         if !AXIsProcessTrusted() && !askedPasteAccess {
             askedPasteAccess = true
-            openSetup()
+            if setupStep() == .full { openSetup() } else { showReenable() }
         }
         busy = true
         draftSig = seenSig
@@ -1706,3 +1735,71 @@ enum PaisteMain {
 }
 
 
+
+
+/// One small step after an update dropped a privacy grant. No onboarding pages, no config writes.
+final class ReenableStep: NSObject, NSWindowDelegate {
+    let window: NSWindow
+    var timer: Timer?
+    var onDone: (() -> Void)?
+    let note = NSTextField(wrappingLabelWithString: "")
+
+    override init() {
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 190),
+                          styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        super.init()
+        window.title = "Re-enable paisty in Accessibility"
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        let view = NSView(frame: window.contentRect(forFrameRect: window.frame))
+        let title = NSTextField(labelWithString: "Re-enable paisty in Accessibility")
+        title.font = .boldSystemFont(ofSize: 14)
+        title.frame = NSRect(x: 20, y: 150, width: 380, height: 20)
+        note.frame = NSRect(x: 20, y: 62, width: 380, height: 80)
+        let open = NSButton(title: "Open Accessibility settings", target: self, action: #selector(openSettings))
+        open.bezelStyle = .rounded
+        open.keyEquivalent = "\r"
+        open.frame = NSRect(x: 20, y: 18, width: 230, height: 32)
+        view.addSubview(title)
+        view.addSubview(note)
+        view.addSubview(open)
+        window.contentView = view
+    }
+
+    func refreshNote() {
+        var text = "paisty was updated and macOS needs you to allow it again. Your settings are kept. "
+        text += "Turn paisty on in Privacy & Security > Accessibility. If it already shows on, switch it off and back on."
+        if UserDefaults.standard.bool(forKey: PaisteApp.screenGrantKey) && !CGPreflightScreenCaptureAccess() {
+            text += " Do the same under Screen Recording."
+        }
+        note.stringValue = text
+    }
+
+    func show(onDone: @escaping () -> Void) {
+        self.onDone = onDone
+        refreshNote()
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let screenOK = !UserDefaults.standard.bool(forKey: PaisteApp.screenGrantKey) || CGPreflightScreenCaptureAccess()
+            if AXIsProcessTrusted() && screenOK { self.window.close() } else { self.refreshNote() }
+        }
+    }
+
+    @objc func openSettings() {
+        let pane = AXIsProcessTrusted() ? "Privacy_ScreenCapture" : "Privacy_Accessibility"
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?" + pane) {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        timer?.invalidate()
+        timer = nil
+        let done = onDone
+        onDone = nil
+        done?()
+    }
+}

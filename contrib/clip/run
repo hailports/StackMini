@@ -33,6 +33,9 @@ def _cfg(path: str, base_url: str, model: str) -> dict:
         if saved.is_file():
             route = str(saved)
     if route and Path(route).is_file():
+        # Cheap self-repair before routing: dedupe engines, keep the picked one first (backup first).
+        from hailports.clip.routefix import repair_route
+        repair_route(Path(route))
         loaded = load_file(Path(route))
         if isinstance(loaded, dict):
             return loaded

@@ -460,6 +460,28 @@ def _route_dest(args):
     return Path(raw)
 
 
+def _save_route(dest: Path, route: dict) -> bool:
+    """The one route writer for setup: no duplicate engines, the picked engine first, no write when unchanged."""
+    from hailports.config import dumps, load_file
+    from hailports.clip.routefix import tidy_route
+    clean = tidy_route(route)
+    if dest.is_file():
+        try:
+            if load_file(dest) == clean:
+                return False
+        except (OSError, ValueError, TypeError):
+            pass
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".tmp")
+    tmp.write_text(dumps(clean), encoding="utf-8")
+    try:
+        tmp.chmod(0o600)
+    except OSError:
+        pass
+    tmp.replace(dest)
+    return True
+
+
 def _onboard_auto(args, cfg, scan: dict | None = None) -> int:
     """One click. Apply what the scan found. Keys go to 0600 files and are never printed."""
     from hailports.config import save_file
@@ -484,7 +506,7 @@ def _onboard_auto(args, cfg, scan: dict | None = None) -> int:
         route = dict(cfg)
         route["paiste"] = updated
         dest.parent.mkdir(parents=True, exist_ok=True)
-        save_file(dest, route)
+        _save_route(dest, route)
         try:
             dest.chmod(0o600)
         except OSError:
@@ -519,10 +541,10 @@ def cmd_onboard(args, cfg) -> int:
             print(exc)
             return 2
         dest.parent.mkdir(parents=True, exist_ok=True)
+        updated["preferred"] = name
         route = dict(cfg)
         route["paiste"] = updated
-        save_file(dest, route)
-        dest.chmod(0o600)
+        _save_route(dest, route)
         print("using")
         return 0
     if getattr(args, "connect", ""):
@@ -580,7 +602,7 @@ def cmd_onboard(args, cfg) -> int:
             route["paiste"] = paiste
             dest = _route_dest(args)
             dest.parent.mkdir(parents=True, exist_ok=True)
-            save_file(dest, route)
+            _save_route(dest, route)
             try:
                 dest.chmod(0o600)
             except OSError:
@@ -621,7 +643,7 @@ def cmd_onboard(args, cfg) -> int:
             route["paiste"] = paiste
             dest = _route_dest(args)
             dest.parent.mkdir(parents=True, exist_ok=True)
-            save_file(dest, route)
+            _save_route(dest, route)
             try:
                 dest.chmod(0o600)
             except OSError:
@@ -644,7 +666,7 @@ def cmd_onboard(args, cfg) -> int:
             route["paiste"] = paiste
             dest = _route_dest(args)
             dest.parent.mkdir(parents=True, exist_ok=True)
-            save_file(dest, route)
+            _save_route(dest, route)
             try:
                 dest.chmod(0o600)
             except OSError:
@@ -668,7 +690,7 @@ def cmd_onboard(args, cfg) -> int:
         return 2
     route = dict(cfg)
     route["paiste"] = updated
-    save_file(dest, route)
+    _save_route(dest, route)
     try:
         dest.chmod(0o600)
     except OSError:
@@ -704,7 +726,7 @@ def cmd_paiste(args, cfg, state: Path) -> int:
         if not str(dest):
             dest = Path.home() / ".config" / "paiste" / "route.yaml"
         dest.parent.mkdir(parents=True, exist_ok=True)
-        save_file(dest, route)
+        _save_route(dest, route)
         print(str(dest))
         print("sent false")
         return 0

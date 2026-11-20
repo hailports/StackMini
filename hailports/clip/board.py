@@ -1467,6 +1467,12 @@ def _named(existing: dict, spec: dict, fallback: str) -> str:
     return fallback
 
 
+def _same_endpoint(old: dict, spec: dict) -> bool:
+    keys = ("ssh_host", "remote_url", "base_url")
+    return (str(old.get("via") or "http") == str(spec.get("via") or "http")
+            and all(str(old.get(key) or "") == str(spec.get(key) or "") for key in keys))
+
+
 def _one_surface(out: dict, key: str, path_key: str, mode: str, path: str) -> None:
     picked = (mode or "off").strip().lower()
     if picked == "front" and key in {"mail", "chat"}:
@@ -1512,13 +1518,19 @@ def apply_board(existing: dict | None, answers: dict) -> dict:
             if not hop:
                 raise BoardError("That local address was not kept. Use a URL, or ssh host and the address on that Mac.")
             _keep_model(current, hop, model)
-            slot = _unique(_named(current, hop["spec"], hop["name"]), models, hop["name"])
+            named = _named(current, hop["spec"], hop["name"])
+            # Same endpoint already kept: update it in place. A re-run must not add ssh2, ssh22...
+            slot = named if named in models and _same_endpoint(models[named], hop["spec"]) else _unique(named, models, hop["name"])
             models[slot] = hop["spec"]
             if slot not in behind and slot != name:
                 behind.append(slot)
         out["order"] = _order_hops([name] + behind, models)
         out["models"] = models
+        out["preferred"] = name
         return out
+    wanted = str(answers.get("app") or "").strip().lower()
+    if wanted in _APP_NAMES:
+        out["preferred"] = wanted
     order = []
     models = {}
     if link in {"local", "both"}:

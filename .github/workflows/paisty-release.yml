@@ -26,6 +26,9 @@ on:
       rebuild:
         description: "0 = normal; 1-9 republishes this commit one step up (update test)"
         default: "0"
+      allow_adhoc:
+        description: "yes = publish even without Developer ID signing (breaks permissions on update; emergencies only)"
+        default: "no"
   schedule:
     - cron: "17 9 * * *"
 
@@ -53,7 +56,7 @@ jobs:
           HAILPORTS_PROMPT: plain
         run: |
           python -m pip install -q -e ".[dev]" cryptography
-          python -m pytest -q tests/test_clip_compose.py tests/test_clip_hops.py tests/test_clip.py tests/test_clip_owndraft.py tests/test_clip_pulse_swift.py tests/test_clip_license.py tests/test_clip_locks.py
+          python -m pytest -q tests/test_clip_compose.py tests/test_clip_hops.py tests/test_clip.py tests/test_clip_owndraft.py tests/test_clip_pulse_swift.py tests/test_clip_license.py tests/test_clip_locks.py tests/test_clip_setup_persist.py
       - name: bundled python
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -73,6 +76,67 @@ jobs:
           echo "PAISTY_BUILD=$BUILD" >> "$GITHUB_ENV"
           echo "PAISTY_VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "version $VERSION build $BUILD"
+      # Releases are Developer ID signed and notarized, so an update keeps the same identity and
+      # macOS keeps the Accessibility and Screen Recording grants. Without the signing secrets the
+      # build and tests still run, but nothing is published (the feed stays on the last signed build)
+      # unless a manual run sets allow_adhoc: yes.
+      - name: signing gate
+        env:
+          P12: ${{ secrets.PAISTY_DEVID_P12_B64 }}
+          ALLOW_ADHOC: ${{ github.event.inputs.allow_adhoc }}
+        run: |
+          if [ -n "$P12" ]; then
+            echo "PAISTY_SIGNED=1" >> "$GITHUB_ENV"; echo "PAISTY_PUBLISH=1" >> "$GITHUB_ENV"; echo "signed release"
+          elif [ "${ALLOW_ADHOC:-no}" = yes ]; then
+            echo "PAISTY_SIGNED=0" >> "$GITHUB_ENV"; echo "PAISTY_PUBLISH=1" >> "$GITHUB_ENV"
+            echo "::warning::publishing an ad-hoc build: installed copies will lose their permissions"
+          else
+            echo "PAISTY_SIGNED=0" >> "$GITHUB_ENV"; echo "PAISTY_PUBLISH=0" >> "$GITHUB_ENV"
+            echo "::warning::Developer ID secrets missing: built and tested, NOT published (feed unchanged)"
+          fi
+      # The identity is picked by team ID and SHA-1 hash; its name is never printed or kept in the repo.
+      - name: import Developer ID identity
+        if: env.PAISTY_SIGNED == '1'
+        env:
+          P12: ${{ secrets.PAISTY_DEVID_P12_B64 }}
+          P12_PASSWORD: ${{ secrets.PAISTY_DEVID_P12_PASS }}
+          TEAM: ${{ secrets.PAISTY_TEAM_ID }}
+          NOTARY: ${{ secrets.PAISTY_NOTARY_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.PAISTY_NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.PAISTY_NOTARY_ISSUER_ID }}
+        run: |
+          set -eu
+          KC="$RUNNER_TEMP/paisty-sign.keychain-db"
+          KCPW=$(openssl rand -hex 24)
+          printf '%s' "$P12" | base64 --decode > "$RUNNER_TEMP/devid.p12"
+          security create-keychain -p "$KCPW" "$KC" >/dev/null
+          security set-keychain-settings -lut 3600 "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          security import "$RUNNER_TEMP/devid.p12" -k "$KC" -P "$P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security >/dev/null
+          rm -f "$RUNNER_TEMP/devid.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPW" "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          HASH=$(security find-identity -v -p codesigning "$KC" | grep -F "($TEAM)" | awk '{print $2; exit}')
+          if [ -z "$HASH" ]; then echo "no valid Developer ID identity for the team in the p12"; exit 1; fi
+          echo "signing identity found (team from secret)"
+          {
+            echo "PAISTY_SIGN=$HASH"
+            echo "PAISTY_SIGN_KEYCHAIN=$KC"
+            echo "PAISTY_REQUIRE_SIGN=1"
+            echo "PAISTY_TEAM_ID=$TEAM"
+          } >> "$GITHUB_ENV"
+          if [ -n "${NOTARY:-}" ] && [ -n "${NOTARY_KEY_ID:-}" ] && [ -n "${NOTARY_ISSUER:-}" ]; then
+            printf '%s' "$NOTARY" > "$RUNNER_TEMP/notary.p8"
+            grep -q "BEGIN PRIVATE KEY" "$RUNNER_TEMP/notary.p8" || printf '%s' "$NOTARY" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+            {
+              echo "PAISTY_NOTARY_KEY=$RUNNER_TEMP/notary.p8"
+              echo "PAISTY_NOTARY_KEY_ID=$NOTARY_KEY_ID"
+              echo "PAISTY_NOTARY_ISSUER=$NOTARY_ISSUER"
+            } >> "$GITHUB_ENV"
+            echo "notarization on"
+          else
+            echo "::warning::notary secrets missing: signed with Developer ID, not notarized"
+          fi
       - name: build app, disk image and update zip
         env:
           PAISTY_OUT: ${{ github.workspace }}/dist
@@ -80,6 +144,22 @@ jobs:
         run: |
           if [ -z "$PAISTY_FEED_TOKEN" ]; then echo "PAISTY_FEED_TOKEN missing"; exit 1; fi
           sh contrib/clip/package.sh
+      - name: signature check
+        if: env.PAISTY_SIGNED == '1'
+        run: |
+          set -eu
+          rm -rf /tmp/sigchk && mkdir -p /tmp/sigchk && ditto -x -k dist/paisty-update.zip /tmp/sigchk
+          codesign --verify --deep --strict /tmp/sigchk/paisty.app
+          # The designated requirement is team based, so every build is the same app to macOS privacy settings.
+          codesign -d -r- /tmp/sigchk/paisty.app 2>&1 | grep designated | tee /tmp/dr.txt
+          grep -q 'anchor apple generic' /tmp/dr.txt
+          grep -q 'identifier "com.hailports.paiste"' /tmp/dr.txt
+          grep -qF "certificate leaf[subject.OU] = $PAISTY_TEAM_ID" /tmp/dr.txt
+          if [ -n "${PAISTY_NOTARY_KEY:-}" ]; then
+            xcrun stapler validate /tmp/sigchk/paisty.app >/dev/null
+            spctl -a -vv -t exec /tmp/sigchk/paisty.app 2>&1 | grep -v "^origin=" | tee /tmp/spctl.txt
+            grep -q "source=Notarized Developer ID" /tmp/spctl.txt
+          fi
       - name: leak gate
         env:
           PATTERNS: ${{ secrets.PAISTY_LEAK_PATTERNS }}
@@ -87,9 +167,17 @@ jobs:
           if [ -z "$PATTERNS" ]; then echo "::warning::PAISTY_LEAK_PATTERNS not set; leak gate skipped"; exit 0; fi
           printf '%s\n' "$PATTERNS" > /tmp/leak.re
           mkdir -p /tmp/unz && ditto -x -k dist/paisty-update.zip /tmp/unz
+          # A Developer ID signature embeds the certificate, which names the developer by design.
+          # Check what we ship, not Apple's certificate: drop signatures and tickets from the copy first.
+          find /tmp/unz -type f | while IFS= read -r f; do
+            if file -b "$f" | grep -q "Mach-O"; then codesign --remove-signature "$f" 2>/dev/null || true; fi
+          done
+          find /tmp/unz -name _CodeSignature -type d -prune -exec rm -rf {} +
+          rm -f /tmp/unz/paisty.app/Contents/CodeResources
           if grep -rlaiE -f /tmp/leak.re /tmp/unz; then echo "identity strings in the app"; exit 1; fi
           echo clean
       - name: sign update feed
+        if: env.PAISTY_PUBLISH == '1'
         env:
           PAISTY_ED_PRIVATE_KEY: ${{ secrets.PAISTY_ED_PRIVATE_KEY }}
         run: |
@@ -97,6 +185,7 @@ jobs:
           python contrib/clip/sign_update.py --zip dist/paisty-update.zip --version "$PAISTY_VERSION" \
             --build "$PAISTY_BUILD" --url "$URL" --notes "$(git log -1 --format=%s)" --out dist/paisty-update.json
       - name: publish to R2
+        if: env.PAISTY_PUBLISH == '1'
         env:
           R2_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -117,6 +206,11 @@ jobs:
           curl -s -o dist/served.dmg --aws-sigv4 "aws:amz:auto:s3" --user "$R2_ID:$R2_SECRET" "$R2_ENDPOINT/paisty.dmg"
           if [ "$(shasum -a 256 < dist/served.dmg)" != "$(shasum -a 256 < dist/paisty.dmg)" ]; then echo "R2 paisty.dmg is not this build"; exit 1; fi
           echo "form download serves $PAISTY_VERSION ($PAISTY_BUILD)"
+      - name: remove signing keychain
+        if: always() && env.PAISTY_SIGN_KEYCHAIN != ''
+        run: |
+          security delete-keychain "$PAISTY_SIGN_KEYCHAIN" || true
+          rm -f "$RUNNER_TEMP/notary.p8"
 
   # Copies from 1.1.139 and 1.1.140 read a feed on GitHub. A bridge release there moves them to the
   # R2 feed once; after the cutoff it is deleted so nothing is downloadable without the form.
