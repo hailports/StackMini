@@ -8,8 +8,8 @@ shorter rewrite on the same local engines. If that fails too, or the local engin
 down, busy or slow, the whole draft runs again on the premium engines. The engine that
 produced each draft is written to engine-log.jsonl next to drafts.jsonl. Nothing is sent.
 
-A figure-heavy thread skips the local engine: attachments in the thread or in the lookup
-context, 3 or more figures in the thread (money, counts, percentages, ids with numbers, hours,
+A figure-heavy thread skips the local engine: attachments in the thread, or lookup-context
+files the thread names or refers to as attached, 3 or more figures in the thread (money, counts, percentages, ids with numbers, hours,
 dates), or a table. It runs on cursor, claude, codex, then local only if they all fail, and the
 reason is logged.
 """
@@ -26,6 +26,7 @@ from pathlib import Path
 from hailports.clip import shape
 
 PREMIUM = {"cursor", "claude", "codex"}
+THIN_FLOOR_FROM = 60  # words in their message before a reply under 25 words counts as too thin
 _NUM = re.compile(r"(?<![\w.])\$?\d[\d,]*(?:\.\d+)?%?(?![\w])")
 _LIST = re.compile(r"(?m)^\s*(?:\d+[.)]|[-*•])\s+")
 _MD = re.compile(r"(?m)^\s*(?:#{1,6}\s|\*\*|- \*\*|\|.*\|)")
@@ -63,7 +64,11 @@ def kind_cap(doc: dict | None) -> tuple[str, int]:
     return kind, cap
 
 
-def gate(text: str, kind: str, cap: int, me: list[str] | None = None) -> list[str]:
+def incoming_words(doc: dict | None) -> int:
+    return shape.words(shape.newest_message(str((doc or {}).get("field_text") or "")))
+
+
+def gate(text: str, kind: str, cap: int, me: list[str] | None = None, incoming: int = 0) -> list[str]:
     """Problems that send a local draft to a rewrite, then to premium. Empty means it passes."""
     body = (text or "").strip()
     if not body:
@@ -73,7 +78,7 @@ def gate(text: str, kind: str, cap: int, me: list[str] | None = None) -> list[st
     out = []
     if n > cap:
         out.append(f"too long: {n} words, at most {cap}")
-    if kind == "email" and n < 25:
+    if kind == "email" and incoming >= THIN_FLOOR_FROM and n < 25:  # a short note may get a short reply
         out.append(f"too thin: {n} words")
     if not re.match(r"(?i)^hey\s+[A-Za-z][\w'.-]*,", body):
         out.append('does not open with "hey <first name>,"')
@@ -133,6 +138,7 @@ _FIG = re.compile(
     r"|\b[A-Za-z]{1,6}[-#]?\d{2,}\b"                                # ids with numbers (C18764, SR-1204)
     r"|\b\d{1,3}(?:,\d{3})+(?:\.\d+)?\b|\b\d{2,}(?:\.\d+)?\b|\b\d+\.\d+\b",  # counts, hours, amounts
     re.I)
+_ATTACH_REF = re.compile(r"(?i)\b(?:attached|attachments?|enclosed|see the (?:file|sheet|deck|spreadsheet|doc))\b")
 _FILE = re.compile(r"(?i)\b[\w() .-]{1,80}\.(?:xlsx|xlsm|xls|csv|pdf|docx?|pptx?|png|jpe?g|zip|txt)\b")
 
 
@@ -161,6 +167,12 @@ def has_table(text: str) -> bool:
     return pipes >= 2 or tabs >= 2 or bool(re.search(r"(?i)<table\b", text or ""))
 
 
+def _named_in(name: str, low: str) -> bool:
+    """The file name (its last one to five words, with the extension) is written in the thread."""
+    words = name.strip().lower().split()
+    return any(" ".join(words[i:]) in low for i in range(max(0, len(words) - 5), len(words)))
+
+
 def thread_text(doc: dict | None) -> str:
     doc = doc or {}
     parts = [str(doc.get(k) or "") for k in ("field_text", "selection", "window_ocr")]
@@ -177,10 +189,17 @@ def classify(doc: dict | None, lookup_text: str = "") -> tuple[bool, list[str]]:
     names = list(attach.names_in(text)) + [str(n) for n in (doc.get("attachments") or doc.get("files") or [])]
     if names:
         why.append("attachments in thread: " + ", ".join(names[:3]))
-    found = sorted({m.group(0).strip() for m in _FILE.finditer(lookup_text or "")})
+    # The lookup returns unrelated records too: its files count only when the thread names the
+    # same file or refers to an attachment; its figures count only when the thread has them too.
+    low = text.lower()
+    refers = bool(_ATTACH_REF.search(text))
+    found = sorted({m.group(0).strip() for m in _FILE.finditer(lookup_text or "")
+                    if refers or _named_in(m.group(0), low)})
     if found:
         why.append("attachments in lookup context: " + ", ".join(found[:3]))
     figs = figures(text)
+    body = _plain(text).lower()
+    figs += [f for f in figures(lookup_text) if f not in figs and f in body]
     if len(figs) >= 3:
         why.append(f"{len(figs)} figures in thread: " + ", ".join(figs[:5]))
     if has_table(text):  # the lookup helper joins record fields with pipes; only the thread counts

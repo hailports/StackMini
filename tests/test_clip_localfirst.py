@@ -143,7 +143,7 @@ def test_classify_figures():
 def test_classify_attachment_and_table():
     heavy, why = localfirst.classify({"field_text": "hey, see attached: Q3 totals.xlsx please check"})
     assert heavy and any("attachment" in w for w in why)
-    heavy, why = localfirst.classify({"field_text": "hey can you check"}, "notes: see dealer map.pdf")
+    heavy, why = localfirst.classify({"field_text": "hey can you check the attachment"}, "notes: see dealer map.pdf")
     assert heavy and any("lookup" in w for w in why)
     heavy, why = localfirst.classify({"field_text": "a | b | c\n1 | 2 | 3\n"})
     assert heavy and "table" in why
@@ -184,3 +184,23 @@ def test_plain_thread_logs_route(monkeypatch, tmp_path, capsys):
     doc = {"app": "Microsoft Outlook", "title": "call", "field_text": PLAIN}
     assert run.draft_scene(doc, "", "", False, _cfg(["local", "cursor"])) == 0
     assert '"route": "plain"' in (tmp_path / "e.jsonl").read_text()
+
+
+def test_unrelated_lookup_files_and_figures_do_not_count():
+    lookup = "[case 2026-09-10] review deck l_Copy Review_091026.pptx | amount=$1450.00 | id=00523782 | hours=72"
+    assert localfirst.classify({"field_text": PLAIN}, lookup) == (False, [])
+
+
+def test_lookup_file_counts_when_thread_names_it_or_refers_to_attachment():
+    lookup = "notes: totals are in dealer map.xlsx"
+    heavy, why = localfirst.classify({"field_text": "hey, can you look at the dealer map.xlsx numbers?"}, lookup)
+    assert heavy and any("dealer map.xlsx" in w for w in why)
+    heavy, why = localfirst.classify({"field_text": "hey, did you see the file I attached this morning?"}, lookup)
+    assert heavy and any("lookup" in w for w in why)
+
+
+def test_thin_floor_only_for_long_incoming():
+    short = "hey Dana,\n\nsure, tuesday at noon works. want me to book a table?\n\nbest,\nMorgan"
+    me = ["Morgan Hale", "Morgan"]
+    assert localfirst.gate(short, "email", 180, me, incoming=15) == []
+    assert any("too thin" in w for w in localfirst.gate(short, "email", 180, me, incoming=120))

@@ -482,6 +482,7 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
         return _draft_scene_once(doc, base_url, model, copy, cfg)
     local_cfg, premium_cfg = plan
     kind, cap = localfirst.kind_cap(doc)
+    incoming = localfirst.incoming_words(doc)
     heavy, reasons = localfirst.classify(doc, _route_lookup(cfg, doc))
     if heavy:
         # Attachments, figures or tables: premium first (cursor, claude, codex), local only if they all fail.
@@ -515,17 +516,17 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
         code, why = 2, ["local error " + type(exc).__name__]
     text = str(got.get("text") or "")
     if code == 0 and text:
-        why = localfirst.gate(text, kind, cap, me)
+        why = localfirst.gate(text, kind, cap, me, incoming)
         if why:
             try:
                 again, _name = complete(endpoints_from(local_cfg),
                                         localfirst.shorter_messages(text, why, kind, cap, first))
                 from hailports.clip import shape as _shape
                 again = _shape.finish(plain_reply(again), kind, me)
-                if reply_ok(again) and not localfirst.gate(again, kind, cap, me):
+                if reply_ok(again) and not localfirst.gate(again, kind, cap, me, incoming):
                     text, why = again, []
                 else:
-                    why = ["after shorter retry: " + "; ".join(localfirst.gate(again, kind, cap, me) or ["empty"])]
+                    why = ["after shorter retry: " + "; ".join(localfirst.gate(again, kind, cap, me, incoming) or ["empty"])]
             except Exception as exc:
                 why = why + ["shorter retry " + type(exc).__name__]
     elif not why:
