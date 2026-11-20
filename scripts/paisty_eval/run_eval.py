@@ -77,10 +77,32 @@ def score(text: str, rubric: dict) -> dict:
         fmt_bad.append("long")
     if not (text or "").strip():
         fmt_bad.append("empty")
-    s = (5.5 * (sum(got) / len(got) if got else 1) + (2.0 if not bad else 0.0)
+    # Redraft cases: sentences the user kept must come back word for word (case and punctuation too).
+    keep = rubric.get("must_keep_verbatim", [])
+    flat = " ".join((text or "").split())
+    kept = [" ".join(k.split()) in flat for k in keep]
+    got_all = got + kept
+    s = (5.5 * (sum(got_all) / len(got_all) if got_all else 1) + (2.0 if not bad else 0.0)
          + 1.5 * (sum(addr_ok) / len(addr_ok) if addr_ok else 1) + (1.0 if not fmt_bad else 0.0))
     return {"score": round(s, 2), "missing": [g[0] for g, ok in zip(inc, got) if not ok], "forbidden": bad,
-            "unaddressed": [n for n, ok in zip(addr, addr_ok) if not ok], "format": fmt_bad}
+            "unaddressed": [n for n, ok in zip(addr, addr_ok) if not ok], "format": fmt_bad,
+            "not_kept": [k for k, ok in zip(keep, kept) if not ok]}
+
+
+def redraft_doc(case: dict, doc: dict) -> dict:
+    """A redraft case: the earlier draft (as the user left it) sits above the thread in the reply box."""
+    spec = case.get("redraft")
+    if not spec:
+        return doc
+    from hailports.clip.run import redraft_doc as prepare_redraft
+    doc = dict(doc)
+    doc["field_text"] = spec["in_box"] + "\n\n" + str(doc.get("field_text") or "").lstrip("\n")
+    doc["prior_text"] = spec["original"]
+    if spec.get("fresh"):
+        doc["redraft_locks"] = {"fresh": True}
+    elif "pins" in spec:
+        doc["redraft_locks"] = {"pins": spec["pins"]}
+    return prepare_redraft(doc)
 
 
 def old_paisty(baseline_root: Path, doc: dict, route: dict) -> str:
@@ -140,6 +162,8 @@ def main() -> int:
                 t0 = time.time()
                 if mode == "screenshot":
                     doc = screenshot.scene_for([FIX / f"{case['id']}.png"], run)
+                else:
+                    doc = redraft_doc(case, doc)
                 text, ctx, attempts = compose.draft(doc, route, RULES, run, extra_dirs=[FIX],
                                                     code_roots=[FIX / "repo" / "src", FIX / "repo" / "docs"])
                 took = time.time() - t0

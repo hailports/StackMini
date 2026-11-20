@@ -1138,5 +1138,64 @@
   },
   "reference": "hey Morgan -- yep, that's already built in. any goal from $300k to $1m gets level 3 at goal + $300k, and over $1m gets 120%. ex. prairie pump co is at $300k with level 3 at $600k. the one thing it doesn't do is force the $300k minimum. 7 dealers came in under it: red mesa water ($75k), dry creek pivots ($120k), sandhill supply and granite ag services ($125k), lone oak pumps ($175k), willow bend farm supply ($220k) and elm ridge water ($275k). want me to bump those up to $300k? then their level 3 would land at $600k.",
   "screenshot_only": true
+ },
+ {
+  "id": "redraft_keeps_edit",
+  "title": "Redraft keeps the sentence the user fixed and the line they added",
+  "subject": "Kickoff time",
+  "me": "Jordan Reyes, Jordan",
+  "thread": [
+   {
+    "from": "Shah, Priya",
+    "to": ["Reyes, Jordan"],
+    "date": "Friday, November 20, 2026 at 9:12 AM",
+    "body": "Hi Jordan,\n\nCan we move the Acme kickoff to Tuesday? Monday is packed for me. Also, is the venue still the north office?\n\nThanks,\nPriya"
+  }
+ ],
+  "attachments_shown": [],
+  "redraft": {
+   "original": "hey Priya -- sure, Tuesday works. let's do 10am. the venue is still the north office.",
+   "in_box": "hey Priya -- sure, Tuesday works. Let's do 2pm instead of the morning. the venue is still the north office. I'll send a new invite today."
+  },
+  "rubric": {
+   "include": [["tuesday"], ["north office"]],
+   "must_keep_verbatim": ["Let's do 2pm instead of the morning.", "I'll send a new invite today."],
+   "exclude": ["(?i)\\b10\\s?am\\b", "(?i)your (?:earlier|previous) draft"],
+   "address": ["Priya"]
+  },
+  "reference": "hey Priya -- yep, Tuesday is fine. Let's do 2pm instead of the morning. still the north office. I'll send a new invite today."
+ },
+ {
+  "id": "redraft_reordered_pins",
+  "title": "Redraft with reordered sentences and an explicit pin keeps the user's order",
+  "subject": "Invoice question",
+  "me": "Jordan Reyes, Jordan",
+  "thread": [
+   {
+    "from": "Lee, Casey",
+    "to": ["Reyes, Jordan"],
+    "date": "Friday, November 20, 2026 at 11:40 AM",
+    "body": "Hi Jordan, the Acme invoice shows $1.5k but the quote was $1.2k. Which one is right? Also can you resend the PDF?\n\nCasey"
+  },
+  {
+    "from": "Reyes, Jordan",
+    "to": ["Lee, Casey"],
+    "date": "Thursday, November 19, 2026 at 3:02 PM",
+    "body": "invoice is attached, lmk if anything looks off."
+  }
+ ],
+  "attachments_shown": [],
+  "redraft": {
+   "original": "hey Casey -- the quote is right at $1.2k. I'll fix the invoice. resending the PDF now.",
+   "in_box": "resending the PDF now. hey Casey -- the quote is right at $1.2k, sorry about that. I'll fix the invoice.",
+   "pins": ["resending the PDF now.", "hey Casey -- the quote is right at $1.2k, sorry about that."]
+  },
+  "rubric": {
+   "include": [["1.2k", "1,200"], ["invoice"]],
+   "must_keep_verbatim": ["resending the PDF now.", "hey Casey -- the quote is right at $1.2k, sorry about that."],
+   "exclude": ["(?i)your (?:earlier|previous) draft"],
+   "address": ["Casey"]
+  },
+  "reference": "resending the PDF now. hey Casey -- the quote is right at $1.2k, sorry about that. I'll get the invoice corrected to match today."
  }
 ]

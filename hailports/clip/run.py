@@ -199,12 +199,43 @@ def _pin_rules(messages: list[dict], rules: str) -> list[dict]:
     return out
 
 
-def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | None = None) -> int:
+def redraft_doc(doc: dict) -> dict:
+    """A redraft: paisty's own placed draft is not their message. Take it out, note it, and work out
+    which sentences the user kept. `redraft_locks` from the popup: {"pins": [...]} or {"fresh": true}."""
     prior_text = str(doc.pop("prior_text", "") or "").strip()
-    if prior_text:
-        # A redraft: paisty's own placed draft is not their message. Take it out and note it.
-        from hailports.clip import owndraft
-        doc = owndraft.strip_scene(doc, prior_text)
+    req = doc.pop("redraft_locks", None)
+    if not prior_text:
+        return doc
+    from hailports.clip import owndraft
+    req = req if isinstance(req, dict) else {}
+    pins = req.get("pins") if isinstance(req.get("pins"), list) else None
+    pins = [str(p) for p in pins] if pins is not None else None
+    return owndraft.strip_scene(doc, prior_text, pins=pins, fresh=bool(req.get("fresh")))
+
+
+def _keep_locks(text: str, doc: dict, retry) -> str:
+    """Every kept sentence must be in the redraft verbatim: one retry, then a deterministic splice."""
+    prior = doc.get("prior_draft") if isinstance(doc.get("prior_draft"), dict) else {}
+    plan = prior.get("locks")
+    if not isinstance(plan, dict) or not plan.get("locks") or not (text or "").strip():
+        return text
+    from hailports.clip import locks
+    gone = locks.missing(text, plan["locks"])
+    if not gone:
+        return text
+    try:
+        ask = ("Rewrite the reply. Keep these sentences word for word, in the same place: "
+               + " | ".join('"' + g + '"' for g in gone) + ". Only the reply text.")
+        again = plain_reply(retry(text, ask) or "")
+        if reply_ok(again) and len(locks.missing(again, plan["locks"])) < len(gone):
+            text = again
+    except ModelOffline:
+        pass
+    return locks.enforce(text, plan)
+
+
+def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | None = None) -> int:
+    doc = redraft_doc(doc)
     prepared = prepare(scene_from(doc), folders=source_dirs(cfg))
     if not prepared.get("ok"):
         print(prepared.get("reason") or "empty")
@@ -385,6 +416,12 @@ def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | No
         text = concrete_reply(text, screen, facts)
     except (OSError, TimeoutError, ValueError):
         pass
+
+    def _retry(prev: str, ask: str) -> str:
+        return complete(endpoints_from(route), list(prepared["messages"]) + [
+            {"role": "assistant", "content": prev}, {"role": "user", "content": ask}])[0]
+
+    text = _keep_locks(text, doc, _retry)
     if not reply_ok(text):
         print("empty")
         return 2

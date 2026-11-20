@@ -166,3 +166,75 @@ enum ReplaceMode: Equatable {
         return .insert
     }
 }
+
+/// One sentence of paisty's earlier draft as it stands in the reply box, for the Redraft popup.
+struct RedraftSentence: Equatable {
+    var text: String
+    var kind: String     // paisty, cosmetic, edited, user
+    var pinned: Bool
+}
+
+/// Pin state for the Redraft popup. The bundled helper decides what starts pinned (the user's edits
+/// and their own sentences); a tap toggles one. Pure logic so the tests compile it alone.
+struct RedraftPins: Equatable {
+    enum Source: Equatable {
+        case unknown      // helper gave nothing: the draft step decides from the edits on its own
+        case unreadable   // the reply box could not be read: today's redraft, no locks
+        case gone         // the earlier draft was deleted: fresh
+        case listed       // sentences listed with pins
+    }
+
+    var source: Source = .unknown
+    var sentences: [RedraftSentence] = []
+
+    static let unreadableNote = "Can't read the field — redraft will start fresh"
+    static let maxRows = 12
+
+    /// From the `locks` helper output, or from a field that could not be read.
+    static func from(json: [String: Any]?, fieldReadable: Bool) -> RedraftPins {
+        guard fieldReadable else { return RedraftPins(source: .unreadable) }
+        guard let json else { return RedraftPins(source: .unknown) }
+        let status = json["status"] as? String ?? ""
+        if status == "gone" || status == "empty" { return RedraftPins(source: .gone) }
+        let rows = (json["sentences"] as? [[String: Any]] ?? []).compactMap { row -> RedraftSentence? in
+            guard let text = row["text"] as? String, !text.isEmpty else { return nil }
+            let pinned = (row["pinned"] as? Bool) ?? ((row["pinned"] as? NSNumber)?.boolValue ?? false)
+            return RedraftSentence(text: text, kind: row["kind"] as? String ?? "paisty", pinned: pinned)
+        }
+        return rows.isEmpty ? RedraftPins(source: .unknown) : RedraftPins(source: .listed, sentences: rows)
+    }
+
+    mutating func toggle(_ index: Int) {
+        guard sentences.indices.contains(index) else { return }
+        sentences[index].pinned.toggle()
+    }
+
+    var pinned: [String] { sentences.filter(\.pinned).map(\.text) }
+
+    /// One short line under the header, or nil.
+    var note: String? { source == .unreadable ? Self.unreadableNote : nil }
+
+    /// Rows the popup shows; long drafts list the first few.
+    var rows: ArraySlice<RedraftSentence> { sentences.prefix(Self.maxRows) }
+
+    /// What the draft step gets. nil: no file, the draft step works it out from the field itself.
+    /// A fresh redraft ignores every lock. A listed popup sends exactly the pins (an empty list keeps nothing).
+    func request(fresh: Bool) -> [String: Any]? {
+        if fresh { return ["fresh": true] }
+        switch source {
+        case .listed: return ["pins": pinned]
+        case .gone: return ["pins": [String]()]
+        case .unknown, .unreadable: return nil
+        }
+    }
+
+    /// A sentence fits one menu row: trimmed near a word break to `limit` characters, with an ellipsis.
+    static func label(_ text: String, limit: Int = 52) -> String {
+        let flat = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard flat.count > limit else { return flat }
+        let cut = flat.prefix(limit - 1)
+        let word = cut.lastIndex(of: " ").map { cut[..<$0] } ?? cut
+        let base = word.count >= limit / 2 ? word : cut
+        return base.trimmingCharacters(in: CharacterSet(charactersIn: " ,;:-")) + "…"
+    }
+}

@@ -69,8 +69,16 @@ class Context:
     def sources(self) -> str:
         # The user's own edits to an earlier draft count as source facts.
         edited = str(self.prior.get("placed") or "") if self.prior.get("kind") not in (None, "", "none", "exact") else ""
+        kept = "\n".join(self.locks())
         return "\n".join([self.screen, self.thread_block, self.attach_block, self.notes_block,
-                          self.facts_block, self.image_block, edited])
+                          self.facts_block, self.image_block, edited, kept])
+
+    def lock_plan(self) -> dict | None:
+        plan = (self.prior or {}).get("locks")
+        return plan if isinstance(plan, dict) else None
+
+    def locks(self) -> list[str]:
+        return list((self.lock_plan() or {}).get("locks") or [])
 
     def has_data(self) -> bool:
         return bool(self.facts_block.strip() or self.attach_block.strip() or self.notes_block.strip())
@@ -345,12 +353,18 @@ def _prior_issues(body: str, ctx: Context) -> list[str]:
     if not original:
         return []
     import difflib
+    from hailports.clip import locks
     out = []
     low = " ".join(body.lower().split())
-    if prior.get("kind") in ("exact", "none") and difflib.SequenceMatcher(
+    kept = ctx.locks()
+    gone = locks.missing(body, kept)
+    if gone:
+        out.append("keep these sentences word for word, in place: " + " | ".join(f'"{g}"' for g in gone[:6]))
+    explicit = bool((ctx.lock_plan() or {}).get("explicit")) or bool(prior.get("fresh"))
+    if not kept and prior.get("kind") in ("exact", "none") and difflib.SequenceMatcher(
             None, low, " ".join(original.lower().split())).ratio() > 0.93:
         out.append("this is a copy of your earlier draft; write a better version")
-    if prior.get("kind") in ("edited", "partial") and prior.get("placed"):
+    if not explicit and prior.get("kind") in ("edited", "partial") and prior.get("placed"):
         # Numbers, amounts and dates the user typed in are facts: they must survive the redraft.
         missing = [w.strip(".,") for w in prior.get("added") or [] if re.search(r"\d", w) and w.strip(".,") not in low]
         cut = [w.strip(".,") for w in prior.get("removed") or [] if re.search(r"\d", w) and w.strip(".,") in low
@@ -454,6 +468,10 @@ def draft(doc: dict, cfg: dict | None, rules: str, complete, lookup=None, tries:
             {"role": "user", "content": "Rewrite the reply. Fix these problems:\n- " + "\n- ".join(probs)
              + "\nKeep everything that was right. Only the reply text."},
         ]
+    if ctx.locks():
+        # Still missing a kept sentence after the retries: splice it back, in order and place.
+        from hailports.clip import locks
+        best = locks.enforce(best, ctx.lock_plan())
     return best, ctx, attempts
 
 

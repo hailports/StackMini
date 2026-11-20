@@ -62,3 +62,17 @@ struct PaistyThinking: View {
 
 ## Demo
 The site version is the CSS in the `.paisty-thinking` block above; frames and GIFs are rendered from `PulseSpec.frame` at 10x.
+
+## Redraft keeps your edits
+
+Click the paperclip again on a window paisty already drafted for and the Redraft popup opens.
+
+- Under the header it lists the earlier draft's sentences as they stand in the reply box now, one row each (long ones end in "…"; hover for the full sentence).
+- Each row has a pin. Sentences you edited or wrote yourself start pinned. Punctuation, spacing or case fixes count as approval, so your version is pinned too. Untouched paisty sentences start unpinned. Tap a row to pin or unpin it; the menu stays open.
+- **Redraft** (r) is still one click. Pinned sentences come back word for word, in the order and place you left them; paisty rewrites only the rest around them. Sentences you moved keep your order.
+- **Fresh redraft** (f) ignores every pin and every edit and writes a new reply.
+- If you deleted the earlier draft, there is nothing to pin and the redraft starts fresh.
+- If paisty can't read the reply box, the popup says "Can't read the field — redraft will start fresh" and the redraft works as before.
+- The paperclip pulses while the redraft is written, the same as a first draft.
+
+Under the hood the draft step checks every pinned sentence is in the new reply verbatim. If one is missing it asks the model once more, then puts the sentence back itself, in its old place. Logic: `hailports/clip/locks.py`; pin state: `RedraftPins` in `contrib/clip/Pulse.swift`.

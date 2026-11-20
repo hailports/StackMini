@@ -32,6 +32,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
     var pulse = PulseMachine()
     var pulseStart = Date()
     var windowDrafts: [String: LastDraft] = [:]
+    var redraftPins = RedraftPins()   // the open Redraft popup's pins
     let log = Logger(subsystem: "com.hailports.paiste", category: "click")
     // Reply hint: a soft pulse when the front window likely needs a reply.
     var glowTimer: Timer?
@@ -462,11 +463,34 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         let head = NSMenuItem(title: last.placed ? "paisty drafted a reply here" : "paisty copied a reply for this window", action: nil, keyEquivalent: "")
         head.isEnabled = false
         menu.addItem(head)
+        // Which sentences stay: the user's edits start pinned, a tap pins or unpins one.
+        let field = Self.readField(pid: frontPID, remembered: pastePID == frontPID ? pasteTarget : nil)
+        redraftPins = RedraftPins.from(json: field.flatMap { Self.lockRows(field: $0, prior: last.text) },
+                                       fieldReadable: field != nil || !last.placed)
+        if let note = redraftPins.note {
+            let line = NSMenuItem(title: note, action: nil, keyEquivalent: "")
+            line.isEnabled = false
+            menu.addItem(line)
+        }
+        if !redraftPins.rows.isEmpty {
+            let hint = NSMenuItem(title: "Pinned sentences stay as you wrote them", action: nil, keyEquivalent: "")
+            hint.isEnabled = false
+            menu.addItem(hint)
+            for (index, sentence) in redraftPins.rows.enumerated() {
+                menu.addItem(pinRow(sentence, index: index))
+            }
+            menu.addItem(.separator())
+        }
         let redo = NSMenuItem(title: "Redraft", action: #selector(redraftChosen(_:)), keyEquivalent: "r")
         redo.target = self
         redo.representedObject = last.window
-        redo.toolTip = "Reads the screen again, keeps your edits, and replaces the earlier draft"
+        redo.toolTip = "Reads the screen again, keeps pinned sentences word for word, and replaces the earlier draft"
         menu.addItem(redo)
+        let fresh = NSMenuItem(title: "Fresh redraft", action: #selector(freshRedraftChosen(_:)), keyEquivalent: "f")
+        fresh.target = self
+        fresh.representedObject = last.window
+        fresh.toolTip = "Ignores pins and edits and writes a new reply from scratch"
+        menu.addItem(fresh)
         let copy = NSMenuItem(title: "Copy again", action: #selector(copyAgainChosen(_:)), keyEquivalent: "c")
         copy.target = self
         copy.representedObject = last.window
@@ -483,7 +507,65 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
 
     @objc func redraftChosen(_ sender: NSMenuItem) {
         guard let window = sender.representedObject as? String, let last = windowDrafts[window], !busy else { return }
-        startDraft(prior: last, window: window)
+        startDraft(prior: last, window: window, locks: redraftPins.request(fresh: false))
+    }
+
+    @objc func freshRedraftChosen(_ sender: NSMenuItem) {
+        guard let window = sender.representedObject as? String, let last = windowDrafts[window], !busy else { return }
+        startDraft(prior: last, window: window, locks: redraftPins.request(fresh: true))
+    }
+
+    /// A sentence row: a borderless toggle with a pin glyph, template ink like the rest of the menu.
+    /// Clicking a control inside a menu item view does not close the menu, so several pins take several taps.
+    func pinRow(_ sentence: RedraftSentence, index: Int) -> NSMenuItem {
+        let row = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        let button = NSButton(title: RedraftPins.label(sentence.text), target: self, action: #selector(pinToggled(_:)))
+        button.setButtonType(.toggle)
+        button.isBordered = false
+        button.image = NSImage(systemSymbolName: "pin", accessibilityDescription: "Not pinned")
+        button.alternateImage = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Pinned")
+        button.imagePosition = .imageLeading
+        button.alignment = .left
+        button.font = NSFont.menuFont(ofSize: 0)
+        button.contentTintColor = .labelColor
+        button.state = sentence.pinned ? .on : .off
+        button.tag = index
+        button.toolTip = sentence.text
+        button.frame = NSRect(x: 14, y: 1, width: 330, height: 20)
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 350, height: 22))
+        view.addSubview(button)
+        row.view = view
+        return row
+    }
+
+    @objc func pinToggled(_ sender: NSButton) {
+        redraftPins.toggle(sender.tag)
+    }
+
+    /// The reply box text, without bringing anything forward. nil when it cannot be read.
+    static func readField(pid: pid_t, remembered: AXUIElement?) -> String? {
+        guard AXIsProcessTrusted(), pid != 0 else { return nil }
+        var target = remembered
+        if target == nil || !alive(target!, pid: pid) {
+            target = focusedInput(pid: pid, deep: true)
+        }
+        return target.flatMap { PastePath.str($0, kAXValueAttribute) }
+    }
+
+    /// The earlier draft's sentences now in the box, edits pre-pinned, from the bundled helper.
+    static func lockRows(field: String, prior: String) -> [String: Any]? {
+        let dir = FileManager.default.temporaryDirectory
+        let f = dir.appendingPathComponent("paiste-field-locks.txt")
+        let p = dir.appendingPathComponent("paiste-prior-locks.txt")
+        try? field.data(using: .utf8)?.write(to: f)
+        try? prior.data(using: .utf8)?.write(to: p)
+        defer {
+            try? FileManager.default.removeItem(at: f)
+            try? FileManager.default.removeItem(at: p)
+        }
+        let run = runPaiste(["locks", "--field", f.path, "--prior", p.path], timeout: 3)
+        guard run.status == 0, let data = run.out.data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 
     @objc func copyAgainChosen(_ sender: NSMenuItem) {
@@ -503,7 +585,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
 
     /// Draft for the front window. With `prior`, a redraft: paisty's earlier text on screen is its own,
     /// the user's edits to it are kept, and the new reply replaces it instead of landing under it.
-    func startDraft(prior: LastDraft?, window: String) {
+    func startDraft(prior: LastDraft?, window: String, locks: [String: Any]? = nil) {
         if !AXIsProcessTrusted() && !askedPasteAccess {
             askedPasteAccess = true
             openSetup()
@@ -525,7 +607,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
             var text = ""
             var blocked = ""
             if Self.usable(scene) {
-                let drafted = Self.draft(scene, prior: priorText)
+                let drafted = Self.draft(scene, prior: priorText, locks: locks)
                 text = drafted.reply
                 blocked = drafted.blocked
             }
@@ -537,7 +619,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
                     let seen = Self.screenText(pid: pid)
                     captureNote = seen.isEmpty ? "screen-empty" : "screen-\(seen.count)"
                     if !seen.isEmpty, let raw = Self.screenScene(seen, pid: pid) {
-                        let drafted = Self.draft(raw, prior: priorText)
+                        let drafted = Self.draft(raw, prior: priorText, locks: locks)
                         text = drafted.reply
                         blocked = drafted.blocked
                         if text.isEmpty { captureNote = "screen-unusable" }
@@ -1388,16 +1470,24 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         return image
     }
 
-    static func draft(_ scene: String, prior: String = "") -> (reply: String, blocked: String) {
+    static func draft(_ scene: String, prior: String = "", locks: [String: Any]? = nil) -> (reply: String, blocked: String) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("paiste-scene.json")
         try? scene.data(using: .utf8)?.write(to: url)
         let priorURL = FileManager.default.temporaryDirectory.appendingPathComponent("paiste-prior.txt")
         if !prior.isEmpty { try? prior.data(using: .utf8)?.write(to: priorURL) }
+        // Pins from the Redraft popup ({"pins": [...]} or {"fresh": true}); the draft step decides the rest.
+        let locksURL = FileManager.default.temporaryDirectory.appendingPathComponent("paiste-locks.json")
+        var lockArgs: [String] = []
+        if !prior.isEmpty, let locks, let data = try? JSONSerialization.data(withJSONObject: locks),
+           (try? data.write(to: locksURL)) != nil {
+            lockArgs = ["--locks", locksURL.path]
+        }
         defer {
             try? FileManager.default.removeItem(at: url)
             try? FileManager.default.removeItem(at: priorURL)
+            try? FileManager.default.removeItem(at: locksURL)
         }
-        let task = paisteProcess(["draft", "--scene", url.path] + (prior.isEmpty ? [] : ["--prior", priorURL.path]))
+        let task = paisteProcess(["draft", "--scene", url.path] + (prior.isEmpty ? [] : ["--prior", priorURL.path]) + lockArgs)
         let out = Pipe()
         let err = Pipe()
         task.standardOutput = out

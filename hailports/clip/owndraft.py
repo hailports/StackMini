@@ -179,18 +179,27 @@ def _strip_lines(text: str, draft: str) -> tuple[str, str]:
     return "\n".join(kept), "\n".join(dropped)
 
 
-def strip_scene(doc: dict, draft: str) -> dict:
-    """The scene as the other side wrote it: paisty's placed draft removed, and noted as prior_draft."""
+def strip_scene(doc: dict, draft: str, pins: list[str] | None = None, fresh: bool = False) -> dict:
+    """The scene as the other side wrote it: paisty's placed draft removed, and noted as prior_draft.
+
+    When the draft is still in the reply box, prior_draft["locks"] holds the sentences the redraft
+    must keep (see locks.py). `pins` is the user's explicit choice from the popup; `fresh` drops all locks."""
     out = dict(doc or {})
     draft = (draft or "").strip()
     if not draft:
         return out
     prior: dict = {"original": draft, "kind": NONE, "placed": "", "added": [], "removed": []}
+    if fresh:
+        prior["fresh"] = True
     field_text = str(out.get("field_text") or "")
     spot = locate(field_text, draft)
     if spot.found:
         out["field_text"] = (field_text[: spot.start] + field_text[spot.end:]).strip("\n")
         prior.update(kind=spot.kind, placed=spot.placed, added=spot.added, removed=spot.removed, where="field")
+        from hailports.clip import locks
+        plan = locks.lock_plan(field_text, draft, pins=pins, fresh=fresh)
+        if plan.get("locks") or plan.get("explicit"):
+            prior["locks"] = {k: plan[k] for k in ("status", "sentences", "locks", "explicit")}
     for key in ("window_ocr", "screen_text"):
         if out.get(key):
             kept, dropped = _strip_lines(str(out[key]), draft)
@@ -221,6 +230,22 @@ def prior_note(prior: dict | None) -> str:
     placed = str(prior.get("placed") or "").strip()
     kind = prior.get("kind") or NONE
     lines = ["YOUR EARLIER DRAFT. You wrote this, not them. Never reply to it or quote it as their message."]
+    plan = prior.get("locks") if isinstance(prior.get("locks"), dict) else None
+    if prior.get("fresh") or (plan and plan.get("explicit")):
+        # The user chose in the popup: a fresh redraft, or exactly the pinned sentences.
+        from hailports.clip import locks
+        if placed and kind != NONE:
+            lines.append("It is already in the reply box. In the reply box now:\n" + placed[:4000])
+        else:
+            lines.append(str(prior["original"])[:4000])
+        block = locks.prompt_block(plan)
+        if block:
+            lines.append(block)
+            lines.append("Return the whole reply that should replace it.")
+        else:
+            lines.append("The user asked for a fresh redraft: write a better reply to the same message from scratch, "
+                         "not a copy of this one.")
+        return "\n".join(lines)
     if placed and kind != NONE:
         lines.append("It is already in the reply box" + (" and the user edited it." if kind != EXACT else ", unchanged."))
         lines.append("In the reply box now:\n" + placed[:4000])
@@ -232,6 +257,9 @@ def prior_note(prior: dict | None) -> str:
             )
         else:
             lines.append("The user asked for a redraft: write a better reply to the same message, not a copy of this one.")
+        if plan and plan.get("locks"):
+            from hailports.clip import locks
+            lines.append(locks.prompt_block(plan))
     else:
         lines.append(str(prior["original"])[:4000])
         lines.append(
