@@ -154,7 +154,7 @@ jobs:
           codesign -d -r- /tmp/sigchk/paisty.app 2>&1 | grep designated | tee /tmp/dr.txt
           grep -q 'anchor apple generic' /tmp/dr.txt
           grep -q 'identifier "com.hailports.paiste"' /tmp/dr.txt
-          grep -qF "certificate leaf[subject.OU] = $PAISTY_TEAM_ID" /tmp/dr.txt
+          grep -qE "certificate leaf\[subject\.OU\] = \"?$PAISTY_TEAM_ID\"?( |$)" /tmp/dr.txt
           if [ -n "${PAISTY_NOTARY_KEY:-}" ]; then
             xcrun stapler validate /tmp/sigchk/paisty.app >/dev/null
             spctl -a -vv -t exec /tmp/sigchk/paisty.app 2>&1 | grep -v "^origin=" | tee /tmp/spctl.txt
