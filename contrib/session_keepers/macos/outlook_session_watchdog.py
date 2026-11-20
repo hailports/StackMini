@@ -83,7 +83,8 @@ def is_sacred(ep: str) -> bool:
 def classify(probe: dict | None, *, pages_ok: bool = True, has_tab: bool = True, optional: bool = False) -> str:
     """Pure classifier (unit-tested)."""
     if not pages_ok:
-        return "browser_down"
+        # An unreachable optional reader is "not served", never a break.
+        return "not_served" if optional else "browser_down"
     if not has_tab:
         return "not_served" if optional else "page_missing"
     if probe is None:
@@ -143,7 +144,7 @@ def _navigate(page: dict, url: str) -> None:
 def probe(ep: str, *, optional: bool) -> tuple[str, dict]:
     pages = _pages(ep)
     if pages is None:
-        return classify(None, pages_ok=False), {}
+        return classify(None, pages_ok=False, optional=optional), {}
     tabs = _mail_tabs(pages)
     if not tabs:
         return classify(None, has_tab=False, optional=optional), {"tabs": 0}
@@ -234,7 +235,10 @@ def _maybe_save_vault(doc: dict, results: dict, *, dry: bool) -> str:
 
 def tick(*, dry: bool = False) -> int:
     doc = _read_state()
-    eps = {SACRED: False, box_endpoint(): True}       # endpoint -> optional?
+    eps = {SACRED: False}                             # endpoint -> optional?
+    box = box_endpoint()
+    if box.rstrip("/") != SACRED.rstrip("/"):
+        eps[box] = True
     results = {}
     notes = []
     any_alert_open = bool(doc.get("alerted"))
@@ -281,6 +285,7 @@ def tick(*, dry: bool = False) -> int:
 
 def self_test() -> int:
     assert classify(None, pages_ok=False) == "browser_down"
+    assert classify(None, pages_ok=False, optional=True) == "not_served"
     assert classify(None, has_tab=False, optional=True) == "not_served"
     assert classify(None, has_tab=False) == "page_missing"
     assert classify({"href": "chrome-error://chromewebdata/"}) == "sso_error"
