@@ -79,18 +79,42 @@ _BUILD = (
     re.compile(r"\b(?:fix|debug)\b.{0,32}\b(?:bug|code|function|tests?)\b", re.I),
 )
 _LOW = (
-    re.compile(r"\b(?:summarize|summary|tl;dr|tldr)\b", re.I),
-    re.compile(r"\b(?:classify|triage)\b", re.I),
-    re.compile(r"\b(?:extract|rewrite|rephrase|shorten)\b", re.I),
+    re.compile(r"\b(?:summarize|summary|summaris\w*|tl;dr|tldr|digest|rollup|rundown)\b", re.I),
+    re.compile(r"\b(?:classify|triage|categorize|label|rank|score|rate)\b", re.I),
+    re.compile(r"\b(?:extract|rewrite|rephrase|shorten|paraphrase|outline|bullet)\b", re.I),
     re.compile(r"\bcommit(?:\s+msg|\s+message)?\b", re.I),
     re.compile(r"\b(?:grep[- ]?explain|explain (?:this |the )?(?:grep|match|regex|diff|line))\b", re.I),
     re.compile(r"\blogs?\b", re.I),
-    re.compile(r"\b(?:search|look up|lookup)\b", re.I),
-    re.compile(r"\b(?:first draft|draft a note|draft notes|packet prep|short rewrite)\b", re.I),
-    re.compile(r"\bwhat does\b", re.I),
+    re.compile(r"\b(?:search|look up|lookup|find(?:\s+me)?)\b", re.I),
+    re.compile(r"\b(?:first draft|draft a note|draft notes|packet prep|short rewrite|prep notes?)\b", re.I),
+    re.compile(r"\b(?:meeting summary|thread summary|status rollup|open loops?)\b", re.I),
+    re.compile(r"\b(?:yes\s*/\s*no|true\s*/\s*false|pick one|which (?:one|option))\b", re.I),
+    re.compile(r"\bwhat (?:does|is|are|should)\b", re.I),
+    re.compile(r"\b(?:who (?:is|owns|has)|when (?:is|was)|where (?:is|was))\b", re.I),
     re.compile(r"\blist the\b", re.I),
-    re.compile(r"\bhow many\b", re.I),
-    re.compile(r"\bstatus of\b", re.I),
+    re.compile(r"\bhow (?:many|fresh|long)\b", re.I),
+    re.compile(r"\b(?:status of|current state|hold status|health of|tok/s|tokens per second)\b", re.I),
+    re.compile(r"\b(?:format|markdown table|checklist)\b", re.I),
+)
+_TASK_TYPES = (
+    ("summarize", re.compile(r"\b(?:summar\w*|digest|rollup|rundown|tl;dr|tldr|meeting summary|thread summary)\b", re.I)),
+    ("classify", re.compile(r"\b(?:classif\w*|triage|categorize|label|rank|score|rate|yes\s*/\s*no)\b", re.I)),
+    ("extract", re.compile(r"\b(?:extract\w*|pull(?:\s+out)?|list the|outline|bullet)\b", re.I)),
+    ("search", re.compile(r"\b(?:search|look up|lookup|find(?:\s+me)?|what (?:is|are)|who (?:is|owns)|status of|how many)\b", re.I)),
+    ("draft", re.compile(r"\b(?:first draft|draft a note|draft notes|packet prep|short rewrite|prep notes?|commit(?:\s+msg|\s+message)?)\b", re.I)),
+    ("status", re.compile(r"\b(?:status rollup|current state|hold status|health|open loops?|tok/s)\b", re.I)),
+)
+_SOFT_DIG = re.compile(
+    r"\b(?:summar\w*|classif\w*|triage|extract\w*|digest|checklist|health|"
+    r"status|how many|which model|current state|how fresh|tok/s|"
+    r"tokens per second|markdown table|format|bullet|outline|"
+    r"what (?:is|are|should|do you know)|score|rank|label)\b",
+    re.I,
+)
+_MUTATE = re.compile(
+    r"\b(?:deploy|release|push|merge|send|post|publish|implement|refactor|"
+    r"patch|fix|debug|write (?:the )?(?:code|function|class)|create (?:a )?(?:new )?(?:file|component))\b",
+    re.I,
 )
 _SOCIAL = (
     re.compile(r"\b(?:tweet|x\.com|instagram|tiktok|social?(?:\s+bot)?|content calendar)\b", re.I),
@@ -130,19 +154,29 @@ def classify_stakes(task: str, extra_high: list[str] | None = None) -> tuple[str
     """Return stakes and a short reason. High wins over low. Else unsure."""
     body = split_footer(task)[0]
     low_body = body.lower()
-    for needle in extra_high or []:
-        n = (needle or "").strip().lower()
-        if n and n in low_body:
-            return "high", "configured_high_stakes"
     for rx in _SOCIAL:
         if rx.search(body):
             return "high", "social_off_local"
     for rx in _HIGH:
         if rx.search(body):
             return "high", "high_stakes"
+    for rx in _BUILD:
+        if rx.search(body):
+            return "high", "build_never_local"
+    ttype = task_type(task)
+    soft_low = ttype != "other" or bool(_SOFT_DIG.search(body))
+    for needle in extra_high or []:
+        n = (needle or "").strip().lower()
+        if n and n in low_body:
+            # Dig/classify about a high substring may finish local; mutate stays high.
+            if soft_low and not _MUTATE.search(body):
+                break
+            return "high", "configured_high_stakes"
     for rx in _LOW:
         if rx.search(body):
-            return "low", "low_end_dig"
+            return "low", f"task_type_{ttype}" if ttype != "other" else "low_end_dig"
+    if soft_low and not _MUTATE.search(body):
+        return "low", f"task_type_{ttype}" if ttype != "other" else "soft_dig"
     return "unsure", "stakes_unsure"
 
 
@@ -161,6 +195,19 @@ def route_class(task: str, stakes: str | None = None) -> str:
     return "other"
 
 
+
+def task_type(task: str) -> str:
+    """Cheap task-type label for logs and local-fit heuristics."""
+    body = split_footer(task)[0]
+    for name, rx in _TASK_TYPES:
+        if rx.search(body):
+            return name
+    if _SOFT_DIG.search(body):
+        return "dig"
+    return "other"
+
+
+
 def _clip(text: str, limit: int) -> str:
     text = (text or "").strip()
     if len(text) <= limit:
@@ -172,14 +219,14 @@ def local_user_delta(task: str, stakes: str, evidence: str) -> str:
     """Stable instruction prefix, then a short delta (cache-friendly)."""
     clean = split_footer(task)[0]
     # Live knowledge_base hits need more room than prep snippets; still clipped.
-    ev_limit = 1800 if (evidence or "").lstrip().startswith("KNOWLEDGE_BASE") else 700
+    ev_limit = 12000 if (evidence or "").lstrip().startswith("KNOWLEDGE_BASE") else 4000
     ev = _clip(evidence, ev_limit) or "(none)"
     return (
         LOCAL_ASK_PREFIX
         + "\nSTAKES: "
         + stakes
         + "\nTASK:\n"
-        + _clip(clean, 4000)
+        + _clip(clean, 24000)
         + "\nEVIDENCE:\n"
         + ev
         + "\n"
@@ -297,7 +344,11 @@ def policy_decision(
         and stake_why == "knowledge_base_live_lookup"
     ):
         return pack("complete_local", "knowledge_base_live_usable", answer)
-    if conf < 0.55 and not _usable(answer):
+    if obj is None and local_text and stakes == "low":
+        # Malformed / non-JSON local output: fail over to paid with a brief.
+        if not _usable(answer):
+            return pack("need_premium", why or "malformed_output", "")
+    if conf < 0.55:
         return pack("need_premium", why or "low_confidence", "")
     if _usable(answer):
         return pack("complete_local", why or "low_end_usable", answer)
@@ -307,8 +358,8 @@ def policy_decision(
 def compact_task_for_paid(task: str) -> str:
     clean, _footer = split_footer(task)
     transcript = clean.count("\nUser:") + clean.count("\nAssistant:") >= 2
-    if transcript or len(clean) > 8000:
-        return _clip(clean[-1600:], 1600)
+    if transcript or len(clean) > 48000:
+        return _clip(clean[-8000:], 8000)
     return clean
 
 
@@ -359,7 +410,11 @@ def want_prep(task: str) -> bool:
 
 
 def want_knowledge_base(task: str) -> bool:
-    return bool(_WB_HINT.search(split_footer(task)[0]))
+    # Live knowledge-base lookups stay on unless LOCAL_FIRST_KNOWLEDGE_BASE_ALWAYS=0.
+    body = split_footer(task)[0]
+    if os.environ.get("LOCAL_FIRST_KNOWLEDGE_BASE_ALWAYS", "1").strip() not in {"0", "off", "no"}:
+        return len(body.strip()) >= 8
+    return bool(_WB_HINT.search(body))
 
 
 def fetch_knowledge_base(cfg: dict, task: str) -> str:
@@ -409,7 +464,7 @@ def fetch_knowledge_base(cfg: dict, task: str) -> str:
         lines.append(f"- ref={ref} | {title}")
         if text:
             lines.append("  " + text.replace("\n", " "))
-    return _clip("\n".join(lines), 1600)
+    return _clip("\n".join(lines), 8000)
 
 
 def fetch_prep(cfg: dict, task: str) -> str:
@@ -434,7 +489,7 @@ def fetch_prep(cfg: dict, task: str) -> str:
     except json.JSONDecodeError:
         return ""
     text = data.get("brief_text") or data.get("synthesized_brief") or ""
-    return _clip(str(text), 700)
+    return _clip(str(text), 4000)
 
 
 def _ssh_fetch(cfg: dict, prompt: str, priority: int) -> dict:
@@ -467,7 +522,7 @@ def _ssh_fetch(cfg: dict, prompt: str, priority: int) -> dict:
         "    raise SystemExit(0)\n"
         "schema={'type':'object','properties':{'decision':{'type':'string'},'confidence':{'type':'number'},'why':{'type':'string'},'answer':{'type':'string'}},'required':['decision','confidence','why','answer']}\n"
         "try:\n"
-        "    out=call_local_8080(job['prompt'], max_tokens=420, temperature=0.1, timeout=80, priority=int(job['priority']), json_schema=schema)\n"
+        "    out=call_local_8080(job['prompt'], max_tokens=1200, temperature=0.1, timeout=80, priority=int(job['priority']), json_schema=schema)\n"
         "except Exception as exc:\n"
         "    json.dump({'ok': False, 'error': type(exc).__name__}, sys.stdout)\n"
         "    raise SystemExit(0)\n"
@@ -507,7 +562,7 @@ def _http_fetch(cfg: dict, prompt: str) -> dict:
             {"role": "user", "content": prompt[len(LOCAL_ASK_PREFIX):].strip() if prompt.startswith(LOCAL_ASK_PREFIX) else prompt},
         ],
         "temperature": 0.1,
-        "max_tokens": 420,
+        "max_tokens": 1200,
         "cache_prompt": True,
         "chat_template_kwargs": {"enable_thinking": False},
         "response_format": {"type": "json_schema", "json_schema": {"name": "local_first", "strict": True, "schema": JSON_SCHEMA}},
@@ -967,6 +1022,10 @@ def route_task(task: str, *, caller: str = "cli", fetch=None, config: dict | Non
             # keyword stakes classifier says unsure (ticket ids alone ≠ high).
             if stakes == "unsure" and klass != "build":
                 stakes, stake_why = "low", "knowledge_base_live_lookup"
+    if stakes == "unsure" and klass != "build" and (
+        task_type(task) != "other" or _SOFT_DIG.search(split_footer(task)[0])
+    ):
+        stakes, stake_why = "low", "task_type_try_local"
     if stakes in {"high", "unsure"}:
         result = _skipped_or_coop(task, stakes, stake_why, extra, cfg, fetch, caller)
         result["class"] = klass
@@ -1613,10 +1672,10 @@ def _bind_host_port(argv: list[str], default_port: int) -> tuple[str, int]:
 def _governed_tool_check(payload: dict) -> tuple[int, dict]:
     """Policy choke point for bot/CLI tool calls. Shadow by default."""
     try:
-        from hailports.governed_gateway import check_call
+        from governed_gateway import check_call  # type: ignore
     except ImportError:
         try:
-            from governed_gateway import check_call  # type: ignore
+            from core.governed_gateway import check_call  # type: ignore
         except ImportError:
             import importlib.util
             spec = importlib.util.spec_from_file_location(
@@ -1657,14 +1716,10 @@ def _gateway_handler(modes: set[str]):
                 return
             if path == "/health":
                 try:
-                    from hailports.governed_gateway import enforce_enabled
+                    from governed_gateway import enforce_enabled
                     mode = "enforce" if enforce_enabled() else "shadow"
                 except Exception:
-                    try:
-                        from governed_gateway import enforce_enabled  # type: ignore
-                        mode = "enforce" if enforce_enabled() else "shadow"
-                    except Exception:
-                        mode = "unknown"
+                    mode = "unknown"
                 body = json.dumps({"ok": True, "gateway_mode": mode}).encode()
                 self._send(200, {}, body, "application/json")
                 return

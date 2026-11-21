@@ -2,7 +2,11 @@
   "transport": "http",
   "http_url": "http://127.0.0.1:8080/v1/chat/completions",
   "model": "local",
-  "coop_mode": true,
-  "coop_long_chars": 1500,
-  "answer_cache_path": ""
+  "max_local_chars": 48000,
+  "local_max_tokens": 1200,
+  "quality_min_confidence": 0.55,
+  "extra_high_substrings": ["ledger-mutate"],
+  "decisions_path": "router-decisions.jsonl",
+  "rollup_path": "offload-today.md",
+  "receipt_path": "local-first-receipts.jsonl"
 }

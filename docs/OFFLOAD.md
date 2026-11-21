@@ -38,3 +38,10 @@ Daily rollup: `LOCAL_FIRST_ROLLUP` (default `~/.local/share/local-first/offload-
 
 See `contrib/watch/README.md`. Label pattern: `com.claude-stack.watch.<name>`.
 Ported example: `examples/chat-probe-local.py` replaces a paid HTTP health probe.
+
+## Saturate update (2026-11-21)
+
+- Task-type heuristics route more simple paid-CLI asks to the local model.
+- Local prompt budget raised for 64K context; malformed or low-confidence local output falls back to paid.
+- Fail-open to paid when `:8080` is down. Build/social still never finish local.
+- Optional `com.stackmini.local-precompute` launchd example digests idle context packs and backs off under memory/swap pressure.
