@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "default": {
+    "allow_tools": ["*"],
+    "deny_tools": [],
+    "allow_targets": ["*"],
+    "deny_targets": ["crm-prod"]
+  },
+  "callers": {
+    "crm-bot": {
+      "allow_tools": ["*"],
+      "deny_tools": ["mail.send", "chat.send", "chatter.post", "outlook.send", "zoom.send"],
+      "allow_targets": ["*"],
+      "deny_targets": ["crm-prod"]
+    },
+    "claude": {
+      "allow_tools": ["*"],
+      "deny_tools": ["crm.mutate", "crm.deploy", "crm.write"],
+      "allow_targets": ["*"],
+      "deny_targets": ["crm", "crm-prod"]
+    },
+    "codex": {
+      "allow_tools": ["*"],
+      "deny_tools": ["crm.mutate", "crm.deploy", "crm.write"],
+      "allow_targets": ["*"],
+      "deny_targets": ["crm", "crm-prod"]
+    },
+    "cursor": {
+      "allow_tools": ["*"],
+      "deny_tools": ["crm.mutate", "crm.deploy", "crm.write"],
+      "allow_targets": ["*"],
+      "deny_targets": ["crm", "crm-prod"]
+    },
+    "grok": {
+      "allow_tools": ["*"],
+      "deny_tools": ["crm.mutate", "crm.deploy", "crm.write"],
+      "allow_targets": ["*"],
+      "deny_targets": ["crm", "crm-prod"]
+    }
+  }
+}

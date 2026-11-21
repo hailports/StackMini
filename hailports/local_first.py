@@ -1609,6 +1609,30 @@ def _bind_host_port(argv: list[str], default_port: int) -> tuple[str, int]:
     return host, port
 
 
+
+def _governed_tool_check(payload: dict) -> tuple[int, dict]:
+    """Policy choke point for bot/CLI tool calls. Shadow by default."""
+    try:
+        from hailports.governed_gateway import check_call
+    except ImportError:
+        try:
+            from governed_gateway import check_call  # type: ignore
+        except ImportError:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(
+                "governed_gateway",
+                Path(__file__).resolve().parent / "governed_gateway.py",
+            )
+            if spec is None or spec.loader is None:
+                return 500, {"ok": False, "error": "governed_gateway_missing"}
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            check_call = mod.check_call
+    result = check_call(payload if isinstance(payload, dict) else {})
+    status = 200 if result.get("allowed") else 403
+    return status, result
+
+
 def _gateway_handler(modes: set[str]):
     from http.server import BaseHTTPRequestHandler
 
@@ -1632,7 +1656,17 @@ def _gateway_handler(modes: set[str]):
                 self._send(200, {}, body, "application/json")
                 return
             if path == "/health":
-                self._send(200, {}, b'{"ok":true}', "application/json")
+                try:
+                    from hailports.governed_gateway import enforce_enabled
+                    mode = "enforce" if enforce_enabled() else "shadow"
+                except Exception:
+                    try:
+                        from governed_gateway import enforce_enabled  # type: ignore
+                        mode = "enforce" if enforce_enabled() else "shadow"
+                    except Exception:
+                        mode = "unknown"
+                body = json.dumps({"ok": True, "gateway_mode": mode}).encode()
+                self._send(200, {}, body, "application/json")
                 return
             self._send(404, {}, b"{}", "application/json")
 
@@ -1665,6 +1699,10 @@ def _gateway_handler(modes: set[str]):
             if path in {"/v1/messages", "/messages"} and "anthropic" in modes:
                 status, headers, text = anthropic_messages(payload)
                 self._send(status, headers, text.encode(), "application/json")
+                return
+            if path in {"/v1/tools/check", "/v1/tools/invoke", "/tools/check", "/tools/invoke"}:
+                status, result = _governed_tool_check(payload)
+                self._send(status, {}, json.dumps(result).encode(), "application/json")
                 return
             self._send(404, {}, b"{}", "application/json")
 
