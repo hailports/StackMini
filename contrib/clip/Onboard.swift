@@ -70,13 +70,11 @@ final class SetupBoard: NSObject, NSWindowDelegate {
     var autoLine = ""
     var pendingAuto = false
     var licenseOnly = false
-    var trialEmail = ""
     var licenseInput = ""
-    var trialInFlight = false
-    var trialFailure = false
-    var sendTrialButton: NSButton?
 
     static let pricingURL = URL(string: "https://www.paisty.com/pricing")!
+    /// The trial starts on the website: email and a card at Stripe Checkout. There is no trial key.
+    static let signupURL = URL(string: "https://www.paisty.com/download")!
 
     enum LicenseState {
         case missing, valid, expiredOrInvalid
@@ -114,6 +112,20 @@ final class SetupBoard: NSObject, NSWindowDelegate {
 
     static func hasExpiredOrInvalidLicense() -> Bool {
         licenseState() == .expiredOrInvalid
+    }
+
+    /// License, running trial, ended trial, expired key, or nothing yet. See PaistyAccess.
+    static func access() -> PaistyAccess {
+        PaistyAccess.current()
+    }
+
+    /// "Your trial is on until Saturday, November 28." Empty when the end is unknown.
+    static func trialLine(_ ent: PaistyEntitlement.Stored?) -> String {
+        guard let ent, ent.ends.timeIntervalSince1970 > 0 else { return "Your trial is on. There is no key to paste." }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US")
+        f.dateFormat = "EEEE, MMMM d"
+        return "Your trial is on until " + f.string(from: ent.ends) + ". There is no key to paste."
     }
 
     /// OpenAI-compatible chat services. The address and a starting model fill in; the model stays editable.
@@ -239,6 +251,8 @@ final class SetupBoard: NSObject, NSWindowDelegate {
     }
 
     func showLicense() {
+        // Key entry is for paid keys only, never during a running trial.
+        guard PaistyAccess.showsKeyEntry(Self.access()) else { return }
         licenseOnly = true
         page = 3
         statusField.stringValue = ""
@@ -393,6 +407,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             fields["license"]?.stringValue = ""
             licenseInput = ""
             licenseOnly = false
+            PaistyEntitlement.clear()
             render()
             statusField.stringValue = "Key saved. Try drafting again."
         } catch {
@@ -404,55 +419,15 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         NSWorkspace.shared.open(Self.pricingURL)
     }
 
-    @objc func sendTrialKey() {
-        guard !trialInFlight else { return }
-        let email = (fields["trial-email"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        trialEmail = email
-        guard email.count <= 254, email.range(of: #"^[^\s@]+@[^\s@]+\.[^\s@]+$"#, options: .regularExpression) != nil else {
-            statusField.stringValue = "Enter a valid email address."
-            return
+    /// The trial starts on the website with an email and a card. paisty turns itself on after that.
+    @objc func startTrial() {
+        NSWorkspace.shared.open(Self.signupURL)
+        statusField.stringValue = "After checkout, paisty turns itself on. There is no key to paste."
+        PaistyLicense.claimUntilActive { [weak self] in
+            self?.licenseOnly = false
+            self?.statusField.stringValue = "paisty is on. Nothing to paste."
+            self?.render()
         }
-        var request = URLRequest(url: URL(string: "https://www.paisty.com/api/trial")!)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 10
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["email": email])
-        trialInFlight = true
-        trialFailure = false
-        sendTrialButton?.isEnabled = false
-        statusField.stringValue = "Sending request..."
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.trialInFlight = false
-                self.sendTrialButton?.isEnabled = true
-                let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-                let json = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
-                let reason = json["reason"] as? String ?? ""
-                if error == nil, code == 200, json["ok"] as? Bool == true {
-                    self.trialFailure = false
-                    self.statusField.stringValue = "Turning paisty on…"
-                    PaistyLicense.claimUntilActive { [weak self] in
-                        self?.licenseOnly = false
-                        self?.statusField.stringValue = "paisty is on. Nothing to paste."
-                        self?.render()
-                    }
-                } else {
-                    self.trialFailure = true
-                    switch (code, reason) {
-                    case (403, "used"):
-                        self.statusField.stringValue = "This email's trial has ended."
-                    case (403, "network"):
-                        self.statusField.stringValue = "A trial was already started from this network."
-                    case (429, _):
-                        self.statusField.stringValue = "Too many requests. Please try later."
-                    default:
-                        self.statusField.stringValue = "Could not send a trial key. Please try later."
-                    }
-                }
-                self.render()
-            }
-        }.resume()
     }
 
     @objc func hint() {
@@ -551,7 +526,6 @@ final class SetupBoard: NSObject, NSWindowDelegate {
     }
 
     func render() {
-        if let email = fields["trial-email"] { trialEmail = email.stringValue }
         if let license = fields["license"] { licenseInput = license.stringValue }
         fields = [:]
         toggles = [:]
@@ -577,27 +551,42 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             body.stringValue = "Most people already finished on the last screen. Next keeps that AI. This page is only if you still want a local model."
             localPage()
         default:
-            titleField.stringValue = licenseOnly ? "Your trial ended" : "Save setup."
-            body.stringValue = licenseOnly ? "Paste a key from your email, or buy a license." : reviewCopy()
-            _ = field("trial-email", "Email address for your trial key", trialEmail, 8)
-            let send = NSButton(title: "Send my trial key", target: self, action: #selector(sendTrialKey))
-            send.frame = NSRect(x: 0, y: 44, width: 170, height: 28)
-            send.bezelStyle = .rounded
-            send.isEnabled = !trialInFlight
-            sendTrialButton = send
-            extra.addSubview(send)
-            _ = field("license", "License key from the email", licenseInput, 84)
-            let saveKey = NSButton(title: "Save key", target: self, action: #selector(saveLicense))
-            saveKey.frame = NSRect(x: 0, y: 120, width: 140, height: 28)
-            saveKey.bezelStyle = .rounded
-            extra.addSubview(saveKey)
-            if licenseOnly || trialFailure {
+            let access = Self.access()
+            // A key that works or a running trial: nothing to enter. Key entry is for paid keys only.
+            if licenseOnly && PaistyAccess.showsKeyEntry(access) {
+                titleField.stringValue = access == .none ? "Start your free trial" : "Your trial ended"
+                body.stringValue = access == .none
+                    ? "Start the 7-day trial at paisty.com with your email and a card. It is $6/month after that unless you cancel. paisty turns itself on. Bought a key? Paste it below."
+                    : "Pick a plan to keep using paisty. If you bought one, paste the key from your email."
+            } else {
+                titleField.stringValue = "Save setup."
+                body.stringValue = reviewCopy()
+            }
+            if access == .trial {
+                let line = NSTextField(labelWithString: Self.trialLine(PaistyEntitlement.read()))
+                line.frame = NSRect(x: 0, y: 8, width: 484, height: 22)
+                extra.addSubview(line)
+                extraHeight = 60
+            } else if access == .licensed {
+                extraHeight = 40
+            } else {
+                if access == .none {
+                    let start = NSButton(title: "Start free trial", target: self, action: #selector(startTrial))
+                    start.frame = NSRect(x: 0, y: 44, width: 170, height: 28)
+                    start.bezelStyle = .rounded
+                    extra.addSubview(start)
+                }
+                _ = field("license", "Paid key from the email", licenseInput, 84)
+                let saveKey = NSButton(title: "Save key", target: self, action: #selector(saveLicense))
+                saveKey.frame = NSRect(x: 0, y: 120, width: 140, height: 28)
+                saveKey.bezelStyle = .rounded
+                extra.addSubview(saveKey)
                 let buyButton = NSButton(title: "Buy", target: self, action: #selector(buy))
                 buyButton.frame = NSRect(x: 150, y: 120, width: 100, height: 28)
                 buyButton.bezelStyle = .rounded
                 extra.addSubview(buyButton)
+                extraHeight = 160
             }
-            extraHeight = 160
         }
         if !body.stringValue.contains("doesn't send or keep your mail") {
             body.stringValue += "\n\npaisty itself doesn't send or keep your mail; your AI model writes the draft."

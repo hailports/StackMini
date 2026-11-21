@@ -55,6 +55,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
     var askedPasteAccess = false
 
     /// paisty://activate?k=… from the key email or the thanks page turns the app on.
+    /// paisty://trial?e=… from the trial thanks page hands over the trial entitlement (never a key).
     func applicationWillFinishLaunching(_ notification: Notification) {
         Self.exitIfAlreadyRunning()
         NSAppleEventManager.shared().setEventHandler(self, andSelector: #selector(openURL(_:reply:)),
@@ -63,8 +64,19 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
 
     @objc func openURL(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
         guard let raw = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
-              let url = URL(string: raw), let key = PaistyLicense.activationKey(from: url) else { return }
-        if PaistyLicense.save(key) { activated() }
+              let url = URL(string: raw) else { return }
+        if let key = PaistyLicense.activationKey(from: url) {
+            if PaistyLicense.save(key) {
+                PaistyEntitlement.clear()
+                activated()
+            }
+            return
+        }
+        // A working key is never replaced by a trial.
+        if let ent = PaistyEntitlement.fromURL(url), !PaistyLicense.validHere(), PaistyEntitlement.save(ent.token, ends: ent.ends) {
+            activated()
+            PaistyLicense.claimUntilActive { [weak self] in self?.activated() }
+        }
     }
 
     func activated() {
@@ -96,7 +108,8 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         UserDefaults.standard.register(defaults: [Self.glowKey: true])
         PaistyUpdater.shared.isBusy = { [weak self] in self?.busy ?? false }
         PaistyUpdater.shared.start()
-        // No key yet: pick up the one the email form just issued to this network. Nothing to paste.
+        // No key yet: pick up what checkout just gave this network (a paid key, or a trial entitlement),
+        // or, during a trial, the paid key once the first invoice is paid. Nothing to paste.
         if SetupBoard.licenseState() != .valid {
             PaistyLicense.claimUntilActive { [weak self] in self?.activated() }
         }
@@ -406,7 +419,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         let screen = CGPreflightScreenCaptureAccess()
         if screen { UserDefaults.standard.set(true, forKey: Self.screenGrantKey) }
         return SetupGate.decide(routeHasModel: SetupGate.routeHasModel(atPath: route),
-                                licensePresent: SetupBoard.licenseState() != .missing,
+                                licensePresent: SetupBoard.licenseState() != .missing || PaistyEntitlement.read() != nil,
                                 axTrusted: AXIsProcessTrusted(),
                                 screenWasGranted: UserDefaults.standard.bool(forKey: Self.screenGrantKey),
                                 screenGranted: screen)
@@ -434,9 +447,10 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         if board == nil { board = SetupBoard() }
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
-        // First-run and menu "Open setup" keep the full wizard when no key exists yet.
-        // A saved key that is expired or malformed opens the recovery screen.
-        if SetupBoard.hasExpiredOrInvalidLicense() {
+        // First-run and menu "Open setup" keep the full wizard when no key exists yet, and during a trial.
+        // A saved key that is expired or malformed, or a trial that is over, opens the recovery screen.
+        let access = SetupBoard.access()
+        if access == .expired || access == .ended {
             board?.showLicense()
         } else {
             board?.licenseOnly = false
@@ -445,7 +459,24 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         watchTrust()
     }
 
+    /// The draft gate said no. During a trial that is a network hiccup or a trial that just ended: ask the
+    /// server once and never show key entry while the trial is on. Otherwise open the key and plans screen.
+    func blockedByLicense() -> String {
+        if SetupBoard.access() == .trial {
+            PaistyLicense.claim { [weak self] result in
+                if result == .license { self?.activated() }
+                if result == .ended || result == .over { self?.openLicense() }
+            }
+            return "Checking your trial"
+        }
+        let none = SetupBoard.access() == .none
+        openLicense()
+        return none ? "Start your free trial" : "Your trial ended"
+    }
+
     func openLicense() {
+        // Never key entry while a trial runs or a key works.
+        guard PaistyAccess.showsKeyEntry(SetupBoard.access()) else { return }
         if board == nil { board = SetupBoard() }
         NSApp.setActivationPolicy(.regular)
         board?.showLicense()
@@ -678,8 +709,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
                 if captureNote == "need-screen-recording" {
                     CGRequestScreenCaptureAccess()
                 }
-                if blocked == "license" { self.openLicense() }
-                let hint = blocked == "license" ? "Your trial ended" : (captureNote == "need-screen-recording" ? "Allow paisty in Screen Recording" : "Nothing to copy")
+                let hint = blocked == "license" ? self.blockedByLicense() : (captureNote == "need-screen-recording" ? "Allow paisty in Screen Recording" : "Nothing to copy")
                 self.fail(hint)
                 self.log.error("empty \(captureNote, privacy: .public)")
             }

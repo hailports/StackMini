@@ -856,12 +856,14 @@ def _text_files(root: Path, suffixes: set[str], limit: int = 40) -> list[Path]:
     return found[:limit]
 
 
-def server_setup_text(mail: bool, calendar: bool, app: str, token: str, url: str, post=None) -> str:
-    """Ask the setup server. The model key stays there. This Mac sends the license and three flags."""
-    if not token or not str(url).startswith("https://"):
+def server_setup_text(mail: bool, calendar: bool, app: str, token: str, url: str, post=None, entitlement: str = "") -> str:
+    """Ask the setup server. The model key stays there. This Mac sends the license (or, during a trial,
+    the trial entitlement) and three flags."""
+    if not (token or entitlement) or not str(url).startswith("https://"):
         return ""
     name = app if app in {"claude", "codex", "cursor"} else ""
-    payload = json.dumps({"token": token, "mail": bool(mail), "calendar": bool(calendar), "app": name}).encode("utf-8")
+    cred = {"token": token} if token else {"entitlement": entitlement}
+    payload = json.dumps({**cred, "mail": bool(mail), "calendar": bool(calendar), "app": name}).encode("utf-8")
     if post is not None:
         raw = post(url, payload)
     else:

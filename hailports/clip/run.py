@@ -59,29 +59,28 @@ def _complete(cfg: dict):
 
 def _instructions(cfg: dict | None) -> str:
     """The writing rules stay off a copied app. A local signer reads a local file. Everyone else asks the license server."""
-    from hailports.clip.gate import device_id, read_token, secret_path
+    from hailports.clip.gate import credentials, device_id, secret_path
     local = Path.home() / ".config" / "paiste" / "instructions"
     if secret_path().is_file() and local.is_file():
         return local.read_text(encoding="utf-8", errors="replace").strip()
-    token = read_token(cfg)
-    if not token:
-        return ""
     paiste = (cfg or {}).get("paiste") or {}
     base = str(paiste.get("license_url") or "https://www.paisty.com/api/license").strip()
     url = base.rsplit("/", 1)[0] + "/prompt"
-    try:
-        req = urllib.request.Request(
-            url,
-            data=json.dumps({"token": token, "device": device_id()}).encode("utf-8"),
-            headers={"Content-Type": "application/json", "User-Agent": "paisty/1"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=6) as resp:
-            doc = json.loads(resp.read().decode("utf-8"))
-    except (OSError, json.JSONDecodeError, TimeoutError):
-        return ""
-    if doc.get("ok") is True:
-        return str(doc.get("system") or "").strip()
+    # The license first; during a trial, the entitlement (it is not a license).
+    for cred in credentials(cfg):
+        try:
+            req = urllib.request.Request(
+                url,
+                data=json.dumps({**cred, "device": device_id()}).encode("utf-8"),
+                headers={"Content-Type": "application/json", "User-Agent": "paisty/1"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                doc = json.loads(resp.read().decode("utf-8"))
+        except (OSError, json.JSONDecodeError, TimeoutError):
+            return ""
+        if doc.get("ok") is True:
+            return str(doc.get("system") or "").strip()
     return ""
 
 
@@ -636,14 +635,15 @@ def _onboard_auto(args, cfg, scan: dict | None = None) -> int:
     """One click. Apply what the scan found. Keys go to 0600 files and are never printed."""
     from hailports.config import save_file
     from hailports.clip.board import BoardError, auto_setup, scan_setup, server_setup_text, tie_notes
-    from hailports.clip.gate import read_token
+    from hailports.clip.gate import read_entitlement, read_token
     dest = _route_dest(args)
     found = scan if scan is not None else scan_setup()
     license_url = str((cfg.get("paiste") or {}).get("license_url") or "https://www.paisty.com/api/license")
     setup_url = license_url.rsplit("/", 1)[0] + "/setup"
 
     def setup_text(mail_on: bool, app: str) -> str:
-        return server_setup_text(mail_on, False, app, read_token(cfg), setup_url)
+        return server_setup_text(mail_on, False, app, read_token(cfg), setup_url,
+                                 entitlement=read_entitlement().get("token", ""))
 
     try:
         updated, summary = auto_setup(
@@ -740,10 +740,11 @@ def cmd_onboard(args, cfg) -> int:
             calendar_on = bool((answers or {}).get("calendar"))
             app = str((answers or {}).get("app") or "").strip().lower()
             from hailports.clip.board import server_setup_text
-            from hailports.clip.gate import read_token
+            from hailports.clip.gate import read_entitlement, read_token
             license_url = str((cfg.get("paiste") or {}).get("license_url") or "https://www.paisty.com/api/license")
             setup_url = license_url.rsplit("/", 1)[0] + "/setup"
-            written = server_setup_text(mail_on, calendar_on, app, read_token(cfg), setup_url)
+            written = server_setup_text(mail_on, calendar_on, app, read_token(cfg), setup_url,
+                                        entitlement=read_entitlement().get("token", ""))
             made = make_notes(dest_notes, mail=mail_on, calendar=calendar_on, body=written)
             paiste = dict(cfg.get("paiste") or {})
             paiste["notes"] = "folder"

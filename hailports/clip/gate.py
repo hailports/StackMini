@@ -1,4 +1,4 @@
-"""License gate. A draft needs a signed key. The signing secret stays off the app."""
+"""License gate. A draft needs a signed key, or a running trial's entitlement. The signing secret stays off the app."""
 
 from __future__ import annotations
 
@@ -39,6 +39,38 @@ def license_path() -> Path:
 
 def secret_path() -> Path:
     return Path.home() / ".config" / "paiste" / "license-secret"
+
+
+def entitlement_path() -> Path:
+    return Path.home() / ".config" / "paiste" / "entitlement"
+
+
+def read_entitlement() -> dict:
+    """The trial entitlement the app saved after checkout. Not a license: never in the license file."""
+    try:
+        doc = json.loads(entitlement_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    token = str(doc.get("token") or "") if isinstance(doc, dict) else ""
+    if not token.startswith("pe1.") or token.count(".") != 2 or len(token) > 4000:
+        return {}
+    try:
+        ends = int(doc.get("ends") or 0)
+    except (TypeError, ValueError):
+        ends = 0
+    return {"token": token, "ends": ends}
+
+
+def credentials(cfg: dict | None = None) -> list[dict]:
+    """What a server call can carry, in order: the license, then a running trial's entitlement."""
+    out = []
+    token = read_token(cfg)
+    if token:
+        out.append({"token": token})
+    ent = read_entitlement().get("token")
+    if ent:
+        out.append({"entitlement": ent})
+    return out
 
 
 def read_token(cfg: dict | None = None) -> str:
@@ -108,10 +140,74 @@ def _cache_write(token: str) -> None:
     }), encoding="utf-8")
 
 
+# A trial's yes is cached for 15 minutes, so a cancelled or failed trial stops soon after Stripe says so.
+# Offline, a trial that checked out within the last day keeps drafting until a day after its end.
+ENT_CACHE = 15 * 60
+ENT_OFFLINE = 24 * 3600
+
+
+def _ent_cache_path() -> Path:
+    return Path.home() / ".config" / "paiste" / "entitlement-cache"
+
+
+def _ent_cache_read() -> dict:
+    try:
+        doc = json.loads(_ent_cache_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return doc if isinstance(doc, dict) else {}
+
+
+def _ent_cache_write(digest: str, now: int) -> None:
+    path = _ent_cache_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"token": digest, "at": now}), encoding="utf-8")
+
+
+def _entitlement_ok(ent: dict, cfg: dict | None, urlopen=None) -> bool:
+    token = ent["token"]
+    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    now = int(time.time())
+    cache = _ent_cache_read()
+    same = cache.get("token") == digest
+    age = now - int(cache.get("at") or 0)
+    if same and age < ENT_CACHE:
+        return True
+    paiste = (cfg or {}).get("paiste") or {}
+    url = str(paiste.get("license_url") or "https://www.paisty.com/api/license").strip()
+    opener = urlopen or urllib.request.urlopen
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps({"entitlement": token, "device": device_id()}).encode("utf-8"),
+            headers={"Content-Type": "application/json", "User-Agent": "paisty/1"},
+            method="POST",
+        )
+        with opener(req, timeout=6) as resp:
+            doc = json.loads(resp.read().decode("utf-8"))
+    except (OSError, json.JSONDecodeError, TimeoutError):
+        ends = int(ent.get("ends") or 0)
+        return same and age < ENT_OFFLINE and (not ends or now < ends + 24 * 3600)
+    if doc.get("ok") is True:
+        _ent_cache_write(digest, now)
+        return True
+    try:
+        _ent_cache_path().unlink()
+    except OSError:
+        pass
+    return False
+
+
 def allowed(cfg: dict | None = None, urlopen=None) -> bool:
+    """A working license first. Without one, a running trial's entitlement."""
     token = read_token(cfg)
-    if not token:
-        return False
+    if token and _license_ok(token, cfg, urlopen):
+        return True
+    ent = read_entitlement()
+    return bool(ent) and _entitlement_ok(ent, cfg, urlopen)
+
+
+def _license_ok(token: str, cfg: dict | None, urlopen=None) -> bool:
     secret_file = secret_path()
     if secret_file.is_file():
         return verify(token, secret_file.read_bytes().strip())
