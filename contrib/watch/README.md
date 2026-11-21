@@ -49,3 +49,7 @@ Stdout must be one JSON object:
 | `dedupe`  | string  | optional stable key; default = summary hash  |
 
 Exit 0 always for a successful probe. Non-zero exits are logged and skipped.
+
+Watches named in `WATCH_JUDGE_ON_CHANGE` (comma list, default `local-model-ready`) call the
+local judge only when the check says something needs action, asks to force, or its result changed
+since the last run. A green result that matches the last run makes no model call.

@@ -74,6 +74,35 @@ def run_check(script: Path, args: list[str]) -> dict:
     return data
 
 
+# A green result that matches the last run needs no model call. The judge
+# only runs when the check says something needs action, asks to force, or the result changed. Watches
+# listed in WATCH_JUDGE_ON_CHANGE (comma list; default local-model-ready) use this gate.
+def _judge_gate_names() -> set[str]:
+    raw = os.environ.get("WATCH_JUDGE_ON_CHANGE", "local-model-ready")
+    return {x.strip() for x in raw.split(",") if x.strip()}
+
+
+def judge_needed(name: str, check: dict) -> bool:
+    """True when the judge should run. Records the result so the next run can compare."""
+    if name not in _judge_gate_names():
+        return True
+    sig = hashlib.sha256(json.dumps({"need": bool(check.get("need")), "force": bool(check.get("force")),
+                                     "summary": str(check.get("summary") or "")}, sort_keys=True).encode()).hexdigest()
+    path = state_dir() / f"{name}.lastresult"
+    try:
+        prev = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        prev = ""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(sig + "\n", encoding="utf-8")
+    except OSError:
+        return True
+    if check.get("need") or check.get("force"):
+        return True
+    return sig != prev
+
+
 def local_judge(summary: str) -> dict | None:
     """Cheap yes/no. Returns None on failure (fail-open to check script alone)."""
     body = {
@@ -205,7 +234,7 @@ def main(argv: list[str] | None = None) -> int:
     if not check.get("ok"):
         return 0
     need = bool(check.get("need"))
-    judged = local_judge(str(check.get("summary") or ""))
+    judged = local_judge(str(check.get("summary") or "")) if judge_needed(name, check) else None
     if judged is not None:
         # local model can veto a soft need; cannot invent need=false into true unless check said force
         if need and not check.get("force") and judged.get("need") is False:
