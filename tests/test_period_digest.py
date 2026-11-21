@@ -74,3 +74,11 @@ def test_load_window_reads_fts_table(tmp_path):
     c.close()
     rows = p.load_window(db, MON - 86400, MON + 86400)
     assert [r["ref"] for r in rows] == ["m1"]
+
+
+def test_gap_line_needs_the_answer_to_say_the_source_is_missing():
+    cov = {"personal mail": "STALE (900 in window)", "meeting notes": "STALE (7 in window)", "work digests": "300 in window"}
+    line = p.gap_line(cov, not_indexed=[], answer="you had meetings all week [personal mail].")
+    assert "personal mail: STALE" in line and "meeting notes: STALE" in line and "work digests" not in line
+    line = p.gap_line(cov, not_indexed=[], answer="you had meetings.\n\npersonal mail is stale.")
+    assert "personal mail" not in line and "meeting notes: STALE" in line

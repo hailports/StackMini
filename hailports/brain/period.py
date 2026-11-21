@@ -143,12 +143,17 @@ def coverage(items: list[dict], newest: dict[str, float], win: tuple[float, floa
     return out
 
 
+_GAP_WORDS = re.compile(r"stale|not indexed|not covered|empty|unreachable|out of date|(?:can|couldn|don|didn).?t see")
+
+
 def gap_line(cov: dict[str, str], not_indexed=DEFAULT_NOT_INDEXED, answer: str = "") -> str:
     """One closing line naming every source the answer could not see; empty when nothing is missing."""
-    low = (answer or "").lower()
     gaps = [f"{k}: {v.split(' (')[0]}" for k, v in cov.items() if v.startswith(("STALE", "EMPTY", "UNREACHABLE"))]
     gaps += [f"{x.split(' (')[0]} (not indexed)" for x in not_indexed]
-    gaps = [g for g in gaps if g.split(":")[0].split(" (")[0].lower() not in low]
+    # A gap is left out only when the answer already says that source is missing. Naming the source
+    # elsewhere (a "[personal mail]" tag, "you had meetings") does not count, or a real gap goes unnamed.
+    said = [s for s in re.split(r"(?<=[.!?\n])\s+", (answer or "").lower()) if _GAP_WORDS.search(s)]
+    gaps = [g for g in gaps if not any(g.split(":")[0].split(" (")[0].lower() in s for s in said)]
     return ("not covered for this period: " + "; ".join(gaps) + ".") if gaps else ""
 
 
