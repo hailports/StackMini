@@ -1,0 +1,36 @@
+{
+  "question": "what am i currently focused on at work",
+  "as_of": "2026-11-05T17:12:00-06:00",
+  "ticket_lines": [
+    "- 900001 | Story | Sample other owner | New (New) | owner: Other Person | changed 2026-11-04",
+    "- 222222 | Bug | Sample active item | Active (Approved) | owner: Example User | changed 2026-11-04",
+    "- 900002 | Story | Sample stale item | New (Moved to the backlog) | owner: Example User | changed 2026-09-01"
+  ],
+  "docket_items": [
+    {
+      "id": "900001",
+      "title": "Sample other owner",
+      "state": "New (New)",
+      "changed": "2026-11-04"
+    },
+    {
+      "id": "222222",
+      "title": "Sample active item",
+      "state": "Active (Approved)",
+      "changed": "2026-11-04T02:57:14",
+      "url": "https://example.test/items/222222"
+    },
+    {
+      "id": "900002",
+      "title": "Sample stale item",
+      "state": "New (Moved to the backlog)",
+      "changed": "2026-09-01"
+    },
+    {
+      "id": "900003",
+      "title": "Sample closed item",
+      "state": "Closed (Fixed)",
+      "changed": "2026-11-04"
+    }
+  ]
+}

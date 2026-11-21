@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 
 from hailports.notes import cosine, search as lexical_search
@@ -99,21 +100,70 @@ def vector_search(con: sqlite3.Connection, query_vector: list[float] | None, lim
     return [item for _, item in ranked[:limit]]
 
 
-def rrf(lists: list[list[dict]], limit: int, rrf_k: int = RRF_K) -> list[dict]:
-    """Fuse ranked lists. A row that is high in either list can win. Both lists reinforce it."""
+_EXACT_ID = re.compile(r"(?<![\w.])#?(\d{5,8})(?![\w.])")
+
+
+def exact_ids(query: str) -> set[str]:
+    """Ticket-style numbers named in the question (5-8 digits, optional #)."""
+    return set(_EXACT_ID.findall(query or ""))
+
+
+def flag_exact(query: str, rows: list[dict]) -> list[dict]:
+    """Mark rows whose title carries an ID from the question. Returns the same list."""
+    ids = exact_ids(query)
+    if not ids:
+        return rows
+    for row in rows:
+        title = str(row.get("title") or "")
+        if any(re.search(rf"(?<!\d){i}(?!\d)", title) for i in ids):
+            row["exact"] = True
+    return rows
+
+
+def rrf(
+    lists: list[list[dict]],
+    limit: int,
+    rrf_k: int = RRF_K,
+    *,
+    caps: dict[str, int] | None = None,
+) -> list[dict]:
+    """Fuse ranked lists. A row that is high in either list can win. Both lists reinforce it.
+
+    A row flagged ``exact`` (see flag_exact) gets one extra rank-1 vote and sorts ahead of the
+    rest, so a question naming a ticket number returns that ticket first. ``caps`` limits how
+    many rows of a given ``kind`` (for example summary docs) can fill one result set; exact
+    rows are never capped.
+
+    Rank rule as of 2026-11-20: the user's own notes still rank first, and an exact ticket-ID
+    hit shares that top tier. A caller that keeps own notes in a top tier gives exact rows the
+    same tier, not one above it.
+    """
     scores: dict[int, float] = {}
     meta: dict[int, dict] = {}
+    exact: set[int] = set()
     for listed in lists:
         for rank, item in enumerate(listed):
             key = int(item["id"])
             scores[key] = scores.get(key, 0.0) + 1.0 / (rrf_k + rank + 1)
+            if item.get("exact"):
+                exact.add(key)
             current = meta.get(key)
             if current is None or len(str(item.get("body") or "")) > len(str(current.get("body") or "")):
                 meta[key] = dict(item)
-    ordered = sorted(scores, key=lambda key: -scores[key])
+    for key in exact:
+        scores[key] += 1.0 / (rrf_k + 1)
+    ordered = sorted(scores, key=lambda key: (0 if key in exact else 1, -scores[key]))
+    used: dict[str, int] = {}
     out = []
-    for key in ordered[:limit]:
+    for key in ordered:
+        if len(out) >= limit:
+            break
         row = dict(meta[key])
+        kind = str(row.get("kind") or "")
+        if caps and kind in caps and key not in exact:
+            if used.get(kind, 0) >= caps[kind]:
+                continue
+            used[kind] = used.get(kind, 0) + 1
         row["score"] = round(scores[key], 6)
         row["via"] = "hybrid"
         out.append(row)

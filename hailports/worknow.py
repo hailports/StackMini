@@ -23,20 +23,38 @@ def save_cards(path: Path, cards: list[dict]) -> None:
     path.write_text(json.dumps(cards, indent=2) + "\n", encoding="utf-8")
 
 
-def brief(router, cards: list[dict]):
+def _rich(cards: list[dict]) -> bool:
+    for card in cards:
+        if not isinstance(card, dict):
+            continue
+        if card.get("state") or card.get("owner") or card.get("changed") or "mine" in card:
+            return True
+    return False
+
+
+def brief(router, cards: list[dict], *, user: str = ""):
     """Model brief of the focus list. The list text is notes, not the reply."""
+    system = "Turn the focus list into a short brief. Use only these lines."
+    if _rich(cards):
+        from hailports.focus_rank import phrase_instructions
+
+        system += " " + phrase_instructions()
     return router.complete(
         [
-            {"role": "system", "content": "Turn the focus list into a short brief. Use only these lines."},
-            {"role": "user", "content": pack(cards)},
+            {"role": "system", "content": system},
+            {"role": "user", "content": pack(cards, user=user)},
         ],
         task="summarize",
     )
 
 
-def pack(cards: list[dict], limit: int = 5) -> str:
+def pack(cards: list[dict], limit: int = 5, *, user: str = "") -> str:
     if not cards:
         return "Nothing on the focus list."
+    if _rich(cards):
+        from hailports.focus_rank import pack_focus
+
+        return pack_focus(cards, limit=limit, user=user)
     lines = []
     for card in cards[:limit]:
         title = str(card.get("title") or "untitled")
