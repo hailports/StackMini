@@ -120,12 +120,30 @@ def flag_exact(query: str, rows: list[dict]) -> list[dict]:
     return rows
 
 
+_MATCH_STOP = frozenset("""about after also and any are been before but can did does for from had has have how into
+its just more not now our out over that the their them then there they this those was were what when where which
+who why will with would you your week month year today yesterday please show tell give find""".split())
+_MATCH_TOK = re.compile(r"[a-z0-9][a-z0-9_\-]{2,}")
+
+
+def content_match(query: str, row: dict) -> bool:
+    """True when at least half of the question's distinctive words (and at least two) are in the row."""
+    toks = {t for t in _MATCH_TOK.findall((query or "").lower()) if t not in _MATCH_STOP and not t.isdigit()}
+    if not toks:
+        return False
+    blob = f"{row.get('title') or ''} {row.get('body') or ''}".lower()
+    return sum(1 for t in toks if t in blob) >= max(2, (len(toks) + 1) // 2)
+
+
 def rrf(
     lists: list[list[dict]],
     limit: int,
     rrf_k: int = RRF_K,
     *,
     caps: dict[str, int] | None = None,
+    query: str = "",
+    summary_kinds: set[str] | frozenset[str] | None = None,
+    summary_top3: int = 1,
 ) -> list[dict]:
     """Fuse ranked lists. A row that is high in either list can win. Both lists reinforce it.
 
@@ -137,6 +155,11 @@ def rrf(
     Rank rule as of 2026-11-20: the user's own notes still rank first, and an exact ticket-ID
     hit shares that top tier. A caller that keeps own notes in a top tier gives exact rows the
     same tier, not one above it.
+
+    ``summary_kinds`` (2026-11-21) names row kinds that summarize other sources, such as master
+    docs. Those rows sort below rows that match ``query`` on content (see content_match), and at most
+    ``summary_top3`` of them may sit in the top 3, so summaries inform an answer without crowding out
+    the direct hits. Exact rows keep the first tier either way.
     """
     scores: dict[int, float] = {}
     meta: dict[int, dict] = {}
@@ -152,9 +175,24 @@ def rrf(
                 meta[key] = dict(item)
     for key in exact:
         scores[key] += 1.0 / (rrf_k + 1)
-    ordered = sorted(scores, key=lambda key: (0 if key in exact else 1, -scores[key]))
+    summary = set(summary_kinds or ())
+
+    def is_summary(key: int) -> bool:
+        return key not in exact and str(meta[key].get("kind") or "") in summary
+
+    def tier(key: int) -> int:
+        if key in exact:
+            return 0
+        if not summary:
+            return 1
+        if is_summary(key):
+            return 2
+        return 1 if content_match(query, meta[key]) else 3
+
+    ordered = sorted(scores, key=lambda key: (tier(key), -scores[key]))
     used: dict[str, int] = {}
-    out = []
+    out: list[dict] = []
+    deferred: list[dict] = []
     for key in ordered:
         if len(out) >= limit:
             break
@@ -166,7 +204,18 @@ def rrf(
             used[kind] = used.get(kind, 0) + 1
         row["score"] = round(scores[key], 6)
         row["via"] = "hybrid"
+        if summary and is_summary(key) and len(out) < 3 and \
+                sum(1 for r in out if r.get("_summary")) >= summary_top3:
+            deferred.append(row)
+            continue
+        row["_summary"] = bool(summary) and is_summary(key)
         out.append(row)
+        while deferred and 3 <= len(out) < limit:
+            out.append(deferred.pop(0))
+    while deferred and len(out) < limit:
+        out.append(deferred.pop(0))
+    for row in out:
+        row.pop("_summary", None)
     return out
 
 

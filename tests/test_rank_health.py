@@ -26,6 +26,21 @@ def test_caps_limit_summary_kind_but_not_exact():
     assert out[0]["id"] == 4 and [r["kind"] for r in out].count("summary") == 3
 
 
+def test_summary_kinds_sit_below_content_matches_and_one_in_top3():
+    rows = [_row(1, "master summary one", kind="summary"), _row(2, "master summary two", kind="summary"),
+            _row(3, "unrelated monthly page"), _row(4, "omaha onsite trip notes"), _row(5, "omaha trip receipts")]
+    q = "omaha onsite trip"
+    out = rrf([rows], limit=5, caps={"summary": 2}, query=q, summary_kinds={"summary"})
+    assert [r["id"] for r in out[:2]] == [4, 5]
+    assert sum(1 for r in out[:3] if r["kind"] == "summary") <= 1
+    assert [r["kind"] for r in out].count("summary") == 2
+    rows[1]["exact"] = True
+    out = rrf([rows], limit=5, caps={"summary": 2}, query=q, summary_kinds={"summary"})
+    assert out[0]["id"] == 2
+    plain = rrf([rows], limit=5, caps={"summary": 2})
+    assert plain[0]["id"] == 2 and plain[1]["id"] == 1
+
+
 def test_every_source_has_a_limit_and_missing_lane_is_red():
     now = 1_000_000.0
     src = {"email": (10, now - 2 * 3600), "docs": (3, now - 400 * 3600), "chat": (0, 0)}
