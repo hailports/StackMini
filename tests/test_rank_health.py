@@ -29,9 +29,9 @@ def test_caps_limit_summary_kind_but_not_exact():
 def test_every_source_has_a_limit_and_missing_lane_is_red():
     now = 1_000_000.0
     src = {"email": (10, now - 2 * 3600), "docs": (3, now - 400 * 3600), "chat": (0, 0)}
-    st = lane_health.lane_status(src, {"email": 18}, required={"teams": "Teams chats"}, now=now)
+    st = lane_health.lane_status(src, {"email": 18}, required={"notebooks": "Notebook jobs"}, now=now)
     assert "docs" in st["stale"] and "email" not in st["stale"]
-    assert st["missing"] == {"teams": "Teams chats"} and st["verdict"] == "RED"
+    assert st["missing"] == {"notebooks": "Notebook jobs"} and st["verdict"] == "RED"
     ok = lane_health.lane_status({"email": (1, now)}, {"email": 18}, now=now)
     assert ok["verdict"] == "GREEN"
 

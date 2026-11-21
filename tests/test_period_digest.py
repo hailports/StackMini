@@ -59,7 +59,9 @@ def test_missing_sources_are_named_not_hidden():
     cov = p.coverage(_items(), newest, win, NOW.timestamp())
     assert cov["texts"] == "EMPTY" and cov["personal mail"].startswith("STALE")
     line = p.gap_line(cov, answer="- you flew to SGF")
-    assert "texts: EMPTY" in line and "personal mail: STALE" in line and "(not indexed)" in line
+    assert "texts: EMPTY" in line and "personal mail: STALE" in line and "(not indexed)" not in line
+    line = p.gap_line(cov, not_indexed=["chat app (not connected)"], answer="- you flew to SGF")
+    assert "chat app (not indexed)" in line
     assert "texts" not in p.gap_line(cov, answer="i don't see texts for this week")
 
 

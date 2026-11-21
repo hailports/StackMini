@@ -1,7 +1,8 @@
 """Per-source freshness with an age limit for every source, and lanes that must exist.
 
 A source with no explicit limit gets ``default_h``. A required lane with no rows at all is
-RED, not "fresh": an index that never had Teams cannot report Teams as healthy.
+RED, not "fresh": an index that never had a required lane cannot report it as healthy. List only
+lanes the user actually uses; a tool they do not use is not a required lane.
 """
 
 from __future__ import annotations

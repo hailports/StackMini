@@ -56,7 +56,8 @@ DEFAULT_FAMILIES = (
     Family("documents", ("sp_corpus", "pfile"), 3, 72),
     Family("trip ledgers", ("trip_ledger",), 4, None),
 )
-DEFAULT_NOT_INDEXED = ("team chat app (not connected)", "expense system (only local trip ledgers are read)")
+# Sources the user uses that are not indexed yet. Empty by default: a tool the user does not use is not a gap.
+DEFAULT_NOT_INDEXED: tuple[str, ...] = ()
 
 
 def normalize(text: str) -> str:
