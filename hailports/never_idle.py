@@ -351,7 +351,11 @@ def enqueue(con: sqlite3.Connection, producer: str, payload: dict) -> bool:
 
 
 def claim_next(con: sqlite3.Connection) -> tuple | None:
-    """Skip paused producers so a bad high-priority lane cannot starve the queue."""
+    """Skip paused producers so a bad high-priority lane cannot starve the queue.
+
+    Prefer a round-robin across producer families so thousands of equal-priority
+    rows in one lane cannot hide ado_prep / refresh / synthesis forever.
+    """
     now = time.time()
     paused = {
         str(r[0])
@@ -359,19 +363,47 @@ def claim_next(con: sqlite3.Connection) -> tuple | None:
             "SELECT producer FROM quality WHERE paused_until > ?", (now,)
         )
     }
-    if paused:
-        ph = ",".join("?" for _ in paused)
-        row = con.execute(
-            f"SELECT id, producer, content_hash, payload_json FROM queue "
-            f"WHERE status='queued' AND producer NOT IN ({ph}) "
-            f"ORDER BY priority ASC, id ASC LIMIT 1",
-            tuple(sorted(paused)),
-        ).fetchone()
-    else:
+    prefer = (
+        "pre_draft",
+        "ado_prep",
+        "context_pack",
+        "work_product",
+        "account_health",
+        "synthesis",
+        "sf_atlas",
+        "sf_finding",
+        "code_review",
+        "refresh",
+        "history_summary",
+        "backfill",
+        "self_improve",
+    )
+    row = None
+    for prod in prefer:
+        if paused and prod in paused:
+            continue
         row = con.execute(
             "SELECT id, producer, content_hash, payload_json FROM queue "
-            "WHERE status='queued' ORDER BY priority ASC, id ASC LIMIT 1"
+            "WHERE status='queued' AND producer=? "
+            "ORDER BY priority ASC, id ASC LIMIT 1",
+            (prod,),
         ).fetchone()
+        if row:
+            break
+    if row is None:
+        if paused:
+            ph = ",".join("?" for _ in paused)
+            row = con.execute(
+                f"SELECT id, producer, content_hash, payload_json FROM queue "
+                f"WHERE status='queued' AND producer NOT IN ({ph}) "
+                f"ORDER BY priority ASC, id ASC LIMIT 1",
+                tuple(sorted(paused)),
+            ).fetchone()
+        else:
+            row = con.execute(
+                "SELECT id, producer, content_hash, payload_json FROM queue "
+                "WHERE status='queued' ORDER BY priority ASC, id ASC LIMIT 1"
+            ).fetchone()
     if not row:
         return None
     con.execute(
