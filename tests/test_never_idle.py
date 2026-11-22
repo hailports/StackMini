@@ -57,15 +57,26 @@ def test_backoff():
         )
         == "interactive"
     )
+    # Sitting swap with a fresh healthy governor is not a hard stop.
     assert (
         should_run_background(
             interactive=False,
             memory_pressure="warning",
             swap_mb=4000,
             ttft_p95_ms=100,
-            throttle=normal,
+            throttle={**normal, "ts": time.time(), "splash": "normal"},
         )
-        == "memory_warning"
+        is None
+    )
+    # Splash-healthy false critical stays soft so utilization does not drop to 0.
+    assert (
+        should_run_background(
+            interactive=False,
+            memory_pressure="normal",
+            swap_mb=8000,
+            throttle={"level": "critical", "rate": 0.0, "splash": "normal"},
+        )
+        == "throttle_warning_rate_0.9"
     )
     # Contended TTFT must not starve a non-empty queue (preemption owns TTFT).
     assert (
@@ -114,9 +125,10 @@ def test_fresh_outranks_backlog():
 def test_quality_pause():
     with tempfile.TemporaryDirectory() as tmp:
         con = open_queue(Path(tmp) / "q.db")
-        for _ in range(9):
+        # ONE pause path: rolling window of ≥30, threshold 20%.
+        for _ in range(29):
             record_quality(con, "pre_draft", False)
-        record_quality(con, "pre_draft", False)  # 10th
+        record_quality(con, "pre_draft", False)  # 30th
         row = con.execute(
             "SELECT paused_until FROM quality WHERE producer='pre_draft'"
         ).fetchone()
@@ -191,6 +203,14 @@ def test_interactive_ignores_probe_and_priority_jobs():
     assert interactive_request_inflight(chat_inflight=1) is True
     assert interactive_request_inflight(chat_inflight=0, priority_jobs=3) is False
     assert interactive_request_inflight(chat_inflight=1, probe_active=True) is False
+    # Selfcons / plain benches must not starve the queue.
+    assert (
+        interactive_request_inflight(
+            chat_inflight=1,
+            holder_cmd="python llm_agent.py --selfcons --plain -- q",
+        )
+        is False
+    )
 
 
 def test_dual_slot_requires_two_server_slots():

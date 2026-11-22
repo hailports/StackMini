@@ -41,11 +41,11 @@ PRODUCER_PRIORITY = {
     "work_product": 55,
     "enrichment": 58,
     "code_review": 60,
-    "self_improve": 65,
+    "self_improve": 78,
     "synthesis": 70,
-    "history_summary": 75,
+    "history_summary": 82,
     "backfill": 80,
-    "refresh": 85,
+    "refresh": 62,
 }
 
 LOW_WATER = 50
@@ -89,6 +89,7 @@ def should_run_background(
 
     TTFT is observed for status/preemption health but does not pause the
     queue — a single contended probe used to starve utilization for minutes.
+    Sitting swap / Splash-healthy expert page-ins must not hard-stop the loop.
     """
     del ttft_p95_ms, ttft_limit_ms  # retained for API compat; not a run gate
     if interactive:
@@ -99,13 +100,28 @@ def should_run_background(
     except (TypeError, ValueError):
         rate = 1.0
     level = str(thr.get("level") or "")
-    if rate <= 0.0 or level == "critical" or memory_pressure == "critical":
+    splash = str(thr.get("splash") or "")
+    # Splash-healthy false critical → soft warning so utilization stays warm.
+    if (rate <= 0.0 or level == "critical") and splash == "normal":
+        return "throttle_warning_rate_0.9"
+    if rate <= 0.0 or level == "critical":
+        return "memory_critical"
+    if memory_pressure == "critical" and splash == "normal":
+        return "throttle_warning_rate_0.9"
+    if memory_pressure == "critical":
         return "memory_critical"
     if rate < 1.0 or level == "warning":
         return f"throttle_warning_rate_{rate}"
-    if swap_mb >= 4500:
+    # Sitting swap alone is not pressure when the governor is fresh+healthy.
+    try:
+        fresh = thr.get("ts") is not None and (time.time() - float(thr["ts"])) < 120.0
+    except (TypeError, ValueError):
+        fresh = False
+    if fresh and rate >= 0.75:
+        return None
+    if swap_mb >= 9000 and memory_pressure == "critical":
         return "swap"
-    if memory_pressure == "warning" and swap_mb >= 3500:
+    if memory_pressure == "warning" and swap_mb >= 8000:
         return "memory_warning"
     return None
 
@@ -201,16 +217,27 @@ def interactive_request_inflight(
     chat_inflight: int = 0,
     priority_jobs: int = 0,
     probe_active: bool = False,
+    holder_cmd: str = "",
+    human_inflight: int = 0,
 ) -> bool:
     """True only for real human chat completions.
 
-    Ignores background priority jobs and the daemon's own TTFT probe.
+    Ignores background priority jobs, the daemon's own TTFT probe, and
+    synthetic holders (selfcons / plain bench one-shots).
     """
     del priority_jobs
     if probe_active:
         return False
+    cmd = (holder_cmd or "").lower()
+    if "--selfcons" in cmd or ("llm_agent.py" in cmd and "--plain" in cmd):
+        return False
     try:
-        return int(chat_inflight) > 0
+        if int(human_inflight) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    try:
+        return int(chat_inflight) > 0 and not cmd
     except (TypeError, ValueError):
         return False
 
