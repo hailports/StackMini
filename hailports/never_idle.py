@@ -372,22 +372,61 @@ def mark_done(
 
 
 def record_quality(
-    con: sqlite3.Connection, producer: str, ok: bool, fail_pause: float = 0.20
+    con: sqlite3.Connection,
+    producer: str,
+    ok: bool,
+    fail_pause: float = 0.20,
+    window_n: int = 30,
+    cool_s: float = 600.0,
 ) -> None:
+    """ONE pause path: rolling window (≥window_n), threshold fail_pause, short cool-off."""
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS quality_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          producer TEXT NOT NULL,
+          ok INTEGER NOT NULL,
+          ts REAL NOT NULL
+        )
+        """
+    )
+    now = time.time()
+    con.execute(
+        "INSERT INTO quality_events(producer, ok, ts) VALUES(?,?,?)",
+        (producer, 1 if ok else 0, now),
+    )
+    con.execute(
+        """
+        DELETE FROM quality_events WHERE id IN (
+          SELECT id FROM quality_events WHERE producer=?
+          ORDER BY ts DESC LIMIT -1 OFFSET 200
+        )
+        """,
+        (producer,),
+    )
     con.execute(
         "INSERT INTO quality(producer,ok,bad,paused_until) VALUES(?,?,?,0) "
         "ON CONFLICT(producer) DO UPDATE SET ok=ok+?, bad=bad+?",
         (producer, 1 if ok else 0, 0 if ok else 1, 1 if ok else 0, 0 if ok else 1),
     )
-    row = con.execute(
-        "SELECT ok,bad FROM quality WHERE producer=?", (producer,)
-    ).fetchone()
-    total = int(row[0]) + int(row[1])
-    if total >= 10 and (int(row[1]) / total) > fail_pause:
-        con.execute(
-            "UPDATE quality SET paused_until=? WHERE producer=?",
-            (time.time() + 3600, producer),
-        )
+    rows = con.execute(
+        "SELECT ok FROM quality_events WHERE producer=? ORDER BY ts DESC LIMIT ?",
+        (producer, window_n),
+    ).fetchall()
+    n = len(rows)
+    if n >= window_n:
+        bad = sum(1 for r in rows if not int(r[0]))
+        rate = bad / n
+        if rate > fail_pause:
+            con.execute(
+                "UPDATE quality SET paused_until=? WHERE producer=?",
+                (now + cool_s, producer),
+            )
+        else:
+            con.execute(
+                "UPDATE quality SET paused_until=0 WHERE producer=? AND paused_until>?",
+                (producer, now),
+            )
     con.commit()
 
 
