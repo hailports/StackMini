@@ -91,8 +91,8 @@ def sanitize_dashes(text: str) -> tuple[str, str]:
 
 
 def apply(text: str, sender_name: str = "", inbound: str = "", extra_names: list | None = None) -> str:
-    """Public draft voice pass. inbound/extra_names kept for API compatibility."""
-    del inbound, extra_names  # unused in the public filter
+    """Public draft voice pass + failure-gated paid second pass hook."""
+    del extra_names  # kept for API compatibility
     raw, _why = sanitize_dashes(text or "")
     raw = post_filter(raw)
     if sender_name:
@@ -104,7 +104,15 @@ def apply(text: str, sender_name: str = "", inbound: str = "", extra_names: list
                 raw,
                 count=1,
             )
-    return re.sub(r"\n{3,}", "\n\n", raw).strip()
+    raw = re.sub(r"\n{3,}", "\n\n", raw).strip()
+    # Paid only when local draft fails checks (flag = paid allowed on failure).
+    try:
+        from hailports.draft_voice_harden import second_pass
+
+        raw = second_pass(raw, inbound=inbound or "", channel="outlook")
+    except Exception:
+        pass
+    return raw
 
 
 def _self_test() -> None:
