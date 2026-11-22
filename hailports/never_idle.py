@@ -324,10 +324,27 @@ def enqueue(con: sqlite3.Connection, producer: str, payload: dict) -> bool:
 
 
 def claim_next(con: sqlite3.Connection) -> tuple | None:
-    row = con.execute(
-        "SELECT id, producer, content_hash, payload_json FROM queue "
-        "WHERE status='queued' ORDER BY priority ASC, id ASC LIMIT 1"
-    ).fetchone()
+    """Skip paused producers so a bad high-priority lane cannot starve the queue."""
+    now = time.time()
+    paused = {
+        str(r[0])
+        for r in con.execute(
+            "SELECT producer FROM quality WHERE paused_until > ?", (now,)
+        )
+    }
+    if paused:
+        ph = ",".join("?" for _ in paused)
+        row = con.execute(
+            f"SELECT id, producer, content_hash, payload_json FROM queue "
+            f"WHERE status='queued' AND producer NOT IN ({ph}) "
+            f"ORDER BY priority ASC, id ASC LIMIT 1",
+            tuple(sorted(paused)),
+        ).fetchone()
+    else:
+        row = con.execute(
+            "SELECT id, producer, content_hash, payload_json FROM queue "
+            "WHERE status='queued' ORDER BY priority ASC, id ASC LIMIT 1"
+        ).fetchone()
     if not row:
         return None
     con.execute(
