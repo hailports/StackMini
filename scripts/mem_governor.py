@@ -94,16 +94,23 @@ def kern_pressure_level() -> int:
 
 
 def splash_pressure() -> str:
+    """Prefer Splash engine pressure; kernel only when metrics are unreachable.
+
+    Kernel level stays at 1 for hours while stale swap drains, which wrongly
+    holds background lanes at 25% after the model budget is already healthy.
+    """
     try:
         with urllib.request.urlopen("http://127.0.0.1:18085/metrics", timeout=2) as resp:
             raw = resp.read().decode("utf-8", "replace")
+        if 'splash_memory_pressure{state="critical"} 1' in raw:
+            return "critical"
+        if 'splash_memory_pressure{state="warning"} 1' in raw:
+            return "warning"
+        if "splash_memory_pressure" in raw:
+            return "normal"
     except Exception:
-        raw = ""
-    if 'splash_memory_pressure{state="critical"} 1' in raw:
-        return "critical"
-    if 'splash_memory_pressure{state="warning"} 1' in raw:
-        return "warning"
-    # Fall back to kernel pressure: 0 normal, 1 warn, 2+ critical-ish
+        pass
+    # Metrics down: fall back to kernel pressure (0 normal, 1 warn, 2+ critical)
     lvl = kern_pressure_level()
     if lvl >= 2:
         return "critical"
