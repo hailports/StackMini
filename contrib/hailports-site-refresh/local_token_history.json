@@ -1,0 +1,71 @@
+{
+ "description": "Completed days of local-model token production before the dated hp_daily /metrics facts files. Prompt counts are uncached tokens actually evaluated. Generated counts are tokens the local model emitted. Source: the server timing-log daily rollup used in the Nov 3, 2026 cost write-up.",
+ "coverage_first": "2026-10-17",
+ "coverage_last": "2026-11-01",
+ "days": {
+  "2026-10-17": {
+   "prompt": 1018316,
+   "generated": 308806
+  },
+  "2026-10-18": {
+   "prompt": 1687970,
+   "generated": 439759
+  },
+  "2026-10-19": {
+   "prompt": 4899958,
+   "generated": 779198
+  },
+  "2026-10-20": {
+   "prompt": 5040296,
+   "generated": 672538
+  },
+  "2026-10-21": {
+   "prompt": 4483261,
+   "generated": 780785
+  },
+  "2026-10-22": {
+   "prompt": 2461745,
+   "generated": 532192
+  },
+  "2026-10-23": {
+   "prompt": 2931954,
+   "generated": 663635
+  },
+  "2026-10-24": {
+   "prompt": 2804881,
+   "generated": 688858
+  },
+  "2026-10-25": {
+   "prompt": 2665970,
+   "generated": 610956
+  },
+  "2026-10-26": {
+   "prompt": 2607991,
+   "generated": 648649
+  },
+  "2026-10-27": {
+   "prompt": 1714159,
+   "generated": 416926
+  },
+  "2026-10-28": {
+   "prompt": 997540,
+   "generated": 203379
+  },
+  "2026-10-29": {
+   "prompt": 1246287,
+   "generated": 293185
+  },
+  "2026-10-30": {
+   "prompt": 2141687,
+   "generated": 310490
+  },
+  "2026-10-31": {
+   "prompt": 1080436,
+   "generated": 144115
+  },
+  "2026-11-01": {
+   "prompt": 6267178,
+   "generated": 257779
+  }
+ }
+}

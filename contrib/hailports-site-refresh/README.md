@@ -41,3 +41,18 @@ these scripts.
 
 `activity.py` and `refresh_public_content.py` stay on the hailports box. They
 include private-source filter lists and are not copied into this public repo.
+
+## List-price equivalent
+
+The live-board COST card is computed on each refresh, not stored as a fixed
+figure. `build_live_stats.py` sums every dated day of logged local-model
+prompt and generated tokens: Oct 17–Nov 1 from `local_token_history.json`
+(the timing-log daily rollup used in the Nov 3, 2026 cost write-up) and
+later days from hp_daily `local_tokens_today` facts (`/metrics` deltas).
+That load is priced at the same Claude Sonnet 5.5 standard list rates as
+the would-be spend tiles ($2 / $10 per 1M tokens, no cache or batch
+discount) and scaled to 30 days. Today counts as the elapsed fraction of
+the collection day. Days with no log are omitted, not zero-filled, and
+named in the card subline. `stats.json.list_price_equivalent` carries the
+totals, day weight, gaps and formula. On the hailports box the same
+history file also lives at `site/tools/local_token_history.json`.
