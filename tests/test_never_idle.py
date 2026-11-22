@@ -151,6 +151,7 @@ def test_dual_slot_gates():
             interactive=False,
             depth=100,
             ttft_p95_ms=200,
+            n_slots=2,
         )
         is True
     )
@@ -173,4 +174,48 @@ def test_dual_slot_gates():
             ttft_p95_ms=5000,
         )
         is False
+    )
+
+
+def test_rolling_ttft_ignores_hourly_poison():
+    from hailports.never_idle import rolling_ttft_p95
+
+    samples = [9000.0, 180.0, 190.0, 200.0, 210.0, 220.0]
+    p95 = rolling_ttft_p95(samples, last_n=5)
+    assert p95 is not None and p95 < 1000.0
+
+
+def test_interactive_ignores_probe_and_priority_jobs():
+    from hailports.never_idle import interactive_request_inflight
+
+    assert interactive_request_inflight(chat_inflight=1) is True
+    assert interactive_request_inflight(chat_inflight=0, priority_jobs=3) is False
+    assert interactive_request_inflight(chat_inflight=1, probe_active=True) is False
+
+
+def test_dual_slot_requires_two_server_slots():
+    from hailports.never_idle import dual_slot_allowed
+
+    assert (
+        dual_slot_allowed(
+            throttle_rate=1.0,
+            memory_pressure="warning",
+            interactive=False,
+            depth=100,
+            ttft_p95_ms=200.0,
+            n_slots=1,
+        )
+        is False
+    )
+    assert (
+        dual_slot_allowed(
+            throttle_rate=1.0,
+            memory_pressure="warning",
+            interactive=False,
+            depth=100,
+            ttft_p95_ms=200.0,
+            n_slots=2,
+            throttle_level="normal",
+        )
+        is True
     )

@@ -9,7 +9,7 @@ kept under 2s via chat-priority preemption — TTFT spikes alone do not starve
 a non-empty queue. Soft mem-governor throttle yields briefly without parking
 the loop; git/filesystem scanners are skipped while queue depth is fat so they
 cannot hold the DB lock for minutes. An optional second decode slot engages
-only when Splash pressure is normal and interactive TTFT is healthy. Drafts
+only when the server exposes >=2 slots, throttle is normal, and recent TTFT is healthy. Drafts
 only; Legal/Finance and secret markers are dropped before any prompt is built.
 Social content stays off the local model. Generated packs, the SQLite queue,
 draft patches, and few-shot banks stay local / gitignored.
@@ -136,9 +136,9 @@ def throttle_sleep_s(reason: str | None, *, depth: int = 0) -> float:
             rate = 0.25
         if rate <= 0:
             return 30.0
-        gap = max(0.2, min(1.5, (1.0 - rate) * 2.0))
+        gap = max(0.05, min(0.6, (1.0 - rate) * 0.8))
         if depth >= ENQUEUE_SKIP_DEPTH:
-            gap = min(gap, 0.45)
+            gap = min(gap, 0.15)
         return gap
     if reason.startswith("memory_warning") or reason.startswith("swap"):
         return 8.0 if depth < LOW_WATER else 2.0
@@ -158,11 +158,23 @@ def dual_slot_allowed(
     depth: int,
     ttft_p95_ms: float | None,
     ttft_limit_ms: float = DUAL_TTFT_P95_MAX_MS,
+    n_slots: int = 1,
+    throttle_level: str = "normal",
 ) -> bool:
-    """Second decode slot only when Splash is healthy and chat TTFT is fine."""
+    """Second decode slot only with >=2 server slots and healthy recent TTFT.
+
+    Raw Splash soft-warning alone must not disable dual when the governor
+    reports normal (sitting swap is not pressure).
+    """
+    del memory_pressure  # governor/throttle_level is authoritative
     if interactive:
         return False
-    if float(throttle_rate) < 0.99 or memory_pressure != "normal":
+    if int(n_slots) < 2:
+        return False
+    if float(throttle_rate) < 0.99 or str(throttle_level or "normal") not in {
+        "",
+        "normal",
+    }:
         return False
     if int(depth) < max(10, LOW_WATER // 2):
         return False
@@ -171,10 +183,43 @@ def dual_slot_allowed(
     return True
 
 
+def rolling_ttft_p95(samples_ms: list[float], *, last_n: int = 5) -> float | None:
+    """p95 over the most recent non-empty TTFT samples (not the whole hour)."""
+    vals = [float(x) for x in samples_ms if isinstance(x, (int, float)) and x > 0]
+    if not vals:
+        return None
+    use = vals[-max(1, int(last_n)) :]
+    use = sorted(use)
+    if len(use) == 1:
+        return use[0]
+    idx = min(len(use) - 1, max(0, int(round(0.95 * (len(use) - 1)))))
+    return use[idx]
+
+
+def interactive_request_inflight(
+    *,
+    chat_inflight: int = 0,
+    priority_jobs: int = 0,
+    probe_active: bool = False,
+) -> bool:
+    """True only for real human chat completions.
+
+    Ignores background priority jobs and the daemon's own TTFT probe.
+    """
+    del priority_jobs
+    if probe_active:
+        return False
+    try:
+        return int(chat_inflight) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def open_queue(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(str(db_path), timeout=30)
+    con = sqlite3.connect(str(db_path), timeout=60)
     con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA busy_timeout=30000")
     con.executescript(
         """
         CREATE TABLE IF NOT EXISTS queue (
