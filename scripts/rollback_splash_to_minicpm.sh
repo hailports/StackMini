@@ -2,6 +2,12 @@
 # One-command rollback: live :18080 back to MiniCPM-V-4.7-35B-A3B exactly as it ran before 2026-11-19
 # (minicpm_serve.sh, its flags and weights were never changed). Logs to logs/splash-cutover.log in CT.
 F=$HOME/claude-stack/data/flags; L=$HOME/claude-stack/logs/splash-cutover.log
+# Memory regression guard (2026-11-21): refuse oversized Splash configs on the way back only when variant=splash flags remain hot.
+# MiniCPM rollback itself clears splash; guard is advisory here and always --force-safe for minicpm path.
+if [ -x "$HOME/claude-stack/bin/splash_mem_budget_guard.sh" ]; then
+  # When rolling back TO minicpm we are freeing memory; do not block. Log projection only.
+  "$HOME/claude-stack/bin/splash_mem_budget_guard.sh" --force || true
+fi
 log(){ echo "$(TZ=America/Chicago date '+%Y-%m-%d %H:%M:%S %Z') $*" | tee -a "$L"; }
 log "ROLLBACK_START variant=$(cat $F/gd_model_variant)"
 echo minicpm > $F/gd_model_variant

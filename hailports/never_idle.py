@@ -43,6 +43,18 @@ def content_hash(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8", "replace")).hexdigest()
 
 
+def read_bg_throttle(path: Path | None = None) -> dict:
+    """Read mem-governor throttle file. Fail-open to full rate."""
+    p = path or (Path.home() / "claude-stack/data/flags/bg_throttle.json")
+    try:
+        doc = json.loads(p.read_text(encoding="utf-8"))
+        if isinstance(doc, dict):
+            return doc
+    except Exception:
+        pass
+    return {"level": "normal", "rate": 1.0}
+
+
 def should_run_background(
     *,
     interactive: bool,
@@ -50,12 +62,25 @@ def should_run_background(
     swap_mb: float,
     ttft_p95_ms: float | None,
     ttft_limit_ms: float = 2000.0,
+    throttle: dict | None = None,
 ) -> str | None:
-    """Return a backoff reason, or None when a background job may run."""
+    """Return a backoff reason, or None when a background job may run.
+
+    Throttle levels from mem-governor: normal=1.0, warning=0.25, critical=0.
+    cheap ingest/embed lanes do not call this.
+    """
     if interactive:
         return "interactive"
-    if memory_pressure == "critical":
+    thr = throttle if isinstance(throttle, dict) else read_bg_throttle()
+    try:
+        rate = float(thr.get("rate", 1.0))
+    except (TypeError, ValueError):
+        rate = 1.0
+    level = str(thr.get("level") or "")
+    if rate <= 0.0 or level == "critical" or memory_pressure == "critical":
         return "memory_critical"
+    if rate < 1.0 or level == "warning":
+        return "throttle_warning"
     if swap_mb >= 4500:
         return "swap"
     if memory_pressure == "warning" and swap_mb >= 3500:

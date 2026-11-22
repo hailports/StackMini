@@ -4,10 +4,12 @@
 
 The reference chat server is now Qwen3.6-35B-A3B (Unsloth UD-Q2_K_XL GGUF, 12.29 GB) on the Splash 1.7.0 engine, with the BF16 vision projector (0.90 GB) and the DFlash2 speculative draft (1.05 GB). Context is 65536. Text, images and native PDF parts are accepted.
 
-- `scripts/gemma_serve.sh` routes `gd_model_variant=splash` to `scripts/splash_serve.sh`. The engine listens on 127.0.0.1:18085 with `--max-memory 18G`, `--idle-release off` and a 4 GB SSD prompt cache. Weights must sit on the internal volume: launchd jobs could not read the removable volume and the engine hung in a directory scan.
+- `scripts/gemma_serve.sh` routes `gd_model_variant=splash` to `scripts/splash_serve.sh`. The engine listens on 127.0.0.1:18085 with an enforced Metal budget of `--max-memory 13.5G` (was 18G; the higher cap loaded every MoE expert and grew KV until host pressure paused growth), `--idle-release off`, `--kv-format int8`, `--queue-size 16`, and a 4 GB SSD prompt cache. Expert RAM is `auto` so Splash streams experts when the metal budget is tight. Context stays 65536 on the same UD-Q2_K_XL weights. Weights must sit on the internal volume: launchd jobs could not read the removable volume and the engine hung in a directory scan.
+- `scripts/splash_mem_budget_guard.sh` runs at serve start and from `scripts/swap_model.sh`. It refuses a projected wired footprint above `splash_wired_budget_gb` (13.5) unless `--force` / `SPLASH_MEM_FORCE=1`.
+- `scripts/mem_governor.py` (launchd `com.claude-stack.mem-governor`, mirrored as `contrib/launchd/com.stackmini.mem-governor.plist`) writes `bg_throttle.json`: normal=1.0, warning=0.25, critical=0. Background lanes back off; the model, CDP bridges, OneDrive, the desktop bot, and the local drafter are never killed. Swap above 1.5 GB for 10 minutes enqueues an agent-bus alert. cheap ingest/embed lanes stay exempt from pressure skips.
 - `scripts/splash_shim.py` keeps 127.0.0.1:18080 llama.cpp-compatible for existing clients: `/health` (503 while loading), `/slots`, `/props` (n_ctx, vision), `/metrics` with `llamacpp:*` counters rebuilt from per-request timings, native `/completion` (with streaming), and field rewrites (`n_predict`, `repeat_penalty`, top-level `json_schema`, file and http image URLs become data URLs). llama-only fields are dropped; GBNF `grammar` is dropped and counted, so use `json_schema`. A client disconnect during prefill closes the upstream stream so the engine cancels. The argv carries `--tag mlx-qwen-llama-server --port 18080` so existing process guards still match.
 - `scripts/fit_context.py` runs in the shim before forwarding: dedupe repeated messages, drop tool schemas the conversation never names, strip base64 blobs and whitespace from older turns, head+tail truncate long tool outputs, then drop the oldest turns (with their tool results) behind a one-line note. The latest user message and its images and files are kept whole unless it alone exceeds the window. Requests that still do not fit get a 400 `context_length_exceeded`, never an over-cap forward. Logs record counts only. `SHIM_FIT=0` turns it off.
-- `scripts/rollback_splash_to_minicpm.sh` writes the previous variant and alias flags back and restarts the launch agent; the previous serve script and weights are untouched.
+- `scripts/rollback_splash_to_minicpm.sh` writes the previous variant and alias flags back and restarts the launch agent; the previous serve script and weights are untouched. It logs the memory-budget projection (force) on the way out. Prefer `scripts/swap_model.sh` for guarded splash flag changes.
 
 Measured on the reference machine (same prompts, same day):
 
@@ -32,6 +34,11 @@ Measured on the reference machine (same prompts, same day):
 The numbers behind both charts are in `data/splash_2026-11-19.json`; `scripts/splash_charts.py` redraws them.
 
 An 84k-token prompt with a 256k cap exhausted memory and the engine restarted itself in about 30 s; a 63k prompt was stable with no swap growth, so the cap is 65536 and the trimmer keeps requests under it.
+
+## Memory budget on 2026-11-21
+
+The 18G Splash metal budget let the engine hold every MoE expert (~12.3 GB weights) and grow dynamic KV until macOS pressure paused growth (swap ~3 GB, warning pressure). Keeping the same model and 64K context, the fix is a hard `--max-memory 13.5G` so Splash auto-streams experts (weights resident ~9 GB) plus the mem-governor throttle file. Aggressive `--expert-memory 3G/4G` freed more RAM but dropped decode to ~6–9 tok/s and failed long-context needles under 503s — rejected. Rollback of the serve flags alone: restore `splash_max_memory=18G` from `splash_max_memory.bak-20261121-mem` and `splash_serve.sh.bak-20261121-mem`, then `launchctl kickstart -k gui/$(id -u)/com.llm-appliance.mlx-qwen`.
+
 
 ## Previous chat server on 2026-11-15
 
