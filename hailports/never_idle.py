@@ -1,12 +1,13 @@
 """Never-idle local work engine (public-safe mirror).
 
-Keeps a local chat server busy on meaningful precompute: context packs,
-draft-only replies, entity enrichment, read-only review notes, few-shot
-harvest, and history backfill. Interactive traffic wins through the
-chat-priority role. Backs off under memory/swap pressure and when
-interactive TTFT exceeds 2s. Drafts only; Legal/Finance and secret markers
-are dropped before any prompt is built. Social content stays off the local
-model. Generated packs, the SQLite queue, and few-shot banks stay local.
+Bottomless work-lane precompute queue: context packs, draft-only replies,
+ADO prep, SF atlas/findings, account health, work products, history
+synthesis, and refresh. Interactive traffic wins through the chat-priority
+role. Low-watermark refill keeps the queue from draining. Backs off under
+memory/swap pressure and when interactive TTFT exceeds 2s. Drafts only;
+Legal/Finance and secret markers are dropped before any prompt is built.
+Social content stays off the local model. Generated packs, the SQLite queue,
+draft patches, and few-shot banks stay local / gitignored.
 """
 
 from __future__ import annotations
@@ -24,19 +25,32 @@ _SECRET = re.compile(
 )
 _SOCIAL = re.compile(r"(?i)\b(?:twitter|x\.com|linkedin|instagram|tiktok)\b")
 
+# Fresh inbound first; backlog / refresh last. Lower = sooner.
 PRODUCER_PRIORITY = {
-    "context_pack": 10,
-    "pre_draft": 20,
-    "enrichment": 30,
-    "code_review": 40,
-    "self_improve": 50,
-    "backfill": 90,
+    "pre_draft": 10,
+    "context_pack": 20,
+    "ado_prep": 30,
+    "sf_atlas": 40,
+    "sf_finding": 45,
+    "account_health": 50,
+    "work_product": 55,
+    "enrichment": 58,
+    "code_review": 60,
+    "self_improve": 65,
+    "synthesis": 70,
+    "history_summary": 75,
+    "backfill": 80,
+    "refresh": 85,
 }
+
+LOW_WATER = 50
 
 
 def blocked_text(text: str) -> bool:
     blob = text or ""
-    return bool(_BLOCKED_PATH.search(blob) or _SECRET.search(blob) or _SOCIAL.search(blob))
+    return bool(
+        _BLOCKED_PATH.search(blob) or _SECRET.search(blob) or _SOCIAL.search(blob)
+    )
 
 
 def content_hash(text: str) -> str:
@@ -64,11 +78,7 @@ def should_run_background(
     ttft_limit_ms: float = 2000.0,
     throttle: dict | None = None,
 ) -> str | None:
-    """Return a backoff reason, or None when a background job may run.
-
-    Throttle levels from mem-governor: normal=1.0, warning=0.25, critical=0.
-    cheap ingest/embed lanes do not call this.
-    """
+    """Return a backoff reason, or None when a background job may run."""
     if interactive:
         return "interactive"
     thr = throttle if isinstance(throttle, dict) else read_bg_throttle()
@@ -120,10 +130,45 @@ def open_queue(db_path: Path) -> sqlite3.Connection:
           bad INTEGER NOT NULL DEFAULT 0,
           paused_until REAL NOT NULL DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS usefulness (
+          producer TEXT PRIMARY KEY,
+          reads INTEGER NOT NULL DEFAULT 0,
+          produced INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS meta (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
         """
     )
     con.commit()
     return con
+
+
+def queue_depth(con: sqlite3.Connection) -> int:
+    row = con.execute(
+        "SELECT COUNT(*) FROM queue WHERE status='queued'"
+    ).fetchone()
+    return int(row[0] if row else 0)
+
+
+def needs_refill(con: sqlite3.Connection, low_water: int = LOW_WATER) -> bool:
+    return queue_depth(con) < int(low_water)
+
+
+def effective_priority(
+    producer: str, *, fresh: bool = False, usefulness: float = 1.0
+) -> int:
+    base = int(PRODUCER_PRIORITY.get(producer, 80))
+    if fresh:
+        base = max(1, base - 5)
+    if usefulness < 0.2:
+        base += 15
+    elif usefulness < 0.5:
+        base += 5
+    elif usefulness > 2.0:
+        base = max(1, base - 3)
+    return base
 
 
 def enqueue(con: sqlite3.Connection, producer: str, payload: dict) -> bool:
@@ -140,7 +185,16 @@ def enqueue(con: sqlite3.Connection, producer: str, payload: dict) -> bool:
     ).fetchone()
     if paused and float(paused[0] or 0) > time.time():
         return False
-    prio = int(PRODUCER_PRIORITY.get(producer, 80))
+    useful = 1.0
+    urow = con.execute(
+        "SELECT reads, produced FROM usefulness WHERE producer=?", (producer,)
+    ).fetchone()
+    if urow:
+        produced = max(1, int(urow[1] or 1))
+        useful = max(0.05, min(5.0, (int(urow[0] or 0) + 1) / produced))
+    prio = effective_priority(
+        producer, fresh=bool(payload.get("fresh")), usefulness=useful
+    )
     try:
         con.execute(
             "INSERT INTO queue(producer,priority,content_hash,payload_json,status,created_at)"
@@ -160,27 +214,41 @@ def claim_next(con: sqlite3.Connection) -> tuple | None:
     ).fetchone()
     if not row:
         return None
-    con.execute("UPDATE queue SET status='running', attempts=attempts+1 WHERE id=?", (row[0],))
+    con.execute(
+        "UPDATE queue SET status='running', attempts=attempts+1 WHERE id=?",
+        (row[0],),
+    )
     con.commit()
     return row
 
 
-def mark_done(con: sqlite3.Connection, job_id: int, producer: str, content_hash_val: str) -> None:
+def mark_done(
+    con: sqlite3.Connection, job_id: int, producer: str, content_hash_val: str
+) -> None:
     con.execute(
         "INSERT OR REPLACE INTO done(producer,content_hash,produced_at) VALUES(?,?,?)",
         (producer, content_hash_val, time.time()),
     )
     con.execute("DELETE FROM queue WHERE id=?", (job_id,))
+    con.execute(
+        "INSERT INTO usefulness(producer,reads,produced) VALUES(?,0,1) "
+        "ON CONFLICT(producer) DO UPDATE SET produced=produced+1",
+        (producer,),
+    )
     con.commit()
 
 
-def record_quality(con: sqlite3.Connection, producer: str, ok: bool, fail_pause: float = 0.20) -> None:
+def record_quality(
+    con: sqlite3.Connection, producer: str, ok: bool, fail_pause: float = 0.20
+) -> None:
     con.execute(
         "INSERT INTO quality(producer,ok,bad,paused_until) VALUES(?,?,?,0) "
         "ON CONFLICT(producer) DO UPDATE SET ok=ok+?, bad=bad+?",
         (producer, 1 if ok else 0, 0 if ok else 1, 1 if ok else 0, 0 if ok else 1),
     )
-    row = con.execute("SELECT ok,bad FROM quality WHERE producer=?", (producer,)).fetchone()
+    row = con.execute(
+        "SELECT ok,bad FROM quality WHERE producer=?", (producer,)
+    ).fetchone()
     total = int(row[0]) + int(row[1])
     if total >= 10 and (int(row[1]) / total) > fail_pause:
         con.execute(
@@ -188,6 +256,19 @@ def record_quality(con: sqlite3.Connection, producer: str, ok: bool, fail_pause:
             (time.time() + 3600, producer),
         )
     con.commit()
+
+
+def deterministic_gate(producer: str, output: str, source: str) -> tuple[bool, list[str]]:
+    """Public-safe subset of the rock-solid gate (no model calls)."""
+    reasons: list[str] = []
+    text = (output or "").strip()
+    if not text:
+        return False, ["empty"]
+    if blocked_text(text) or blocked_text(source or ""):
+        return False, ["data_line"]
+    if producer == "pre_draft" and len(text.split()) < 25:
+        reasons.append("thin_draft")
+    return (len(reasons) == 0), reasons
 
 
 def pack_prompt(title: str, source: str) -> str:

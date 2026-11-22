@@ -54,11 +54,14 @@ Non-social Jev can try local :8080 first (strict JSON, 2-sample consistency, con
 ## Never-idle engine (2026-11-21)
 
 `hailports/never_idle.py` is the public-safe queue + backoff helper for a
-KeepAlive local precompute daemon. Priority producers (context packs,
-draft-only replies, entity enrichment, read-only review notes, few-shot
-harvest, history backfill) feed a SQLite queue, yield to interactive traffic,
-back off under memory/swap pressure or interactive TTFT > 2s, dedupe by
-content hash, and sample 5% of outputs for a local self-check (pause a
-producer above 20% bad). Generated packs, the DB, and few-shot banks stay
-gitignored and local. Example label: `com.stackmini.never-idle`.
+KeepAlive LaunchAgent that keeps a local chat server busy on a bottomless
+work-lane precompute queue (fresh inbound/pre-drafts, context packs, ADO prep,
+SF atlas + findings, account health, daily/weekly work products, history
+synthesis, refresh). Low-watermark refill (~50) keeps depth from hitting 0;
+fresh items outrank backlog. It yields to interactive traffic, honors the
+mem-governor throttle file, applies a rock-solid quality gate (grounding,
+self-critique, gold regression, capped paid fallback), tracks usefulness
+reads, and pauses a producer when bad rate exceeds 20%. Generated packs, the
+SQLite DB, draft patches, and few-shot banks stay gitignored and local.
+Example label: `com.stackmini.never-idle`.
 
