@@ -6,8 +6,11 @@ synthesis, and refresh. Interactive traffic wins through the chat-priority
 role. Low-watermark refill keeps the queue from draining. Backs off under
 memory/swap pressure and interactive chat. Interactive TTFT is measured and
 kept under 2s via chat-priority preemption — TTFT spikes alone do not starve
-a non-empty queue. Drafts only;
-Legal/Finance and secret markers are dropped before any prompt is built.
+a non-empty queue. Soft mem-governor throttle yields briefly without parking
+the loop; git/filesystem scanners are skipped while queue depth is fat so they
+cannot hold the DB lock for minutes. An optional second decode slot engages
+only when Splash pressure is normal and interactive TTFT is healthy. Drafts
+only; Legal/Finance and secret markers are dropped before any prompt is built.
 Social content stays off the local model. Generated packs, the SQLite queue,
 draft patches, and few-shot banks stay local / gitignored.
 """
@@ -46,6 +49,8 @@ PRODUCER_PRIORITY = {
 }
 
 LOW_WATER = 50
+ENQUEUE_SKIP_DEPTH = LOW_WATER * 3
+DUAL_TTFT_P95_MAX_MS = 1500.0
 
 
 def blocked_text(text: str) -> bool:
@@ -97,12 +102,73 @@ def should_run_background(
     if rate <= 0.0 or level == "critical" or memory_pressure == "critical":
         return "memory_critical"
     if rate < 1.0 or level == "warning":
-        return "throttle_warning"
+        return f"throttle_warning_rate_{rate}"
     if swap_mb >= 4500:
         return "swap"
     if memory_pressure == "warning" and swap_mb >= 3500:
         return "memory_warning"
     return None
+
+
+def soft_throttle_reason(reason: str | None) -> bool:
+    """True when background work should continue at a reduced duty cycle."""
+    if not reason:
+        return False
+    if reason.startswith("throttle_") and "_rate_" in reason:
+        try:
+            rate = float(reason.rsplit("_rate_", 1)[1])
+        except ValueError:
+            rate = 0.25
+        return rate > 0.0
+    return False
+
+
+def throttle_sleep_s(reason: str | None, *, depth: int = 0) -> float:
+    """Brief yield under soft throttle — keep the slot warm when the queue is deep."""
+    if not reason:
+        return 0.0
+    if reason in {"memory_critical", "throttle_critical"}:
+        return 30.0
+    if reason.startswith("throttle_") and "_rate_" in reason:
+        try:
+            rate = float(reason.rsplit("_rate_", 1)[1])
+        except ValueError:
+            rate = 0.25
+        if rate <= 0:
+            return 30.0
+        gap = max(0.2, min(1.5, (1.0 - rate) * 2.0))
+        if depth >= ENQUEUE_SKIP_DEPTH:
+            gap = min(gap, 0.45)
+        return gap
+    if reason.startswith("memory_warning") or reason.startswith("swap"):
+        return 8.0 if depth < LOW_WATER else 2.0
+    return 10.0
+
+
+def should_scan_enqueue(depth: int, *, low_water: int = LOW_WATER) -> bool:
+    """Skip git/filesystem scanners while the queue is already fat."""
+    return int(depth) < max(int(low_water) * 3, ENQUEUE_SKIP_DEPTH)
+
+
+def dual_slot_allowed(
+    *,
+    throttle_rate: float,
+    memory_pressure: str,
+    interactive: bool,
+    depth: int,
+    ttft_p95_ms: float | None,
+    ttft_limit_ms: float = DUAL_TTFT_P95_MAX_MS,
+) -> bool:
+    """Second decode slot only when Splash is healthy and chat TTFT is fine."""
+    if interactive:
+        return False
+    if float(throttle_rate) < 0.99 or memory_pressure != "normal":
+        return False
+    if int(depth) < max(10, LOW_WATER // 2):
+        return False
+    if ttft_p95_ms is not None and float(ttft_p95_ms) > float(ttft_limit_ms):
+        return False
+    return True
 
 
 def open_queue(db_path: Path) -> sqlite3.Connection:

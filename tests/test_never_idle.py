@@ -7,11 +7,13 @@ import time
 from pathlib import Path
 
 from hailports.never_idle import (
+    ENQUEUE_SKIP_DEPTH,
     LOW_WATER,
     blocked_text,
     claim_next,
     content_hash,
     deterministic_gate,
+    dual_slot_allowed,
     effective_priority,
     enqueue,
     mark_done,
@@ -20,6 +22,9 @@ from hailports.never_idle import (
     queue_depth,
     record_quality,
     should_run_background,
+    should_scan_enqueue,
+    soft_throttle_reason,
+    throttle_sleep_s,
 )
 
 
@@ -31,12 +36,14 @@ def test_blocked_text():
 
 
 def test_backoff():
+    normal = {"level": "normal", "rate": 1.0}
     assert (
         should_run_background(
             interactive=False,
             memory_pressure="normal",
             swap_mb=1000,
             ttft_p95_ms=100,
+            throttle=normal,
         )
         is None
     )
@@ -46,6 +53,7 @@ def test_backoff():
             memory_pressure="normal",
             swap_mb=1000,
             ttft_p95_ms=100,
+            throttle=normal,
         )
         == "interactive"
     )
@@ -55,6 +63,7 @@ def test_backoff():
             memory_pressure="warning",
             swap_mb=4000,
             ttft_p95_ms=100,
+            throttle=normal,
         )
         == "memory_warning"
     )
@@ -65,6 +74,7 @@ def test_backoff():
             memory_pressure="normal",
             swap_mb=1000,
             ttft_p95_ms=2500,
+            throttle=normal,
         )
         is None
     )
@@ -117,3 +127,50 @@ def test_deterministic_gate_thin_draft():
     ok, reasons = deterministic_gate("pre_draft", "ok", "source thread about portal")
     assert ok is False
     assert "thin_draft" in reasons
+
+
+def test_soft_throttle_keeps_producing():
+    reason = should_run_background(
+        interactive=False,
+        memory_pressure="normal",
+        swap_mb=1000,
+        throttle={"level": "warning", "rate": 0.25},
+    )
+    assert reason == "throttle_warning_rate_0.25"
+    assert soft_throttle_reason(reason) is True
+    assert throttle_sleep_s(reason, depth=ENQUEUE_SKIP_DEPTH) <= 0.45
+    assert should_scan_enqueue(ENQUEUE_SKIP_DEPTH) is False
+    assert should_scan_enqueue(LOW_WATER - 1) is True
+
+
+def test_dual_slot_gates():
+    assert (
+        dual_slot_allowed(
+            throttle_rate=1.0,
+            memory_pressure="normal",
+            interactive=False,
+            depth=100,
+            ttft_p95_ms=200,
+        )
+        is True
+    )
+    assert (
+        dual_slot_allowed(
+            throttle_rate=0.25,
+            memory_pressure="warning",
+            interactive=False,
+            depth=100,
+            ttft_p95_ms=200,
+        )
+        is False
+    )
+    assert (
+        dual_slot_allowed(
+            throttle_rate=1.0,
+            memory_pressure="normal",
+            interactive=False,
+            depth=100,
+            ttft_p95_ms=5000,
+        )
+        is False
+    )
