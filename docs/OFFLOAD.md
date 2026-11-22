@@ -45,3 +45,8 @@ Ported example: `examples/chat-probe-local.py` replaces a paid HTTP health probe
 - Local prompt budget raised for 64K context; malformed or low-confidence local output falls back to paid.
 - Fail-open to paid when `:8080` is down. Build/social still never finish local.
 - Optional `com.stackmini.local-precompute` launchd example digests idle context packs and backs off under memory/swap pressure.
+
+
+## Jev local judgments (saturate2 2026-11-21)
+
+Non-social Jev can try local :8080 first (strict JSON, 2-sample consistency, confidence floor) and fall back to TypeSafe paid. Social lanes stay on paid. Kill switch file: `$CLAUDE_STACK_HOME/data/flags/jev_local_off` (or `JEV_LOCAL=0`). Every attempt logs to router-decisions.jsonl.
