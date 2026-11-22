@@ -50,3 +50,15 @@ Ported example: `examples/chat-probe-local.py` replaces a paid HTTP health probe
 ## Jev local judgments (saturate2 2026-11-21)
 
 Non-social Jev can try local :8080 first (strict JSON, 2-sample consistency, confidence floor) and fall back to TypeSafe paid. Social lanes stay on paid. Kill switch file: `$CLAUDE_STACK_HOME/data/flags/jev_local_off` (or `JEV_LOCAL=0`). Every attempt logs to router-decisions.jsonl.
+
+## Never-idle engine (2026-11-21)
+
+`hailports/never_idle.py` is the public-safe queue + backoff helper for a
+KeepAlive local precompute daemon. Priority producers (context packs,
+draft-only replies, entity enrichment, read-only review notes, few-shot
+harvest, history backfill) feed a SQLite queue, yield to interactive traffic,
+back off under memory/swap pressure or interactive TTFT > 2s, dedupe by
+content hash, and sample 5% of outputs for a local self-check (pause a
+producer above 20% bad). Generated packs, the DB, and few-shot banks stay
+gitignored and local. Example label: `com.stackmini.never-idle`.
+
