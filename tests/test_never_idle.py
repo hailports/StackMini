@@ -58,6 +58,7 @@ def test_backoff():
         )
         == "memory_warning"
     )
+    # Contended TTFT must not starve a non-empty queue (preemption owns TTFT).
     assert (
         should_run_background(
             interactive=False,
@@ -65,7 +66,7 @@ def test_backoff():
             swap_mb=1000,
             ttft_p95_ms=2500,
         )
-        == "ttft"
+        is None
     )
 
 

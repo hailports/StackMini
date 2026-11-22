@@ -4,7 +4,9 @@ Bottomless work-lane precompute queue: context packs, draft-only replies,
 ADO prep, SF atlas/findings, account health, work products, history
 synthesis, and refresh. Interactive traffic wins through the chat-priority
 role. Low-watermark refill keeps the queue from draining. Backs off under
-memory/swap pressure and when interactive TTFT exceeds 2s. Drafts only;
+memory/swap pressure and interactive chat. Interactive TTFT is measured and
+kept under 2s via chat-priority preemption — TTFT spikes alone do not starve
+a non-empty queue. Drafts only;
 Legal/Finance and secret markers are dropped before any prompt is built.
 Social content stays off the local model. Generated packs, the SQLite queue,
 draft patches, and few-shot banks stay local / gitignored.
@@ -74,11 +76,16 @@ def should_run_background(
     interactive: bool,
     memory_pressure: str,
     swap_mb: float,
-    ttft_p95_ms: float | None,
+    ttft_p95_ms: float | None = None,
     ttft_limit_ms: float = 2000.0,
     throttle: dict | None = None,
 ) -> str | None:
-    """Return a backoff reason, or None when a background job may run."""
+    """Return a backoff reason, or None when a background job may run.
+
+    TTFT is observed for status/preemption health but does not pause the
+    queue — a single contended probe used to starve utilization for minutes.
+    """
+    del ttft_p95_ms, ttft_limit_ms  # retained for API compat; not a run gate
     if interactive:
         return "interactive"
     thr = throttle if isinstance(throttle, dict) else read_bg_throttle()
@@ -95,8 +102,6 @@ def should_run_background(
         return "swap"
     if memory_pressure == "warning" and swap_mb >= 3500:
         return "memory_warning"
-    if ttft_p95_ms is not None and ttft_p95_ms > ttft_limit_ms:
-        return "ttft"
     return None
 
 
