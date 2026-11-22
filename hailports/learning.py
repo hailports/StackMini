@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import time
 from pathlib import Path
@@ -48,8 +49,12 @@ def system_addon(con: sqlite3.Connection, limit: int = 8) -> str:
     return "\n".join(lines)
 
 
-def write_runbook(con: sqlite3.Connection, root: Path) -> Path:
-    """Write the corrections into a runbook the ask/do search can find."""
+def write_runbook(con: sqlite3.Connection, root: Path, gate: dict | None = None, gate_model="auto") -> Path:
+    """Write the corrections into a runbook the ask/do search can find.
+
+    Optional rules-gate: pass a rules_gate config (or set HAILPORTS_RULES_GATE_CONFIG). When the
+    runbook is a gated file, the write lands only if the replay checks say it helps more than it
+    hurts; on reject or model-down the old file stays and the proposal is queued. Never raises."""
     root.mkdir(parents=True, exist_ok=True)
     path = root / "corrections.md"
     rows = recent(con, limit=50)
@@ -59,7 +64,23 @@ def write_runbook(con: sqlite3.Connection, root: Path) -> Path:
     else:
         for row in reversed(rows):
             lines.append(f"- When the topic is {row['prompt']}, prefer: {row['correction']}")
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    text = "\n".join(lines) + "\n"
+    cfg = gate
+    if cfg is None and os.environ.get("HAILPORTS_RULES_GATE_CONFIG"):
+        try:
+            from hailports import rules_gate
+            cfg = rules_gate.load_config(os.environ["HAILPORTS_RULES_GATE_CONFIG"])
+        except Exception:
+            cfg = None
+    if cfg is not None:
+        try:
+            from hailports import rules_gate
+            if rules_gate.is_gated(cfg, path):
+                rules_gate.apply_edit(str(path), text, cfg=cfg, model=gate_model, source="learning.write_runbook")
+                return path
+        except Exception:
+            return path
+    path.write_text(text, encoding="utf-8")
     return path
 
 

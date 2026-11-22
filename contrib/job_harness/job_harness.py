@@ -247,6 +247,70 @@ def scope_changes(c: dict, since: float, limit: int = 4000) -> list[str]:
     return sorted(set(out))[:200]
 
 
+# ---------------------------------------------------------------- rules-gate hook
+def _rules_gate():
+    """Lazy import of rules_gate (sibling tools/rules_gate, or hailports.rules_gate). None if absent."""
+    if os.environ.get("JOB_HARNESS_RULES_GATE", "1") == "0":
+        return None
+    here = Path(__file__).resolve().parent
+    for cand in (here.parent / "rules_gate", here.parent.parent / "hailports"):
+        if (cand / "rules_gate.py").exists() and str(cand) not in sys.path:
+            sys.path.insert(0, str(cand))
+    try:
+        import rules_gate  # type: ignore
+        return rules_gate
+    except Exception:
+        return None
+
+
+def rules_gate_snapshot(c: dict, job_dir: Path) -> dict:
+    """Hash every gated rules/lessons file under this job's scope; keep a copy for `rules-gate check --old`."""
+    rg = _rules_gate()
+    if rg is None:
+        return {}
+    try:
+        cfg = rg.load_config()
+    except Exception:
+        return {}
+    roots = [Path(os.path.expanduser(r.rstrip("/*"))).resolve() for r in re.findall(r"(?:~|/)[\w./\-]+", c.get("scope", ""))]
+    snap = {}
+    for g in cfg.get("gated", []):
+        gp = Path(g)
+        try:
+            rp = gp.resolve()
+        except OSError:
+            continue
+        if not any(rp == r or r in rp.parents for r in roots):
+            continue
+        text = gp.read_text(errors="replace") if gp.is_file() else ""
+        keep = job_dir / ".rules_gate_snap" / (hashlib.sha256(str(rp).encode()).hexdigest()[:10] + "-" + gp.name)
+        keep.parent.mkdir(exist_ok=True)
+        keep.write_text(text)
+        snap[str(gp)] = {"sha": hashlib.sha256(text.encode("utf-8", "replace")).hexdigest(), "old": str(keep)}
+    return {"cfg": cfg, "files": snap} if snap else {}
+
+
+def rules_gate_unreceipted(snap: dict) -> list[str]:
+    """Gated files that changed during the run without a rules-gate accept receipt for their new content."""
+    rg = _rules_gate()
+    if not snap or rg is None:
+        return []
+    out = []
+    for path, row in snap["files"].items():
+        p = Path(path)
+        text = p.read_text(errors="replace") if p.is_file() else ""
+        h = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
+        if h == row["sha"]:
+            continue
+        try:
+            ok = rg.has_receipt(snap["cfg"], h)
+        except Exception:
+            ok = False
+        if not ok:
+            out.append(f"{path} (run: rules-gate check --old {row['old']} --new {path} --target {path})")
+    return out
+
+
 # ---------------------------------------------------------------- job state
 class Job:
     def __init__(self, path: Path, host: dict):
@@ -490,6 +554,8 @@ def _run_locked(job: Job, c: dict, injected: list[str], args) -> int:
               injected_nevers=injected, judge=want_judge, judge_cmd=judge_cmd or ("default-cli" if want_judge else ""))
     walls = snapshot(wall_paths(c, job.host))
     job.audit("walls", count=len(walls))
+    rg_snap = rules_gate_snapshot(c, job.path)
+    job.audit("rules_gate", gated_in_scope=len(rg_snap.get("files", {})))
     chain = agent_chain(job.path, c, job.host)
     env = dict(os.environ, JOB_HARNESS_DEPTH="1", JOB_DIR=str(job.path))
 
@@ -522,6 +588,12 @@ def _run_locked(job: Job, c: dict, injected: list[str], args) -> int:
         if hv and hstatus == "blocked":
             return job.escalate("agent reported STATUS blocked in HANDOFF.md", "blocked", hreason)
         green = drc == 0 and hv and hstatus == "complete"
+        if green and rg_snap:
+            unrec = rules_gate_unreceipted(rg_snap)
+            if unrec:
+                job.audit("rules_gate_unreceipted", files=unrec)
+                green, drc = False, 1
+                dout = "rules-gate: gated file changed without an accept receipt:\n" + "\n".join(unrec)
         if green and want_judge:
             ok, jout = run_judge(job, c, judge_cmd, chain, max(60, max_wall - (time.time() - t_start)))
             if not ok:

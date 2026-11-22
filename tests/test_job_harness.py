@@ -297,3 +297,47 @@ def test_custom_human_marker(env):
     r = run(dict(e, JOB_HARNESS_HUMAN_MARKER="NEEDS_OWNER"), d)
     assert r.returncode == 3
     assert (d / "NEEDS_OWNER").exists() and (d / "ESCALATED").exists()
+
+
+# ---------------------------------------------------------------- rules-gate hook
+def _rg_env(e, tmp_path):
+    gated = tmp_path / "scope" / "RULES.md"
+    gated.parent.mkdir()
+    gated.write_text("- rule one\n")
+    state = tmp_path / "rgstate"
+    cfg = tmp_path / "rg.json"
+    cfg.write_text(json.dumps({"state": str(state), "gated": [str(gated)], "replay": str(tmp_path / "none.json")}))
+    return dict(e, RULES_GATE_CONFIG=str(cfg)), gated, state
+
+
+def test_gated_file_changed_without_receipt_not_green(env):
+    root, e, tmp = env
+    e2, gated, _ = _rg_env(e, tmp)
+    c = contract(budget="max_wall_s=60 max_attempts=1 max_same_error=2").replace("this folder", str(gated.parent))
+    d = make_job(root, contract_text=c, agent=f"echo '- rule two' >> {gated}", handoff=HANDOFF_OK, result="ok")
+    r = run(e2, d)
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert not (d / "DONE.json").exists()
+    assert any(a["event"] == "rules_gate_unreceipted" for a in audit(d))
+
+
+def test_gated_file_changed_with_accept_receipt_green(env):
+    root, e, tmp = env
+    e2, gated, state = _rg_env(e, tmp)
+    new = "- rule one\n- rule two\n"
+    h = __import__("hashlib").sha256(new.encode()).hexdigest()
+    (state / "receipts").mkdir(parents=True)
+    (state / "receipts" / f"{h}.json").write_text(json.dumps({"verdict": "accept", "sha256": h}))
+    c = contract(budget="max_wall_s=60 max_attempts=1 max_same_error=2").replace("this folder", str(gated.parent))
+    d = make_job(root, contract_text=c, agent=f"printf -- '- rule two\\n' >> {gated}", handoff=HANDOFF_OK, result="ok")
+    r = run(e2, d)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (d / "DONE.json").exists()
+
+
+def test_gated_file_outside_scope_ignored(env):
+    root, e, tmp = env
+    e2, gated, _ = _rg_env(e, tmp)
+    d = make_job(root, agent=f"echo '- rule two' >> {gated}", handoff=HANDOFF_OK, result="ok")
+    r = run(e2, d)
+    assert r.returncode == 0, r.stdout + r.stderr

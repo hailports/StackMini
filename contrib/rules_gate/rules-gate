@@ -1,0 +1,3 @@
+#!/bin/sh
+# rules-gate: replay checks before a rules or lessons edit lands. See README.md.
+exec python3 "$(dirname "$0")/../../hailports/rules_gate.py" "$@"
