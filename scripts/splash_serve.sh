@@ -8,8 +8,8 @@
 # "mlx-qwen-llama-server ... --port 18080" (macOS Python drops a custom argv0), so pgrep-based guards still find "the model server".
 # Rollback: ~/claude-stack/bin/rollback_splash_to_minicpm.sh (MiniCPM files and minicpm_serve.sh untouched).
 # Memory knobs (flags/, defaults enforce the 13.5G model+cache budget):
-#   splash_max_memory (13.5G) splash_expert_memory (4G) splash_state_format (bf16)
-#   splash_kv_format (int8) splash_queue_size (8) splash_language_only (0) splash_ctx (65536)
+#   splash_max_memory (13.5G) splash_expert_memory (auto) splash_state_format (fp32)
+#   splash_kv_format (int8) splash_queue_size (16) splash_language_only (0) splash_ctx (65536)
 export PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 # Refuse silent regressions that exceed the wired budget (override: SPLASH_MEM_FORCE=1).
 if [ -x "$HOME/claude-stack/bin/splash_mem_budget_guard.sh" ]; then
@@ -23,10 +23,10 @@ CTX=$(rf $F/splash_ctx 65536)
 MEM=$(rf $F/splash_max_memory 13.5G)
 DISK=$(rf $F/splash_cache_disk 4G)
 UP=$(rf $F/splash_up_port 18085)
-EXPERT=$(rf $F/splash_expert_memory 4G)
-STATE=$(rf $F/splash_state_format bf16)
+EXPERT=$(rf $F/splash_expert_memory auto)
+STATE=$(rf $F/splash_state_format fp32)
 KV=$(rf $F/splash_kv_format int8)
-QUEUE=$(rf $F/splash_queue_size 8)
+QUEUE=$(rf $F/splash_queue_size 16)
 LANGONLY=$(rf $F/splash_language_only 0)
 GGUF=$M/Qwen3.6-35B-A3B-$QUANT.gguf; MMPROJ=$M/mmproj-BF16.gguf; DRAFT=$M/dflash2
 LOGD=$HOME/claude-stack/logs; mkdir -p "$LOGD" "$HOME/llm-appliance/runtime"
