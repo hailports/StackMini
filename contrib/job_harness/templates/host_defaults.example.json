@@ -1,0 +1,16 @@
+{
+  "_comment": "Copy to <jobs_root>/_templates/host_defaults.json or point JOB_HARNESS_HOST_CONFIG at it. Default never-list provided by the host config; jobs may add nevers, not remove these.",
+  "never": [
+    "do not touch services listed in the host sacred-service registry",
+    "do not edit or bypass the host command-denylist hook",
+    "no hosted APIs for private work data",
+    "never --no-verify, never force-push"
+  ],
+  "protected": [
+    "~/.config/example/denylist_hook.py"
+  ],
+  "agents": [
+    ["claude", "-p", "--dangerously-skip-permissions"],
+    ["codex", "exec", "--dangerously-bypass-approvals-and-sandbox"]
+  ]
+}

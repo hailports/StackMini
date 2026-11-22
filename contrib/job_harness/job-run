@@ -1,0 +1,3 @@
+#!/bin/sh
+# job-run: contract + progress + wrapper-owned exits for long agent jobs. See README.md.
+exec python3 "$(dirname "$0")/job_harness.py" "$@"
