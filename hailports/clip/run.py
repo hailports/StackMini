@@ -488,7 +488,8 @@ def _note_scene(doc: dict | None, who: str) -> None:
         from datetime import datetime, timezone
         doc = doc if isinstance(doc, dict) else {}
         text = str(doc.get("field_text") or "")
-        speakers = _re.findall(r"(?m)^([A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*)?)\s+\d{1,2}:\d{2}\s*[AP]M\b", text)
+        from hailports.clip.scene import _CHAT_HEAD, chat_first_name
+        speakers = ["You" if m.group("you") else chat_first_name(m.group("name")) for m in _CHAT_HEAD.finditer(text)]
         seen = []
         for name in speakers:
             if name not in seen:
