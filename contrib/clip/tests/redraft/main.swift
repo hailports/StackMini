@@ -39,7 +39,7 @@ expect(all.request(fresh: true)?["pins"] == nil, "fresh sends no pins")
 
 // Field not readable: today's behaviour, one short line.
 let blind = RedraftPins.from(json: nil, fieldReadable: false)
-expect(blind.source == .unreadable && blind.note == "Can't read the field — redraft will start fresh", "unreadable note")
+expect(blind.source == .unreadable && blind.note == "Reply box read from the screen — redraft rereads the screen", "unreadable note")
 expect(blind.request(fresh: false) == nil, "unreadable sends nothing")
 expect(blind.rows.isEmpty, "no rows")
 

@@ -187,7 +187,7 @@ struct RedraftPins: Equatable {
     var source: Source = .unknown
     var sentences: [RedraftSentence] = []
 
-    static let unreadableNote = "Can't read the field — redraft will start fresh"
+    static let unreadableNote = "Reply box read from the screen — redraft rereads the screen"
     static let maxRows = 12
 
     /// From the `locks` helper output, or from a field that could not be read.

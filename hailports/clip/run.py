@@ -338,6 +338,7 @@ def _draft_scene_once(doc: dict, base_url: str, model: str, copy: bool, cfg: dic
     except (OSError, TimeoutError, ValueError):
         facts = ""
     who = addressee_first(screen + "\n" + sources, me)
+    _note_scene(doc, who)
     choice = screen_has_choice(sources)
     voice = _context_note(route)[:1400]
     parts = []
@@ -466,6 +467,31 @@ def _draft_scene_once(doc: dict, base_url: str, model: str, copy: bool, cfg: dic
     print(text)
     return 0 if text else 2
 
+
+
+
+def _note_scene(doc: dict | None, who: str) -> None:
+    """One line in paste-debug.log naming the chat the screen read captured, so a draft for the
+    wrong chat is visible. Local file only; never fails a draft."""
+    try:
+        import re as _re
+        from datetime import datetime, timezone
+        doc = doc if isinstance(doc, dict) else {}
+        text = str(doc.get("field_text") or "")
+        speakers = _re.findall(r"(?m)^([A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*)?)\s+\d{1,2}:\d{2}\s*[AP]M\b", text)
+        seen = []
+        for name in speakers:
+            if name not in seen:
+                seen.append(name)
+        line = "scene app=%s origin=%s to=%s speakers=%s chars=%d" % (
+            str(doc.get("app") or "?"), str(doc.get("origin") or "?"), who or "?",
+            ",".join(seen[-4:]) or "?", len(text))
+        path = Path.home() / ".config" / "paiste" / "paste-debug.log"
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(stamp + " " + line + "\n")
+    except Exception:
+        pass
 
 
 def draft_scene(doc: dict, base_url: str, model: str, copy: bool, cfg: dict | None = None) -> int:
