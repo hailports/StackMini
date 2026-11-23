@@ -187,6 +187,7 @@ struct RedraftPins: Equatable {
     var source: Source = .unknown
     var sentences: [RedraftSentence] = []
 
+    // Not a failure: apps like Zoom expose no reply-box target, so paisty reads it from the screen.
     static let unreadableNote = "Reply box read from the screen — redraft rereads the screen"
     static let maxRows = 12
 
