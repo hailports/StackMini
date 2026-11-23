@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+SOURCE=$0
+while [ -L "$SOURCE" ]; do
+  DIR=$(CDPATH= cd -- "$(dirname "$SOURCE")" && pwd)
+  LINK=$(readlink "$SOURCE" || true)
+  [ -n "$LINK" ] || break
+  case "$LINK" in
+    /*) SOURCE=$LINK ;;
+    *) SOURCE=$DIR/$LINK ;;
+  esac
+done
+DIR=$(CDPATH= cd -- "$(dirname "$SOURCE")" && pwd)
+ROOT=$(CDPATH= cd -- "$DIR/../.." && pwd)
+export PYTHONPATH="${ROOT}${PYTHONPATH:+:$PYTHONPATH}"
+if [ -f "${FREE_LLM_KEYS:-$HOME/.config/free-llm/keys.env}" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "${FREE_LLM_KEYS:-$HOME/.config/free-llm/keys.env}"
+  set +a
+fi
+exec /usr/bin/python3 -m hailports.free_ladder "$@"
