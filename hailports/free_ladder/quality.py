@@ -1,4 +1,4 @@
-"""Lightweight quality gate for free-ladder responses."""
+"""Lightweight quality gate — reuse never_idle deterministic checks when sensible."""
 from __future__ import annotations
 
 import re
@@ -18,6 +18,7 @@ _AI = re.compile(
 def extract_text(resp: dict[str, Any]) -> str:
     choices = resp.get("choices") or []
     if not choices:
+        # anthropic-style
         content = resp.get("content")
         if isinstance(content, list):
             return "\n".join(
@@ -41,6 +42,31 @@ def quality_ok(text: str, *, task: str = "chat", min_chars: int = 1) -> tuple[bo
         return False, "too_short"
     if _REFUSAL.search(t) and len(t) < 80:
         return False, "refusal"
+    if task in {"classify", "extract"} and len(t) > 4000:
+        # suspiciously long for a classify — still accept
+        pass
+    # never-idle style fingerprint is advisory only for gateway chat
     if _AI.search(t) and task in {"code", "reasoning"}:
         return False, "ai_fingerprint"
     return True, "ok"
+
+
+def try_never_idle_check(text: str, producer: str = "work_product", source: str = "") -> tuple[bool, str] | None:
+    """Optional hook into never_idle_quality.deterministic_check. Fail-open on import error."""
+    try:
+        from tools.never_idle_quality import deterministic_check  # type: ignore
+    except Exception:
+        try:
+            import sys
+            from pathlib import Path
+            root = Path(__file__).resolve().parents[2]
+            if str(root) not in sys.path:
+                sys.path.insert(0, str(root))
+            from tools.never_idle_quality import deterministic_check  # type: ignore
+        except Exception:
+            return None
+    try:
+        ok, reasons = deterministic_check(producer, text, source or text[:500])
+        return bool(ok), ",".join(reasons) if reasons else "ok"
+    except Exception:
+        return None

@@ -208,6 +208,10 @@ def model_for(provider: str, task: str, pin: str | None = None) -> str:
         return DEFAULT_MODELS["plugsky"]
     if provider == "glm":
         return DEFAULT_MODELS["glm"] if task in {"code", "reasoning"} else DEFAULT_MODELS["glm_fast"]
+    if provider == "claude":
+        return "personal-claude"
+    if provider == "codex":
+        return "personal-codex"
     if provider == "openrouter":
         return pick_openrouter_model(task) or "openrouter/free"
     return "auto"
@@ -226,8 +230,8 @@ def chat_completions(
     meta: dict[str, Any] = {"provider": provider, "model": model, "stream": False}
     t0 = time.time()
 
-    if provider == "paid":
-        return _paid_cli(payload, meta, t0)
+    if provider in {"claude", "codex"}:
+        return _subscription_cli(provider, payload, meta, t0)
 
     if provider == "openrouter":
         if not is_openrouter_free(model, keys):
@@ -236,6 +240,22 @@ def chat_completions(
                 "outcome": "refused_paid_openrouter",
                 "latency_ms": int((time.time() - t0) * 1000),
             }
+
+    if provider == "glm":
+        # Honor Coding Plan 5h/weekly windows via existing ledger (fail-open on import error).
+        try:
+            from core.glm_coding_plan import admit as glm_admit
+
+            est = max(64, int(_estimate_prompt_tokens(payload)) + int(payload.get("max_tokens") or 512))
+            ok, why, _cost = glm_admit("rescue", est, model=model)
+            if not ok:
+                return 429, {"error": {"message": f"glm_admit:{why}"}}, {"retry-after": "60"}, {
+                    **meta,
+                    "outcome": f"glm_quota:{why}",
+                    "latency_ms": int((time.time() - t0) * 1000),
+                }
+        except Exception as exc:
+            meta["glm_admit_err"] = str(exc)[:120]
 
     base = (PROVIDERS.get(provider) or {}).get("base")
     if not base:
@@ -280,24 +300,87 @@ def chat_completions(
                 data["choices"] = choices
         except Exception:
             pass
+    tokens = _usage_tokens(data, body) if code < 400 else 0
     meta.update(
         {
             "latency_ms": latency,
-            "tokens": _usage_tokens(data, body) if code < 400 else 0,
+            "tokens": tokens,
             "outcome": "ok" if code < 400 and text else ("http_error" if code >= 400 else "empty"),
-            "retry_after": out_h.get("retry-after"),
+            "retry_after": out_h.get("retry-after") or out_h.get("x-ratelimit-reset-requests"),
             "served_model": out_h.get("x-plugsky-served-model") or (data.get("model") if isinstance(data, dict) else None),
+            "ratelimit": {
+                k: out_h.get(k)
+                for k in (
+                    "x-ratelimit-limit-requests",
+                    "x-ratelimit-remaining-requests",
+                    "x-ratelimit-limit-tokens",
+                    "x-ratelimit-remaining-tokens",
+                )
+                if out_h.get(k)
+            }
+            or None,
         }
     )
     if provider == "plugsky":
         served = (out_h.get("x-plugsky-served-model") or "").lower()
         if any(x in served for x in ("lite", "micro", "gpu-27b")):
             meta["plugsky_alert"] = f"weak_engine:{served}"
+            _alert_plugsky_weak(served)
+    if provider == "glm" and code < 400 and text:
+        _glm_record_spend(tokens or max(1, len(text) // 4), model)
     return code, data, out_h, meta
 
 
-def _paid_cli(payload: dict[str, Any], meta: dict[str, Any], t0: float) -> tuple[int, dict[str, Any], dict[str, str], dict[str, Any]]:
-    """Personal Claude then personal Codex — do not change how they authenticate."""
+def _estimate_prompt_tokens(payload: dict[str, Any]) -> int:
+    n = 0
+    for m in payload.get("messages") or []:
+        n += max(1, len(_msg_content(m)) // 4)
+    return n
+
+
+def _glm_record_spend(tokens: int, model: str) -> None:
+    try:
+        from core.glm_coding_plan import credits_for, LEDGER
+        import time as _t
+
+        row = {
+            "ts": _t.time(),
+            "lane": "rescue",
+            "model": model,
+            "tokens": int(tokens),
+            "credits": int(credits_for(int(tokens), model)),
+            "source": "free_ladder",
+        }
+        Path(LEDGER).parent.mkdir(parents=True, exist_ok=True)
+        with open(LEDGER, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+    except Exception:
+        pass
+
+
+def _alert_plugsky_weak(served: str) -> None:
+    """Plan lapse signal — Plugsky paid should never serve lite/micro/gpu-27b."""
+    try:
+        from core.alert_gateway import notify
+
+        notify(
+            "free-ladder",
+            "plugsky weak engine",
+            f"requested plugsky-ultra but x-plugsky-served-model={served} (plan may have lapsed)",
+            issue_key="plugsky-weak-engine",
+            level="warn",
+        )
+    except Exception:
+        pass
+
+
+def _subscription_cli(
+    provider: str,
+    payload: dict[str, Any],
+    meta: dict[str, Any],
+    t0: float,
+) -> tuple[int, dict[str, Any], dict[str, str], dict[str, Any]]:
+    """Personal Claude or personal Codex only — do not change how they authenticate."""
     safe = redact_payload(payload)
     msgs = safe.get("messages") or []
     prompt_parts = []
@@ -305,53 +388,83 @@ def _paid_cli(payload: dict[str, Any], meta: dict[str, Any], t0: float) -> tuple
         role = m.get("role", "user")
         prompt_parts.append(f"{role}: {_msg_content(m)}")
     prompt = "\n\n".join(prompt_parts)[:8000]
-    # Claude CLI
+    if provider == "claude":
+        try:
+            env = os.environ.copy()
+            # never route Claude Code through GLM override for ladder calls
+            env.pop("ANTHROPIC_BASE_URL", None)
+            env.pop("ANTHROPIC_AUTH_TOKEN", None)
+            proc = subprocess.run(
+                ["claude", "-p", prompt, "--output-format", "text"],
+                capture_output=True,
+                text=True,
+                timeout=TIMEOUTS["claude"],
+                env=env,
+            )
+            if proc.returncode == 0 and (proc.stdout or "").strip():
+                text = proc.stdout.strip()
+                body = {
+                    "id": "sub-claude",
+                    "object": "chat.completion",
+                    "model": "personal-claude",
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                }
+                meta.update(
+                    {
+                        "latency_ms": int((time.time() - t0) * 1000),
+                        "outcome": "ok",
+                        "model": "personal-claude",
+                        "tokens": max(1, len(text) // 4),
+                    }
+                )
+                return 200, body, {}, meta
+            meta["claude_err"] = (proc.stderr or proc.stdout or "")[:120]
+        except Exception as exc:
+            meta["claude_err"] = str(exc)[:120]
+        meta.update({"latency_ms": int((time.time() - t0) * 1000), "outcome": "sub_fail"})
+        return 502, {"error": {"message": "personal claude failed"}}, {}, meta
+
+    # personal Codex only (never corp)
     try:
-        proc = subprocess.run(
-            ["claude", "-p", prompt, "--output-format", "text"],
-            capture_output=True,
-            text=True,
-            timeout=TIMEOUTS["paid"],
-            env=os.environ.copy(),
-        )
-        if proc.returncode == 0 and (proc.stdout or "").strip():
-            text = proc.stdout.strip()
-            body = {
-                "id": "paid-claude",
-                "object": "chat.completion",
-                "model": "personal-claude",
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-            }
-            meta.update({"latency_ms": int((time.time() - t0) * 1000), "outcome": "ok", "model": "personal-claude", "tokens": max(1, len(text) // 4)})
-            return 200, body, {}, meta
-    except Exception as exc:
-        meta["claude_err"] = str(exc)[:120]
-    # Codex CLI
-    try:
+        home = Path.home()
+        personal = home / ".codex-personal"
+        env = os.environ.copy()
+        env["CODEX_HOME"] = str(personal if personal.is_dir() else home / ".codex")
+        # refuse corp home
+        if "codex-corp" in env["CODEX_HOME"] or env.get("CODEX_ACCOUNT") == "corp":
+            meta.update({"latency_ms": int((time.time() - t0) * 1000), "outcome": "refused_corp_codex"})
+            return 403, {"error": {"message": "ladder never uses corp Codex"}}, {}, meta
         proc = subprocess.run(
             ["codex", "exec", "--skip-git-repo-check", "-q", prompt[:6000]],
             capture_output=True,
             text=True,
-            timeout=TIMEOUTS["paid"],
-            env=os.environ.copy(),
+            timeout=TIMEOUTS["codex"],
+            env=env,
         )
         if proc.returncode == 0 and (proc.stdout or "").strip():
             text = proc.stdout.strip()
             body = {
-                "id": "paid-codex",
+                "id": "sub-codex",
                 "object": "chat.completion",
                 "model": "personal-codex",
                 "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
             }
-            meta.update({"latency_ms": int((time.time() - t0) * 1000), "outcome": "ok", "model": "personal-codex", "tokens": max(1, len(text) // 4)})
+            meta.update(
+                {
+                    "latency_ms": int((time.time() - t0) * 1000),
+                    "outcome": "ok",
+                    "model": "personal-codex",
+                    "tokens": max(1, len(text) // 4),
+                }
+            )
             return 200, body, {}, meta
         meta["codex_err"] = (proc.stderr or proc.stdout or "")[:120]
     except Exception as exc:
         meta["codex_err"] = str(exc)[:120]
-    meta.update({"latency_ms": int((time.time() - t0) * 1000), "outcome": "paid_fail"})
-    return 502, {"error": {"message": "paid claude/codex failed"}}, {}, meta
+    meta.update({"latency_ms": int((time.time() - t0) * 1000), "outcome": "sub_fail"})
+    return 502, {"error": {"message": "personal codex failed"}}, {}, meta
 
 
 def stream_chat_completions(
@@ -363,14 +476,14 @@ def stream_chat_completions(
 ) -> Iterator[bytes]:
     """Yield SSE bytes. Falls back to single-chunk if provider stream fails."""
     keys = keys or load_keys()
-    if provider in {"paid", "openrouter"} and provider == "openrouter" and not is_openrouter_free(model, keys):
+    if provider == "openrouter" and not is_openrouter_free(model, keys):
         err = json.dumps({"error": {"message": f"refused non-free openrouter model: {model}"}})
         yield f"data: {err}\n\n".encode()
         yield b"data: [DONE]\n\n"
         return
 
     base = (PROVIDERS.get(provider) or {}).get("base")
-    if not base or provider == "paid":
+    if not base or provider in {"claude", "codex"}:
         # non-stream then fake SSE
         code, data, _, _ = chat_completions(provider, payload, model=model, keys=keys)
         if code >= 400:
@@ -430,9 +543,11 @@ def list_models(keys: dict[str, str] | None = None) -> list[dict[str, Any]]:
         {"id": f"gemini/{DEFAULT_MODELS['gemini_pro']}", "object": "model", "owned_by": "gemini"},
         {"id": f"plugsky/{DEFAULT_MODELS['plugsky']}", "object": "model", "owned_by": "plugsky"},
         {"id": f"glm/{DEFAULT_MODELS['glm']}", "object": "model", "owned_by": "glm"},
-        {"id": "paid/claude", "object": "model", "owned_by": "paid"},
-        {"id": "paid/codex", "object": "model", "owned_by": "paid"},
+        {"id": "claude/personal", "object": "model", "owned_by": "claude"},
+        {"id": "codex/personal", "object": "model", "owned_by": "codex"},
     ]
     for mid in list_openrouter_free(keys):
-        models.append({"id": f"openrouter/{mid}", "object": "model", "owned_by": "openrouter"})
+        # mid is already an OpenRouter id (e.g. google/gemma…:free or openrouter/free)
+        oid = mid if mid.startswith("openrouter/") else f"openrouter/{mid}"
+        models.append({"id": oid, "object": "model", "owned_by": "openrouter"})
     return models

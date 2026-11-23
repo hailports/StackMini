@@ -1,15 +1,8 @@
-# Free ladder gateway
+# Free ladder gateway (:8790)
 
-OpenAI-compatible `/v1/chat/completions` + `/v1/models` and Anthropic `/v1/messages` on port **8790**.
+Climb free LLM rungs before any subscription/paid call.
 
-Climb order: local → Cerebras → Groq → Gemini Flash/Pro → OpenRouter `:free` only → Plugsky → GLM / personal Claude / personal Codex.
+Rungs: local → Cerebras → Groq → Gemini → OpenRouter :free → Plugsky (plugsky-ultra) → GLM/Claude/Codex subscriptions (same rung, sideways by quota).
 
-Keys: `~/.config/free-llm/keys.env` (chmod 600). Never commit keys.
-
-```
-export OPENAI_BASE_URL=http://127.0.0.1:8790/v1
-# optional second bind: set FREE_LADDER_TS_IP to a private interface IP
-```
-
-Model `auto` = ladder routing. Pin with `cerebras/<model>`, `groq/<model>`, etc.
-OpenRouter paid models are refused even if pinned.
+CLI: `contrib/free-ladder/ask-free-model`
+MCP: `contrib/free-ladder/free-ladder-mcp.py` (tool ask_free_model)

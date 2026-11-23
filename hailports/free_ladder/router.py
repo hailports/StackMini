@@ -14,6 +14,8 @@ from .config import (
     DAILY_SUMMARY,
     DEFAULT_MODELS,
     PROVIDERS,
+    SUBSCRIPTION_PEERS,
+    SUB_TASK_BIAS,
     ensure_dirs,
     key_for,
     load_keys,
@@ -29,7 +31,7 @@ from .quality import extract_text, quality_ok
 from .quota import QuotaStore
 
 # Public channel copy must NOT use the local model (HARD).
-_CHANNEL_COPY = ("tweet", "caption", "instagram", "tiktok", "x.com")
+_PUBLIC_COPY = ("hailports", "channel_b", "ima furad", "public_copy", "tweet", "caption")
 
 
 def _log_call(row: dict[str, Any]) -> None:
@@ -41,9 +43,9 @@ def _log_call(row: dict[str, Any]) -> None:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
     except OSError:
         pass
-    if row.get("provider") == "paid" and row.get("outcome") == "ok":
-        _note_paid(row)
-    elif row.get("outcome") == "ok" and row.get("provider") != "paid":
+    if row.get("provider") in SUBSCRIPTION_PEERS and row.get("outcome") == "ok":
+        _note_paid(row)  # flat-rate sub used (still better than metered)
+    elif row.get("outcome") == "ok" and row.get("provider") not in SUBSCRIPTION_PEERS:
         _note_avoided(row)
 
 
@@ -116,10 +118,10 @@ def _skip_local(payload: dict[str, Any], headers: dict[str, str] | None = None) 
     headers = {k.lower(): v for k, v in (headers or {}).items()}
     if headers.get("x-free-ladder-skip-local", "").strip() in {"1", "true", "yes"}:
         return True
-    if headers.get("x-channel-copy", "").strip() in {"1", "true", "yes"}:
+    if headers.get("x-public_copy", "").strip() in {"1", "true", "yes"}:
         return True
     blob = json.dumps(payload.get("messages") or [])[:4000].lower()
-    return any(s in blob for s in _CHANNEL_COPY)
+    return any(s in blob for s in _PUBLIC_COPY)
 
 
 def build_plan(
@@ -135,13 +137,15 @@ def build_plan(
     pref = list(CLASS_PREFERENCE.get(info["task"]) or CLASS_PREFERENCE["chat"])
     if _skip_local(payload, headers):
         pref = [p for p in pref if p != "local"]
-    # drop providers without keys (except local/paid)
+    # drop providers without keys (except local + subscription CLIs)
     usable = []
     for p in pref:
-        if p in {"local", "paid"}:
+        if p in {"local", "claude", "codex"}:
             usable.append(p)
         elif key_for(p, keys):
             usable.append(p)
+    # Reorder subscription peers by task bias + remaining quota (sideways climb).
+    usable = _order_subscription_peers(usable, info["task"], quota)
     if pin_prov:
         # pinned: try that provider first (and only climb after)
         order = [pin_prov] + [p for p in usable if p != pin_prov]
@@ -157,6 +161,58 @@ def build_plan(
         "pin_model": pin_model,
         "info": info,
     }
+
+
+def _sub_remaining(provider: str, quota: QuotaStore | None) -> float:
+    """Higher = more remaining capacity. Used to pick among glm/claude/codex."""
+    score = 0.0
+    if quota is not None:
+        try:
+            ok, why = quota.allow(provider)
+            if not ok:
+                return -1.0
+            # prefer peers with fresher headroom (no backoff)
+            score += 100.0
+        except Exception:
+            score += 50.0
+    if provider == "glm":
+        try:
+            from core.glm_coding_plan import status as glm_status
+
+            st = glm_status()
+            week = st.get("week") or {}
+            left = max(0, int(week.get("cap") or 0) - int(week.get("used") or 0))
+            score += float(left)
+            burst = st.get("burst_5h") or {}
+            score += max(0, int(burst.get("cap") or 0) - int(burst.get("used") or 0)) * 0.5
+        except Exception:
+            score += 10.0
+    elif provider == "claude":
+        score += 80.0  # flat Max — prefer when glm is tight
+    elif provider == "codex":
+        score += 70.0
+    return score
+
+
+def _order_subscription_peers(
+    order: list[str],
+    task: str,
+    quota: QuotaStore | None,
+) -> list[str]:
+    """Keep free/premium prefix; rewrite glm/claude/codex block by fit + quota."""
+    prefix = [p for p in order if p not in SUBSCRIPTION_PEERS]
+    present = [p for p in order if p in SUBSCRIPTION_PEERS]
+    if not present:
+        return order
+    bias = list(SUB_TASK_BIAS.get(task) or SUBSCRIPTION_PEERS)
+    # sort present by (-remaining, bias index)
+    def key(p: str) -> tuple:
+        return (-_sub_remaining(p, quota), bias.index(p) if p in bias else 99)
+
+    present_sorted = sorted(present, key=key)
+    # drop peers with negative remaining (hard blocked)
+    present_sorted = [p for p in present_sorted if _sub_remaining(p, quota) >= 0]
+    return prefix + present_sorted
 
 
 def _retry_after_seconds(headers: dict[str, str], default: float = 30.0) -> float:
@@ -185,7 +241,7 @@ def route_chat(
     last_err: dict[str, Any] = {"error": {"message": "all rungs failed"}}
 
     for provider in plan["order"]:
-        if provider == "paid" and not allow_paid:
+        if provider in SUBSCRIPTION_PEERS and not allow_paid:
             continue
         model = model_for(
             provider,
@@ -269,7 +325,7 @@ def route_chat(
                     time.sleep(min(secs, 5.0))
                     continue
                 break
-            if code >= 400 or meta.get("outcome") in {"empty", "http_error", "no_key", "paid_fail"}:
+            if code >= 400 or meta.get("outcome") in {"empty", "http_error", "no_key", "paid_fail", "sub_fail"}:
                 row["outcome"] = meta.get("outcome") or f"http_{code}"
                 _log_call(row)
                 attempts.append(row)
@@ -302,7 +358,8 @@ def route_chat(
                 "rung": PROVIDERS[provider]["rung"],
                 "attempts": attempts,
                 "tokens_est": plan["tokens_est"],
-                "paid_avoided": provider != "paid",
+                "paid_avoided": provider not in SUBSCRIPTION_PEERS,
+                "subscription_used": provider in SUBSCRIPTION_PEERS,
             }
             # annotate response
             if isinstance(body, dict):
@@ -328,7 +385,7 @@ def route_stream(
     plan = build_plan(payload, keys=keys, headers=headers, quota=quota)
 
     for provider in plan["order"]:
-        if provider == "paid" and not allow_paid:
+        if provider in SUBSCRIPTION_PEERS and not allow_paid:
             continue
         model = model_for(provider, plan["task"], plan["pin_model"] if plan["pin_provider"] == provider else None)
         q_provider = "gemini_pro" if (provider == "gemini" and model == DEFAULT_MODELS["gemini_pro"]) else provider

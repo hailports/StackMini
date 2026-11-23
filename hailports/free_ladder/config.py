@@ -9,7 +9,7 @@ from pathlib import Path
 
 VERSION = "1.0.0"
 LADDER_PORT = int(os.environ.get("FREE_LADDER_PORT", "8790"))
-STACK = Path(os.environ.get("HAILPORTS_HOME", str(Path(__file__).resolve().parents[2])))
+STACK = Path(os.environ.get("CLAUDE_STACK_HOME", str(Path.home() / "claude-stack")))
 KEYS_ENV = Path(os.environ.get("FREE_LLM_KEYS", str(Path.home() / ".config/free-llm/keys.env")))
 RUNTIME = STACK / "data" / "runtime" / "free_ladder"
 LOG_DIR = STACK / "data" / "logs" / "free_ladder"
@@ -19,14 +19,16 @@ DAILY_SUMMARY = LOG_DIR / "daily_summary.jsonl"
 OR_FREE_CACHE = RUNTIME / "openrouter_free.json"
 
 LOCAL_BASE = os.environ.get("FREE_LADDER_LOCAL_URL", "http://127.0.0.1:8080/v1").rstrip("/")
-TAILSCALE_IP = os.environ.get("FREE_LADDER_TS_IP", "").strip()
+TAILSCALE_IP = os.environ.get("FREE_LADDER_TS_IP", "127.0.0.1")
 BIND_HOSTS = [
     h.strip()
-    for h in os.environ.get("FREE_LADDER_BIND", "127.0.0.1" + (f",{TAILSCALE_IP}" if TAILSCALE_IP else "")).split(",")
+    for h in os.environ.get("FREE_LADDER_BIND", f"127.0.0.1,{TAILSCALE_IP}").split(",")
     if h.strip()
 ]
 
 # Provider OpenAI-compatible bases
+# Rung 6 = flat-rate subscriptions (GLM + personal Claude + personal Codex).
+# Nothing paid-per-token sits above that rung. Corp Cursor/Codex stay outside this ladder.
 PROVIDERS = {
     "local": {"base": LOCAL_BASE, "key_env": None, "rung": 0},
     "cerebras": {"base": "https://api.cerebras.ai/v1", "key_env": "CEREBRAS_API_KEY", "rung": 1},
@@ -35,8 +37,12 @@ PROVIDERS = {
     "openrouter": {"base": "https://openrouter.ai/api/v1", "key_env": "OPENROUTER_API_KEY", "rung": 4},
     "plugsky": {"base": "https://api.plugsky.com/v1", "key_env": "PLUGSKY_API_KEY", "rung": 5},
     "glm": {"base": "https://api.z.ai/api/coding/paas/v4", "key_env": "ZAI_API_KEY", "rung": 6},
-    "paid": {"base": None, "key_env": None, "rung": 6},
+    "claude": {"base": None, "key_env": None, "rung": 6},  # personal Claude Code subscription
+    "codex": {"base": None, "key_env": None, "rung": 6},  # personal ChatGPT/Codex only
 }
+
+# Subscription peers (same rung). Order is rewritten at plan-time by task fit + remaining quota.
+SUBSCRIPTION_PEERS = ("glm", "claude", "codex")
 
 # Default models per provider (live-probed 2026-11-23; OpenRouter refreshed at runtime)
 DEFAULT_MODELS = {
@@ -62,20 +68,34 @@ QUOTAS = {
     "openrouter": {"req_day": 200, "tok_day": 500_000, "rpm": 10},
     "plugsky": {"req_day": 5_000, "tok_day": 5_000_000, "rpm": 60},
     "glm": {"req_day": 2_000, "tok_day": 2_000_000, "rpm": 30},
-    "paid": {"req_day": 200, "tok_day": 500_000, "rpm": 10},
+    "claude": {"req_day": 500, "tok_day": 2_000_000, "rpm": 20},
+    "codex": {"req_day": 500, "tok_day": 2_000_000, "rpm": 20},
 }
 
-# Task class -> preferred free provider order (best capable, not just first)
-# Rung numbers still enforce climb order within a class preference.
+# Task class -> preferred provider order (best capable free first; sub peers last)
+# Subscription peers appear as a group; build_plan expands/reorders them by quota.
+_SUB = ["glm", "claude", "codex"]
 CLASS_PREFERENCE = {
-    "classify": ["local", "groq", "cerebras", "gemini", "openrouter", "plugsky", "glm", "paid"],
-    "extract": ["local", "groq", "cerebras", "gemini", "openrouter", "plugsky", "glm", "paid"],
-    "chat": ["local", "cerebras", "groq", "gemini", "openrouter", "plugsky", "glm", "paid"],
-    "summarize": ["gemini", "local", "cerebras", "groq", "openrouter", "plugsky", "glm", "paid"],
-    "long_context": ["gemini", "openrouter", "local", "cerebras", "plugsky", "glm", "paid"],
-    "code": ["cerebras", "openrouter", "local", "groq", "plugsky", "glm", "paid"],
-    "reasoning": ["cerebras", "openrouter", "gemini", "groq", "plugsky", "glm", "paid"],
-    "vision": ["gemini", "openrouter", "groq", "local", "plugsky", "glm", "paid"],
+    "classify": ["local", "groq", "cerebras", "gemini", "openrouter", "plugsky"] + _SUB,
+    "extract": ["local", "groq", "cerebras", "gemini", "openrouter", "plugsky"] + _SUB,
+    "chat": ["local", "cerebras", "groq", "gemini", "openrouter", "plugsky"] + _SUB,
+    "summarize": ["gemini", "local", "cerebras", "groq", "openrouter", "plugsky"] + _SUB,
+    "long_context": ["gemini", "openrouter", "local", "cerebras", "plugsky"] + _SUB,
+    "code": ["cerebras", "openrouter", "local", "groq", "plugsky"] + _SUB,
+    "reasoning": ["cerebras", "openrouter", "gemini", "groq", "plugsky"] + _SUB,
+    "vision": ["gemini", "openrouter", "groq", "local", "plugsky"] + _SUB,
+}
+
+# Preferred first peer inside the subscription rung by task
+SUB_TASK_BIAS = {
+    "code": ["glm", "claude", "codex"],
+    "reasoning": ["claude", "glm", "codex"],
+    "long_context": ["claude", "codex", "glm"],
+    "summarize": ["claude", "glm", "codex"],
+    "chat": ["claude", "glm", "codex"],
+    "classify": ["glm", "claude", "codex"],
+    "extract": ["glm", "claude", "codex"],
+    "vision": ["claude", "glm", "codex"],
 }
 
 TIMEOUTS = {
@@ -86,7 +106,8 @@ TIMEOUTS = {
     "openrouter": 120.0,
     "plugsky": 120.0,
     "glm": 120.0,
-    "paid": 180.0,
+    "claude": 180.0,
+    "codex": 180.0,
 }
 
 USER_AGENT = "free-ladder/1.0 (+hailports)"

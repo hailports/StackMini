@@ -1,4 +1,5 @@
 #!/bin/sh
+# Free-ladder LLM gateway (:8790). OpenAI + Anthropic compatible.
 set -eu
 SOURCE=$0
 while [ -L "$SOURCE" ]; do
@@ -11,12 +12,13 @@ while [ -L "$SOURCE" ]; do
   esac
 done
 DIR=$(CDPATH= cd -- "$(dirname "$SOURCE")" && pwd)
-ROOT=$(CDPATH= cd -- "$DIR/../.." && pwd)
+ROOT=$(CDPATH= cd -- "$DIR/.." && pwd)
 export PYTHONPATH="${ROOT}${PYTHONPATH:+:$PYTHONPATH}"
+# load keys without printing
 if [ -f "${FREE_LLM_KEYS:-$HOME/.config/free-llm/keys.env}" ]; then
   set -a
   # shellcheck disable=SC1090
   . "${FREE_LLM_KEYS:-$HOME/.config/free-llm/keys.env}"
   set +a
 fi
-exec /usr/bin/python3 -m hailports.free_ladder "$@"
+exec /usr/bin/python3 -m core.free_ladder "$@"

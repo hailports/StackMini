@@ -8,10 +8,10 @@
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>set -a; [ -f "$HOME/.config/free-llm/keys.env" ] &amp;&amp; . "$HOME/.config/free-llm/keys.env"; set +a; export PYTHONPATH="$HOME/hailports${PYTHONPATH:+:$PYTHONPATH}"; exec /usr/bin/python3 -m hailports.free_ladder --serve --port 8790 --bind 127.0.0.1</string>
+    <string>set -a; [ -f "$HOME/.config/free-llm/keys.env" ] &amp;&amp; . "$HOME/.config/free-llm/keys.env"; set +a; export PYTHONPATH="$HOME/claude-stack${PYTHONPATH:+:$PYTHONPATH}"; exec /usr/bin/python3 -m core.free_ladder --serve --port 8790 --bind 127.0.0.1,127.0.0.1</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>/tmp</string>
+  <string>/Users/user/claude-stack</string>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
@@ -21,8 +21,19 @@
   <key>ProcessType</key>
   <string>Background</string>
   <key>StandardOutPath</key>
-  <string>/tmp/hailports-free-ladder.log</string>
+  <string>/Users/user/Library/Logs/claude-stack/free-ladder.log</string>
   <key>StandardErrorPath</key>
-  <string>/tmp/hailports-free-ladder.log</string>
+  <string>/Users/user/Library/Logs/claude-stack/free-ladder.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/Users/user</string>
+    <key>CLAUDE_STACK_HOME</key>
+    <string>/Users/user/claude-stack</string>
+    <key>PYTHONPATH</key>
+    <string>/Users/user/claude-stack</string>
+    <key>PLUGSKY_MODEL</key>
+    <string>plugsky-ultra</string>
+  </dict>
 </dict>
 </plist>
