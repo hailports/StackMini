@@ -13,7 +13,14 @@ from .config import (
     CLASS_PREFERENCE,
     DAILY_SUMMARY,
     DEFAULT_MODELS,
+    LOCAL_BUSY_PROBE,
+    LONG_DEADLINE_S,
+    MIN_RUNG_S,
     PROVIDERS,
+    SHORT_DEADLINE_S,
+    SHORT_PROMPT_TOKENS,
+    SHORT_TIMEOUTS,
+    TIMEOUTS,
     SUBSCRIPTION_PEERS,
     SUB_TASK_BIAS,
     ensure_dirs,
@@ -24,6 +31,7 @@ from .providers import (
     chat_completions,
     is_openrouter_free,
     list_openrouter_free,
+    local_busy,
     model_for,
     stream_chat_completions,
 )
@@ -239,10 +247,32 @@ def route_chat(
     plan = build_plan(payload, keys=keys, headers=headers, quota=quota)
     attempts: list[dict[str, Any]] = []
     last_err: dict[str, Any] = {"error": {"message": "all rungs failed"}}
+    short = int(plan["tokens_est"] or 0) <= SHORT_PROMPT_TOKENS
+    deadline_s = SHORT_DEADLINE_S if short else LONG_DEADLINE_S
+    try:
+        hdr_deadline = float((headers or {}).get("x-free-ladder-deadline") or 0)
+        if hdr_deadline > 0:
+            deadline_s = min(deadline_s, hdr_deadline)
+    except ValueError:
+        pass
+    t_start = time.time()
+
+    def _remaining() -> float:
+        return deadline_s - (time.time() - t_start)
 
     for provider in plan["order"]:
         if provider in SUBSCRIPTION_PEERS and not allow_paid:
             continue
+        if _remaining() < MIN_RUNG_S:
+            attempts.append({"provider": provider, "outcome": "deadline", "rung": PROVIDERS[provider]["rung"]})
+            break
+        if provider == "local" and short and LOCAL_BUSY_PROBE and not plan["pin_provider"] == "local":
+            if local_busy():
+                row = {"provider": "local", "model": "auto", "tokens": 0, "latency_ms": 0,
+                       "outcome": "local_busy", "rung": PROVIDERS["local"]["rung"], "task": plan["task"]}
+                _log_call(row)
+                attempts.append(row)
+                continue
         model = model_for(
             provider,
             plan["task"],
@@ -297,10 +327,12 @@ def route_chat(
                 attempts.append(row)
                 continue
 
-        # one retry max per rung
-        for attempt in range(2):
+        # one retry max per rung (none for local: a slow local answer will not get faster)
+        for attempt in range(1 if provider == "local" else 2):
+            cap = (SHORT_TIMEOUTS if short else TIMEOUTS).get(provider, 30.0 if short else 60.0)
+            rung_timeout = max(1.0, min(cap, _remaining()))
             code, body, out_h, meta = chat_completions(
-                provider, payload, model=model, keys=keys
+                provider, payload, model=model, keys=keys, timeout=rung_timeout
             )
             row = {
                 "provider": provider,
@@ -321,8 +353,8 @@ def route_chat(
                 row["outcome"] = "429"
                 _log_call(row)
                 attempts.append(row)
-                if attempt == 0:
-                    time.sleep(min(secs, 5.0))
+                if attempt == 0 and _remaining() > secs + MIN_RUNG_S and secs <= 5.0:
+                    time.sleep(secs)
                     continue
                 break
             if code >= 400 or meta.get("outcome") in {"empty", "http_error", "no_key", "paid_fail", "sub_fail"}:
@@ -391,6 +423,9 @@ def route_stream(
         q_provider = "gemini_pro" if (provider == "gemini" and model == DEFAULT_MODELS["gemini_pro"]) else provider
         ok, why = quota.allow(q_provider)
         if not ok:
+            continue
+        if (provider == "local" and LOCAL_BUSY_PROBE and plan["pin_provider"] != "local"
+                and int(plan["tokens_est"] or 0) <= SHORT_PROMPT_TOKENS and local_busy()):
             continue
         if provider == "openrouter":
             if plan["pin_model"] and plan["pin_provider"] == "openrouter" and not is_openrouter_free(plan["pin_model"], keys):

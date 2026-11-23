@@ -56,6 +56,12 @@ def _http_json(
         except Exception:
             parsed = {"error": {"message": raw.decode("utf-8", "replace")[:500]}}
         return int(e.code), parsed, out_headers
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        # Timeouts / refused connections must fall through to the next rung, not 500 the request.
+        reason = getattr(e, "reason", e)
+        msg = str(reason)[:200]
+        code = 504 if "timed out" in msg.lower() or isinstance(reason, TimeoutError) else 503
+        return code, {"error": {"message": f"timeout: {msg}" if code == 504 else f"unreachable: {msg}"}}, {}
 
 
 def _auth_headers(provider: str, keys: dict[str, str]) -> dict[str, str]:
@@ -224,6 +230,7 @@ def chat_completions(
     model: str,
     keys: dict[str, str] | None = None,
     stream: bool = False,
+    timeout: float | None = None,
 ) -> tuple[int, dict[str, Any], dict[str, str], dict[str, Any]]:
     """Non-stream chat completion. Returns status, body, headers, meta."""
     keys = keys or load_keys()
@@ -231,7 +238,7 @@ def chat_completions(
     t0 = time.time()
 
     if provider in {"claude", "codex"}:
-        return _subscription_cli(provider, payload, meta, t0)
+        return _subscription_cli(provider, payload, meta, t0, timeout=timeout)
 
     if provider == "openrouter":
         if not is_openrouter_free(model, keys):
@@ -277,7 +284,7 @@ def chat_completions(
         }
 
     url = base.rstrip("/") + "/chat/completions"
-    timeout = TIMEOUTS.get(provider, 60.0)
+    timeout = timeout or TIMEOUTS.get(provider, 60.0)
     code, data, out_h = _http_json("POST", url, headers=hdrs, body=body, timeout=timeout)
     latency = int((time.time() - t0) * 1000)
     # some providers (Gemini) return a JSON list on errors
@@ -374,11 +381,34 @@ def _alert_plugsky_weak(served: str) -> None:
         pass
 
 
+def local_busy(probe_timeout: float = 1.0) -> bool:
+    """True when every local slot is already generating (request would queue).
+
+    A probe that does not answer within probe_timeout also counts as busy: a hung
+    or saturated local server is exactly the case we must not wait on.
+    """
+    root = PROVIDERS["local"]["base"].rstrip("/")
+    if root.endswith("/v1"):
+        root = root[:-3]
+    try:
+        req = urllib.request.Request(root + "/slots", headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=probe_timeout) as resp:
+            slots = json.loads(resp.read().decode("utf-8", "replace") or "[]")
+    except urllib.error.HTTPError:
+        return False  # no /slots endpoint: unknown, let the rung timeout decide
+    except Exception:
+        return True
+    if not isinstance(slots, list) or not slots:
+        return False
+    return all(isinstance(s, dict) and s.get("is_processing") for s in slots)
+
+
 def _subscription_cli(
     provider: str,
     payload: dict[str, Any],
     meta: dict[str, Any],
     t0: float,
+    timeout: float | None = None,
 ) -> tuple[int, dict[str, Any], dict[str, str], dict[str, Any]]:
     """Personal Claude or personal Codex only — do not change how they authenticate."""
     safe = redact_payload(payload)
@@ -398,7 +428,7 @@ def _subscription_cli(
                 ["claude", "-p", prompt, "--output-format", "text"],
                 capture_output=True,
                 text=True,
-                timeout=TIMEOUTS["claude"],
+                timeout=timeout or TIMEOUTS["claude"],
                 env=env,
             )
             if proc.returncode == 0 and (proc.stdout or "").strip():
@@ -439,7 +469,7 @@ def _subscription_cli(
             ["codex", "exec", "--skip-git-repo-check", "-q", prompt[:6000]],
             capture_output=True,
             text=True,
-            timeout=TIMEOUTS["codex"],
+            timeout=timeout or TIMEOUTS["codex"],
             env=env,
         )
         if proc.returncode == 0 and (proc.stdout or "").strip():

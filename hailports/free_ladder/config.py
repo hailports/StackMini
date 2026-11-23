@@ -110,6 +110,25 @@ TIMEOUTS = {
     "codex": 180.0,
 }
 
+# Fast fallthrough for short prompts: tight per-rung caps + a whole-request deadline,
+# so one slow or queued rung cannot eat the client's budget.
+SHORT_PROMPT_TOKENS = int(os.environ.get("FREE_LADDER_SHORT_TOKENS", "1500"))
+SHORT_TIMEOUTS = {
+    "local": float(os.environ.get("FREE_LADDER_LOCAL_SHORT_TIMEOUT", "8")),
+    "cerebras": 10.0,
+    "groq": 10.0,
+    "gemini": 12.0,
+    "openrouter": 12.0,
+    "plugsky": 12.0,
+    "glm": 15.0,
+    "claude": 40.0,
+    "codex": 40.0,
+}
+SHORT_DEADLINE_S = float(os.environ.get("FREE_LADDER_SHORT_DEADLINE", "45"))
+LONG_DEADLINE_S = float(os.environ.get("FREE_LADDER_LONG_DEADLINE", "240"))
+MIN_RUNG_S = 3.0  # do not start a rung with less budget than this
+LOCAL_BUSY_PROBE = os.environ.get("FREE_LADDER_LOCAL_BUSY_PROBE", "1") != "0"
+
 USER_AGENT = "free-ladder/1.0 (+hailports)"
 
 
