@@ -34,6 +34,7 @@ Nobody pastes a key, and a trial has no key at all.
   good license key, so a rotated token never strands a licensed Mac. Trial copies use the baked token. The bundle
   is swapped in place and launchd's KeepAlive (or a detached `open`) brings the new one up.
   `paisty.app/Contents/MacOS/paisty --check-update` prints what the feed offers without installing.
+- **Free setup assist.** `/api/setup` writes the notes-folder starter. The engine is configured (`SETUP_MODEL_URL`, `SETUP_MODEL_NAME`, default Plugsky `plugsky-ultra`). The key stays in the server environment. A configured fallback is tried if that call fails. The `x-plugsky-served-model` header is logged. A lite, micro, or gpu-27b served engine is alerted.
 - **Website.** `/dl` streams R2 `paisty.dmg`, which every release overwrites and CI reads back, so a new
   download is always the newest build. Ship the app before the site's trial change: older copies cannot use an
   entitlement.

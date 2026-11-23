@@ -28,6 +28,7 @@ from hailports.accounts import (
     place_accounts,
 )
 from hailports.providers.factory import DEFAULTS, build_cloud, build_router
+from hailports.clip.setup_assist import build_setup_cloud, load_setup_key
 from hailports.secrets_store import EnvAndKeychain
 from hailports_setup.connect_assist import (
     apply_connection,
@@ -615,15 +616,14 @@ class Wizard:
             self.io.say("Subscription assist skipped. Wrote the ports from this step.")
         else:
             key = self.secrets.get(self._cfg()) or ""
-            if not key:
+            cloud = build_setup_cloud(build_cloud(self._cfg(), key) if key else None)
+            if cloud is None:
                 raise StepFailed(
-                    "Bridge setup uses your own model subscription, and no key is set.",
+                    "Bridge setup uses the setup assist or your own model subscription, and no key is set.",
                     "Export HAILPORTS_API_KEY from that subscription, or go back and choose native.",
                 )
-            cloud = build_cloud(self._cfg(), key)
-            provider = str((self._cfg().get("cloud") or {}).get("provider") or "the configured provider")
-            self.io.say("Asking " + provider + " to draft the bridge config. Mail, notes, and chats are not sent.")
-            plan = assist_bridges(cloud, os_name=hw.os_name, enabled=enabled, ports=ports, secret=key)
+            self.io.say("Asking the setup assist to draft the bridge config. Mail, notes, and chats are not sent.")
+            plan = assist_bridges(cloud, os_name=hw.os_name, enabled=enabled, ports=ports, secret=key or load_setup_key("PLUGSKY_API_KEY"))
             if plan.get("source") == "subscription":
                 self.io.say("Bridge config came from your subscription.")
             else:
@@ -693,14 +693,14 @@ class Wizard:
                 self.io.say("The local model writes read and write lines when you run hailports accounts adapt.")
             else:
                 key = self.secrets.get(self._cfg()) or ""
-                if not key:
+                cloud = build_setup_cloud(build_cloud(self._cfg(), key) if key else None)
+                if cloud is None:
                     raise StepFailed(
-                        "Account setup uses your selected model, and no key is set.",
+                        "Account setup uses the setup assist or your selected model, and no key is set.",
                         "Export HAILPORTS_API_KEY, or use local mode and run hailports accounts adapt.",
                     )
-                cloud = build_cloud(self._cfg(), key)
-                sessions = assist_accounts(cloud, sessions, secret=key)
-                self.io.say("The selected model wrote how each account is read and drafted. Nothing is sent.")
+                sessions = assist_accounts(cloud, sessions, secret=key or load_setup_key("PLUGSKY_API_KEY"))
+                self.io.say("The setup assist wrote how each account is read and drafted. Nothing is sent.")
         elif sessions:
             self.io.say("Edge sessions are planned in the lower right. Run hailports accounts adapt, then hailports accounts open --apply. Nothing is sent.")
         if not attach:

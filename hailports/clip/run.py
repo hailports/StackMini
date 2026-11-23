@@ -671,7 +671,7 @@ def _save_route(dest: Path, route: dict, pick: str = "", edits: bool = False) ->
 def _onboard_auto(args, cfg, scan: dict | None = None) -> int:
     """One click. Apply what the scan found. Keys go to 0600 files and are never printed."""
     from hailports.config import save_file
-    from hailports.clip.board import BoardError, auto_setup, scan_setup, server_setup_text, tie_notes
+    from hailports.clip.board import BoardError, auto_setup, notes_setup_body, scan_setup, tie_notes
     from hailports.clip.gate import read_entitlement, read_token
     dest = _route_dest(args)
     found = scan if scan is not None else scan_setup()
@@ -679,8 +679,8 @@ def _onboard_auto(args, cfg, scan: dict | None = None) -> int:
     setup_url = license_url.rsplit("/", 1)[0] + "/setup"
 
     def setup_text(mail_on: bool, app: str) -> str:
-        return server_setup_text(mail_on, False, app, read_token(cfg), setup_url,
-                                 entitlement=read_entitlement().get("token", ""))
+        return notes_setup_body(mail_on, False, app, read_token(cfg), setup_url,
+                                entitlement=read_entitlement().get("token", ""))
 
     try:
         updated, summary = auto_setup(
@@ -776,12 +776,12 @@ def cmd_onboard(args, cfg) -> int:
             mail_on = bool((answers or {}).get("mail"))
             calendar_on = bool((answers or {}).get("calendar"))
             app = str((answers or {}).get("app") or "").strip().lower()
-            from hailports.clip.board import server_setup_text
+            from hailports.clip.board import notes_setup_body
             from hailports.clip.gate import read_entitlement, read_token
             license_url = str((cfg.get("paiste") or {}).get("license_url") or "https://www.paisty.com/api/license")
             setup_url = license_url.rsplit("/", 1)[0] + "/setup"
-            written = server_setup_text(mail_on, calendar_on, app, read_token(cfg), setup_url,
-                                        entitlement=read_entitlement().get("token", ""))
+            written = notes_setup_body(mail_on, calendar_on, app, read_token(cfg), setup_url,
+                                       entitlement=read_entitlement().get("token", ""))
             made = make_notes(dest_notes, mail=mail_on, calendar=calendar_on, body=written)
             paiste = dict(cfg.get("paiste") or {})
             paiste["notes"] = "folder"

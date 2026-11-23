@@ -890,8 +890,17 @@ def server_setup_text(mail: bool, calendar: bool, app: str, token: str, url: str
     return note if note.endswith("\n") else note + "\n"
 
 
+def notes_setup_body(mail: bool, calendar: bool, app: str, token: str, url: str, post=None, entitlement: str = "", run_plugsky=None, run_cursor=None) -> str:
+    """Free notes starter: the setup server, then local Plugsky, then Cursor. Never rewrites engine order."""
+    from hailports.clip.setup_assist import assisted_setup_text, setup_facts
+    note = server_setup_text(mail, calendar, app, token, url, post=post, entitlement=entitlement)
+    if note:
+        return note
+    return assisted_setup_text(setup_facts(mail, calendar, app), run_plugsky=run_plugsky, run_cursor=run_cursor)
+
+
 def cursor_setup_text(facts: str, run=None) -> str:
-    """Cursor ask mode, setup only. It does not edit files. A secret in the text is dropped."""
+    """Cursor ask mode, setup only. Used when Plugsky is unavailable. It does not edit files. A secret in the text is dropped."""
     from hailports.clip.hops import cursor_argv, only_reply
     prompt = (
         "Write a short markdown note for a notes folder on this Mac. "
