@@ -7,8 +7,10 @@ import time
 from pathlib import Path
 
 from hailports.never_idle import (
+    CAPACITY_TOK_S,
     ENQUEUE_SKIP_DEPTH,
     LOW_WATER,
+    PAUSE_WINDOW_N,
     blocked_text,
     claim_next,
     content_hash,
@@ -25,6 +27,7 @@ from hailports.never_idle import (
     should_scan_enqueue,
     soft_throttle_reason,
     throttle_sleep_s,
+    util_pct,
 )
 
 
@@ -126,13 +129,21 @@ def test_quality_pause():
     with tempfile.TemporaryDirectory() as tmp:
         con = open_queue(Path(tmp) / "q.db")
         # ONE pause path: rolling window of ≥30, threshold 20%.
-        for _ in range(29):
+        for _ in range(PAUSE_WINDOW_N - 1):
             record_quality(con, "pre_draft", False)
-        record_quality(con, "pre_draft", False)  # 30th
+        record_quality(con, "pre_draft", False)  # window_n-th
         row = con.execute(
             "SELECT paused_until FROM quality WHERE producer='pre_draft'"
         ).fetchone()
         assert float(row[0]) > time.time()
+
+
+def test_util_pct_uses_measured_capacity():
+    assert CAPACITY_TOK_S == 58.0
+    # Continuous decode at capacity → ~100%.
+    assert util_pct(58.0 * 60, 60) >= 99.0
+    # Decode-seconds path.
+    assert util_pct(0, 100, decode_seconds=60) == 60.0
 
 
 def test_deterministic_gate_thin_draft():

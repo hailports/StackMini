@@ -51,6 +51,15 @@ PRODUCER_PRIORITY = {
 LOW_WATER = 50
 ENQUEUE_SKIP_DEPTH = LOW_WATER * 3
 DUAL_TTFT_P95_MAX_MS = 1500.0
+# Measured local decode ~55-60 tok/s. Using 100 made a 60% util target
+# physically unreachable under continuous decode.
+CAPACITY_TOK_S = 58.0
+# Stall watchdog (seconds). Clean-exit so KeepAlive restarts instead of jetsam -9
+# when SQLite purgeableCacheShrink wedges the process under swap pressure.
+WATCHDOG_STALL_S = 120.0
+PAUSE_WINDOW_N = 30
+PAUSE_FAIL_RATE = 0.20
+PAUSE_COOL_S = 600.0
 
 
 def blocked_text(text: str) -> bool:
@@ -243,10 +252,23 @@ def interactive_request_inflight(
 
 
 def open_queue(db_path: Path) -> sqlite3.Connection:
+    """Open the queue DB with WAL + anti-thrash pragmas.
+
+    Under memory pressure macOS SQLite can spin in purgeableCacheShrink on
+    statement reset. Keep the cache small, disable mmap, and use FILE temps.
+    """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(str(db_path), timeout=60)
     con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA synchronous=NORMAL")
     con.execute("PRAGMA busy_timeout=30000")
+    con.execute("PRAGMA temp_store=FILE")
+    con.execute("PRAGMA cache_size=-2000")
+    con.execute("PRAGMA mmap_size=0")
+    try:
+        con.execute("PRAGMA cache_spill=OFF")
+    except sqlite3.Error:
+        pass
     con.executescript(
         """
         CREATE TABLE IF NOT EXISTS queue (
@@ -430,13 +452,34 @@ def mark_done(
     con.commit()
 
 
+def util_pct(
+    tokens_out: float,
+    elapsed_s: float,
+    *,
+    capacity_tok_s: float = CAPACITY_TOK_S,
+    decode_seconds: float | None = None,
+) -> float:
+    """Busy fraction for a window.
+
+    Prefer decode_seconds/wall when the engine exposes it; otherwise tokens
+    over measured capacity. Clamped to [0, 100].
+    """
+    elapsed = max(1.0, float(elapsed_s))
+    if decode_seconds is not None:
+        return max(0.0, min(100.0, 100.0 * float(decode_seconds) / elapsed))
+    return max(
+        0.0,
+        min(100.0, 100.0 * float(tokens_out) / (float(capacity_tok_s) * elapsed)),
+    )
+
+
 def record_quality(
     con: sqlite3.Connection,
     producer: str,
     ok: bool,
-    fail_pause: float = 0.20,
-    window_n: int = 30,
-    cool_s: float = 600.0,
+    fail_pause: float = PAUSE_FAIL_RATE,
+    window_n: int = PAUSE_WINDOW_N,
+    cool_s: float = PAUSE_COOL_S,
 ) -> None:
     """ONE pause path: rolling window (≥window_n), threshold fail_pause, short cool-off."""
     con.execute(
