@@ -206,11 +206,11 @@ def test_thin_floor_only_for_long_incoming():
     assert any("too thin" in w for w in localfirst.gate(short, "email", 180, me, incoming=120))
 
 
-def test_figures_route_gives_cursor_180s_plain_keeps_90():
+def test_figures_route_gives_cursor_60s_plain_keeps_45():
     out = localfirst.premium_first(_cfg(["local", "cursor"]))
     from hailports.clip.hops import endpoints_from, CURSOR_TIMEOUT_S
-    assert endpoints_from(out)[0]["timeout_s"] == 180
-    assert "timeout_s" not in endpoints_from(_cfg(["cursor", "local"]))[0] and CURSOR_TIMEOUT_S == 90
+    assert endpoints_from(out)[0]["timeout_s"] == 60
+    assert "timeout_s" not in endpoints_from(_cfg(["cursor", "local"]))[0] and CURSOR_TIMEOUT_S == 45
 
 
 def test_slow_cursor_is_not_asked_twice(monkeypatch):
