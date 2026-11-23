@@ -268,3 +268,19 @@ Real-world A/B on this machine (Outlook/Zoom drafts, knowledge-base facts, ADO t
 
 ## Bigbench 2026-11-16
 Large real-world A/B (drafts/WB/ADO/longctx/structured/vision) kept **Gemma-4-26B-A4B-it-QAT** on `:8080`. Overall pair wins {'minicpm': 38, 'gemma': 40, 'tie': 69}; sign-test p=0.909946. Swap still via `gd_model_variant` + `gemma_serve.sh` route.
+
+## Splash 1.7.1 and memory budget on 2026-11-23
+
+- Live build: Splash 1.7.1. Both 1.7.1 and 1.7.0 have private copies under `~/claude-stack/opt/splash-<version>/libexec`, which Homebrew cleanup can't reach. `scripts/splash-keg.sh` (installed as `bin/splash-<version>`) looks there first and falls back to the Homebrew keg. `flags/splash_bin` picks the build. Rollback means pointing that flag at `bin/splash-1.7.0` and restarting; this was tested on 2026-11-23 (22 s down; health, pong and image passed). The Homebrew formula is pinned, and the shell sets `HOMEBREW_NO_INSTALL_CLEANUP=1` and `HOMEBREW_NO_AUTO_UPDATE=1`.
+- What killed 1.7.1: the host's one-minute RSS budget job (outside this repo) matched the 1.7.1 Python launcher against its generic 250 MB `Python` rule and kickstarted the model label once a minute after each start, before work hours. The host rules now treat the Splash build paths as the model (exempt from size kicks).
+- Metal budget raised from 13.5G to 16G (`flags/splash_max_memory=16G`, `flags/splash_wired_budget_gb=17`). At 16G every routed expert is resident (10041 MiB); at 13.5G 35% of experts streamed from SSD. Measured on 1.7.1 with normal workday traffic:
+
+| | 13.5G | 16G |
+|---|---|---|
+| short decode (400 tok) | 55.8 | 64.8 (warm) |
+| code-gen decode (1000 tok) | 93.5 | 116.3 |
+| ~53K prompt decode | 35.7 | 36.5 |
+| ~53K prompt TTFT | 174 s (303 tok/s) | 169 s (314 tok/s) |
+
+  Swap went from about 3.0 GB to 3.5 GB and then held steady (no pageout storm). Short decode is slow for 1–2 minutes after a restart while the experts page in.
+- `scripts/splash_kick_verify.sh` restarts the label and proves health, pong and the image test, logging the downtime.
