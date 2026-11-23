@@ -24,6 +24,8 @@ import sqlite3
 import time
 from pathlib import Path
 
+from hailports import never_idle_dbguard as dbguard
+
 _BLOCKED_PATH = re.compile(r"(?i)(?:^|[\\/])(?:legal|finance)(?:[\\/]|$)")
 _SECRET = re.compile(
     r"(?i)\b(?:password|passwd|seed phrase|2fa|otp|totp|recovery code|private key)\b"
@@ -277,14 +279,24 @@ def repair_queue_indexes(con: sqlite3.Connection) -> bool:
         return False
 
 
-def open_queue(db_path: Path) -> sqlite3.Connection:
+def open_queue(db_path: Path, *, lock=None) -> sqlite3.Connection:
     """Open the queue DB with WAL + anti-thrash pragmas.
 
     Under memory pressure macOS SQLite can spin in purgeableCacheShrink on
     statement reset. Keep the cache small, disable mmap, and use FILE temps.
+
+    Runs quick_check first and rebuilds a malformed db (bad file kept aside).
+    Pass a shared RLock when several threads use the returned connection:
+    every statement is then serialized and materialized under it, which is
+    what stops the sqlite3BtreeCursor segfault + "malformed" corruption seen
+    when one handle was stepped from two threads at once.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(str(db_path), timeout=60)
+    dbguard.startup_check(db_path)
+    kw = {}
+    if lock is not None:
+        kw = {"check_same_thread": False, "factory": dbguard.make_locked_factory(lock)}
+    con = sqlite3.connect(str(db_path), timeout=60, **kw)
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA synchronous=NORMAL")
     con.execute("PRAGMA busy_timeout=30000")
