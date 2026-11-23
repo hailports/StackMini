@@ -20,14 +20,31 @@ for P in ${LABEL_PREFIX:-}; do
   launchctl list | awk -v p="$P" 'NR>1 && index($3,p)==1 && $2!="0" && $2!="-" {print "- "$3" pid="$1" last_exit="$2}'
 done
 echo; echo "## Health"
-for u in ${HEALTH_URLS:-}; do echo "- $u: $(curl -s -m5 "$u" | cut -c1-120 || echo DOWN)"; done
+# A service may bind only a non-loopback address (e.g. a VPN IP). When a loopback URL answers
+# nothing, retry the same port on each address that port is listening on, and say which one answered.
+health() {
+  local u=$1 out port alt
+  out=$(curl -s -m5 "$u" | tr -d '\n' | cut -c1-120)
+  if [ -z "$out" ] && [[ "$u" =~ ^(https?://)(127\.0\.0\.1|localhost):([0-9]+)(/.*)?$ ]]; then
+    port=${BASH_REMATCH[3]}
+    for alt in $(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | awk 'NR>1{sub(/:[0-9]+$/,"",$9); print $9}' | sort -u); do
+      [ "$alt" = "*" ] && continue
+      out=$(curl -s -m5 "${BASH_REMATCH[1]}$alt:$port${BASH_REMATCH[4]}" | tr -d '\n' | cut -c1-120)
+      [ -n "$out" ] && { out="$out (via $alt)"; break; }
+    done
+  fi
+  echo "${out:-DOWN}"
+}
+for u in ${HEALTH_URLS:-}; do echo "- $u: $(health "$u")"; done
 if [ -n "${INDEX_DB:-}" ] && [ -f "$INDEX_DB" ]; then
   echo; echo "## Index freshness (newest ts per source)"
-  sqlite3 -readonly "$INDEX_DB" "SELECT '- '||source||': '||CASE WHEN typeof(m)='text' THEN m ELSE datetime(m,'unixepoch','localtime')||' ('||printf('%.1f',(strftime('%s','now')-m)/3600.0)||' h ago)' END||', '||n||' docs' FROM (SELECT source, max(ts) m, count(*) n FROM docs GROUP BY source) ORDER BY m DESC;"
+  # Future-dated items (calendar events) would make a source look fresh forever, so the age uses the
+  # newest item that is not in the future, and the future-dated count is shown separately.
+  sqlite3 -readonly "$INDEX_DB" "SELECT '- '||source||': '||CASE WHEN typeof(m)='text' THEN m WHEN m IS NULL THEN 'only future-dated items' ELSE datetime(m,'unixepoch','localtime')||' ('||printf('%.1f',(strftime('%s','now')-m)/3600.0)||' h ago)' END||', '||n||' docs'||CASE WHEN f>0 THEN ', '||f||' future-dated' ELSE '' END FROM (SELECT source, max(CASE WHEN typeof(ts)='text' OR ts<=CAST(strftime('%s','now') AS INTEGER) THEN ts END) m, sum(CASE WHEN typeof(ts)!='text' AND ts>CAST(strftime('%s','now') AS INTEGER) THEN 1 ELSE 0 END) f, count(*) n FROM docs GROUP BY source) ORDER BY m DESC;"
 fi
 if [ -n "${ENGINE_URL:-}" ]; then
   echo; echo "## Model server"
-  echo "- engine /ready: $(curl -s -m5 "$ENGINE_URL/ready" | cut -c1-120 || echo DOWN)"
+  echo "- engine /ready: $(health "$ENGINE_URL/ready")"
   echo "- engine /status: $(curl -s -m5 "$ENGINE_URL/status" | tr -d '\n' | cut -c1-200 || echo DOWN)"
   echo "- models: $(curl -s -m5 "$ENGINE_URL/v1/models" | python3 -c 'import json,sys;print(", ".join(m["id"] for m in json.load(sys.stdin)["data"]))' 2>/dev/null || echo n/a)"
 fi
