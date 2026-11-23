@@ -75,4 +75,6 @@ if [ -n "$EXPERT" ] && [ "$EXPERT" != "auto" ] && [ "$EXPERT" != "off" ]; then
 elif [ "$EXPERT" = "off" ]; then
   ARGS+=(--expert-memory off)
 fi
+# Optional per-build extra flags (e.g. 1.7.1-only --max-concurrent-requests); empty/missing = none.
+EXTRA=$( [ -s $F/splash_extra_args ] && head -1 $F/splash_extra_args ); [ -n "$EXTRA" ] && { read -r -a XA <<< "$EXTRA"; ARGS+=("${XA[@]}"); echo "SPLASH extra=$EXTRA" >&2; }
 exec "$SPLASH_BIN" "${ARGS[@]}" >> "$LOGD/splash-server.log" 2>&1
