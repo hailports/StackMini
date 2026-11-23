@@ -28,10 +28,13 @@ STATE=$(rf $F/splash_state_format fp32)
 KV=$(rf $F/splash_kv_format int8)
 QUEUE=$(rf $F/splash_queue_size 16)
 LANGONLY=$(rf $F/splash_language_only 0)
+# Pinned engine build (side-by-side Homebrew kegs; rollback = point flags/splash_bin at the old keg wrapper,
+# see scripts/splash-keg.sh). The plain bin/splash wrapper follows opt/splash, i.e. the newest keg.
+SPLASH_BIN=$(rf $F/splash_bin /opt/homebrew/bin/splash); [ -x "$SPLASH_BIN" ] || SPLASH_BIN=/opt/homebrew/bin/splash
 GGUF=$M/Qwen3.6-35B-A3B-$QUANT.gguf; MMPROJ=$M/mmproj-BF16.gguf; DRAFT=$M/dflash2
 LOGD=$HOME/claude-stack/logs; mkdir -p "$LOGD" "$HOME/llm-appliance/runtime"
 E=$(date +%s); echo $E > $HOME/llm-appliance/runtime/llama_start_epoch
-echo "LLAMA_START_EPOCH=$E SPLASH quant=$QUANT ctx=$CTX mem=$MEM expert=$EXPERT state=$STATE kv=$KV queue=$QUEUE langonly=$LANGONLY disk=$DISK up=$UP" >&2
+echo "LLAMA_START_EPOCH=$E SPLASH quant=$QUANT ctx=$CTX mem=$MEM expert=$EXPERT state=$STATE kv=$KV queue=$QUEUE langonly=$LANGONLY disk=$DISK up=$UP bin=$SPLASH_BIN" >&2
 # Required weights (External may mount late after a reboot): wait and log, never crash-loop.
 waited=0
 while :; do
@@ -72,4 +75,4 @@ if [ -n "$EXPERT" ] && [ "$EXPERT" != "auto" ] && [ "$EXPERT" != "off" ]; then
 elif [ "$EXPERT" = "off" ]; then
   ARGS+=(--expert-memory off)
 fi
-exec /opt/homebrew/bin/splash "${ARGS[@]}" >> "$LOGD/splash-server.log" 2>&1
+exec "$SPLASH_BIN" "${ARGS[@]}" >> "$LOGD/splash-server.log" 2>&1
