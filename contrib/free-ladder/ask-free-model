@@ -1,0 +1,69 @@
+#!/bin/sh
+# ask-free-model — CLI front door to free-ladder (:8790)
+# Usage: ask-free-model [--mode summarize|classify|draft|search|long-context|chat] [--skip-local] "prompt"
+set -eu
+SOURCE=$0
+while [ -L "$SOURCE" ]; do
+  DIR=$(CDPATH= cd -- "$(dirname "$SOURCE")" && pwd)
+  LINK=$(readlink "$SOURCE" || true)
+  [ -n "$LINK" ] || break
+  case "$LINK" in
+    /*) SOURCE=$LINK ;;
+    *) SOURCE=$DIR/$LINK ;;
+  esac
+done
+DIR=$(CDPATH= cd -- "$(dirname "$SOURCE")" && pwd)
+ROOT=$(CDPATH= cd -- "$DIR/.." && pwd)
+export PYTHONPATH="${ROOT}${PYTHONPATH:+:$PYTHONPATH}"
+if [ -f "${FREE_LLM_KEYS:-$HOME/.config/free-llm/keys.env}" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "${FREE_LLM_KEYS:-$HOME/.config/free-llm/keys.env}"
+  set +a
+fi
+MODE=chat
+SKIP=0
+PROMPT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --mode) MODE=$2; shift 2 ;;
+    --skip-local) SKIP=1; shift ;;
+    --) shift; PROMPT=$*; break ;;
+    -*) echo "unknown flag: $1" >&2; exit 2 ;;
+    *) PROMPT=$1; shift; PROMPT="$PROMPT${*:+ $*}" ; break ;;
+  esac
+done
+[ -n "$PROMPT" ] || { echo "usage: ask-free-model [--mode MODE] [--skip-local] \"prompt\"" >&2; exit 2; }
+export FREE_LADDER_URL="${FREE_LADDER_URL:-http://127.0.0.1:8790}"
+exec /usr/bin/python3 - "$MODE" "$SKIP" "$PROMPT" <<'PY'
+import json, os, sys, urllib.request
+mode, skip, prompt = sys.argv[1], sys.argv[2] == "1", sys.argv[3]
+base = os.environ.get("FREE_LADDER_URL", "http://127.0.0.1:8790").rstrip("/")
+systems = {
+  "summarize": "Summarize clearly and briefly. Facts only.",
+  "classify": "Classify. Reply with the label and one short reason.",
+  "draft": "Draft plain text. No fluff. No sign-off.",
+  "search": "Extract the facts that answer the question. Cite snippets.",
+  "long-context": "Read the full context. Answer with citations to sections.",
+  "chat": "Be concise and direct.",
+}
+body = {
+  "model": "auto",
+  "messages": [
+    {"role": "system", "content": systems.get(mode, systems["chat"])},
+    {"role": "user", "content": prompt},
+  ],
+  "max_tokens": 1024,
+  "stream": False,
+}
+hdrs = {"Content-Type": "application/json", "User-Agent": "ask-free-model/1.0"}
+if skip:
+  hdrs["X-Free-Ladder-Skip-Local"] = "1"
+req = urllib.request.Request(base + "/v1/chat/completions", data=json.dumps(body).encode(), headers=hdrs, method="POST")
+with urllib.request.urlopen(req, timeout=180) as resp:
+  payload = json.loads(resp.read().decode())
+text = ((payload.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+meta = payload.get("free_ladder") or {}
+print(f"[provider={meta.get('provider')} rung={meta.get('rung')}]")
+print(text.strip())
+PY
