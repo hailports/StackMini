@@ -318,6 +318,6 @@ def test_swift_pin_state(tmp_path):
 def test_popup_offers_pins_and_fresh_redraft():
     src = (ROOT / "contrib/clip/PaisteMenu.swift").read_text(encoding="utf-8")
     assert '"Fresh redraft"' in src and "RedraftPins" in src and '"--locks"' in src
-    assert "Can't read the field" in (ROOT / "contrib/clip/Pulse.swift").read_text(encoding="utf-8")
+    assert "Reply box read from the screen" in (ROOT / "contrib/clip/Pulse.swift").read_text(encoding="utf-8")
     flow = (ROOT / ".github/workflows/paisty-release.yml").read_text(encoding="utf-8")
     assert "tests/test_clip_locks.py" in flow
