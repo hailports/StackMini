@@ -73,6 +73,17 @@ def content_hash(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8", "replace")).hexdigest()
 
 
+def synthesis_content_key(tier: str, key: str, when: float | None = None) -> str:
+    """Hour-bucketed synthesis identity.
+
+    Day-scoped hashes left the synthesis lane empty after the morning pass
+    (everything already in `done`) while refresh/sf_finding kept running.
+    """
+    ts = time.gmtime(when if when is not None else time.time())
+    bucket = time.strftime("%Y-%m-%dT%H", ts)
+    return content_hash(f"synth:v2:{tier}:{key}:{bucket}")
+
+
 def read_bg_throttle(path: Path | None = None) -> dict:
     """Read mem-governor throttle file. Fail-open to full rate."""
     p = path or (Path.home() / "claude-stack/data/flags/bg_throttle.json")

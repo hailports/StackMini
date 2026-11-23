@@ -26,6 +26,7 @@ from hailports.never_idle import (
     should_run_background,
     should_scan_enqueue,
     soft_throttle_reason,
+    synthesis_content_key,
     throttle_sleep_s,
     util_pct,
 )
@@ -36,6 +37,15 @@ def test_blocked_text():
     assert blocked_text("/Legal/contract.pdf") is True
     assert blocked_text("here is the password: hunter2") is True
     assert blocked_text("draft a linkedin caption") is True
+
+
+def test_synthesis_hour_bucket():
+    a = synthesis_content_key("week", "2026-W47", when=1_700_000_000.0)
+    b = synthesis_content_key("week", "2026-W47", when=1_700_000_000.0 + 30.0)
+    c = synthesis_content_key("week", "2026-W47", when=1_700_000_000.0 + 3600.0)
+    assert a == b  # same hour
+    assert a != c  # next hour gets a fresh key
+    assert a != synthesis_content_key("sf_area", "warranty", when=1_700_000_000.0)
 
 
 def test_backoff():
