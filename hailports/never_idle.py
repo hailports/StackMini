@@ -262,6 +262,21 @@ def interactive_request_inflight(
         return False
 
 
+def repair_queue_indexes(con: sqlite3.Connection) -> bool:
+    """Rebuild queue indexes. `quick_check` can be ok while a unique index is
+    missing rows after a mid-write kill — that class crashed the daemon."""
+    try:
+        con.execute("DROP INDEX IF EXISTS ux_queue_hash")
+        con.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_queue_hash "
+            "ON queue(producer, content_hash) WHERE status='queued'"
+        )
+        con.commit()
+        return True
+    except sqlite3.Error:
+        return False
+
+
 def open_queue(db_path: Path) -> sqlite3.Connection:
     """Open the queue DB with WAL + anti-thrash pragmas.
 
@@ -318,6 +333,8 @@ def open_queue(db_path: Path) -> sqlite3.Connection:
         """
     )
     con.commit()
+    # Always rebuild — cheap, and catches quick_check-ok / integrity-bad.
+    repair_queue_indexes(con)
     return con
 
 

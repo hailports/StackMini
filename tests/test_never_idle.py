@@ -23,6 +23,7 @@ from hailports.never_idle import (
     open_queue,
     queue_depth,
     record_quality,
+    repair_queue_indexes,
     should_run_background,
     should_scan_enqueue,
     soft_throttle_reason,
@@ -46,6 +47,14 @@ def test_synthesis_hour_bucket():
     assert a == b  # same hour
     assert a != c  # next hour gets a fresh key
     assert a != synthesis_content_key("sf_area", "warranty", when=1_700_000_000.0)
+
+
+def test_repair_queue_indexes():
+    with tempfile.TemporaryDirectory() as tmp:
+        con = open_queue(Path(tmp) / "q.db")
+        assert enqueue(con, "refresh", {"id": "r1", "text": "x"})
+        assert repair_queue_indexes(con) is True
+        assert queue_depth(con) == 1
 
 
 def test_backoff():
