@@ -440,7 +440,8 @@ def scene_blob(doc: dict | None) -> str:
 
 def addressee_first(text: str, me: list[str] | None = None) -> str:
     """First name of the last other person on screen. The writer is skipped."""
-    skip = set()
+    # Chat apps label the writer's own messages "You" or "Me" (Zoom: "You 6:59 AM").
+    skip = {"you", "me"}
     for name in me or []:
         first = name.strip().split()
         if first:
@@ -1071,6 +1072,8 @@ def shape_voice(text: str, sources: str = "", addressee: str = "") -> str:
     body = _LABEL_LINE.sub("", text or "").strip()
     if not body:
         return ""
+    if addressee and addressee.strip().lower() in {"you", "me"}:
+        addressee = ""
     if addressee:
         rest = _GREET.sub("", body, count=1).strip()
         rest = re.sub(rf"(?i)^{re.escape(addressee)}\s*[,—–-]+\s*", "", rest, count=1).strip()

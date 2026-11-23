@@ -268,6 +268,66 @@ def only_reply(text: str) -> str:
     return body
 
 
+class _Done:
+    def __init__(self, returncode: int, stdout: bytes, stderr: bytes):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
+def run_group(argv: list[str], cwd: str | None = None, timeout: float = 45, env: dict | None = None) -> "_Done":
+    """Run a CLI in its own process group. On timeout the whole group is killed, so a helper
+    it started (the Cursor worker-server) cannot keep the pipes open or outlive the draft."""
+    import signal
+    proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, start_new_session=True)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_group(proc.pid, signal.SIGKILL)
+        try:
+            proc.communicate(timeout=3)
+        except subprocess.TimeoutExpired:
+            pass
+        raise
+    _kill_group(proc.pid, signal.SIGTERM)  # a helper still running after a normal exit
+    return _Done(proc.returncode, out or b"", err or b"")
+
+
+def _kill_group(pgid: int, sig) -> None:
+    import os
+    try:
+        os.killpg(pgid, sig)
+    except (OSError, ProcessLookupError):
+        pass
+
+
+_KEYCHAIN_LOCKED = re.compile(r"(?i)keychain is locked|unlock-keychain")
+
+
+def keychain_locked(done) -> bool:
+    text = (getattr(done, "stdout", b"") or b"") + b"\n" + (getattr(done, "stderr", b"") or b"")
+    return bool(_KEYCHAIN_LOCKED.search(text.decode("utf-8", "replace")))
+
+
+def unlock_keychain_prompt(timeout: float = 90) -> bool:
+    """Show the standard macOS login-keychain unlock dialog. The password goes to macOS only:
+    nothing is read, stored or logged here. True when the keychain was unlocked."""
+    import sys
+    if sys.platform != "darwin":
+        return False
+    code = (
+        "import ctypes,sys;"
+        "s=ctypes.cdll.LoadLibrary('/System/Library/Frameworks/Security.framework/Security');"
+        "s.SecKeychainUnlock.argtypes=[ctypes.c_void_p,ctypes.c_uint32,ctypes.c_void_p,ctypes.c_bool];"
+        "s.SecKeychainUnlock.restype=ctypes.c_int32;"
+        "sys.exit(0 if s.SecKeychainUnlock(None,0,None,False)==0 else 1)"
+    )
+    try:
+        done = subprocess.run([sys.executable, "-c", code], capture_output=True, timeout=timeout, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return done.returncode == 0
+
+
 def cursor_argv(binary: str, prompt: str) -> list[str]:
     """Ask mode does not edit files. --trust only lets that read-only run start."""
     return [binary, "-p", "--mode", "ask", "--trust", "--output-format", "text", prompt]
@@ -367,25 +427,26 @@ def _cursor(endpoint: dict, messages: list[dict]) -> str:
     # An empty directory. The home directory made this hop read other files
     # instead of the thread in the prompt.
     import tempfile
+    argv = cursor_argv(binary, cursor_prompt(system, user))
+    limit = min(int(endpoint.get("timeout_s") or CURSOR_TIMEOUT_S), CURSOR_TIMEOUT_MAX_S)
     with tempfile.TemporaryDirectory(prefix="paisty-cursor-") as quiet:
-        done = subprocess.run(
-            cursor_argv(binary, cursor_prompt(system, user)),
-            cwd=quiet,
-            capture_output=True,
-            check=False,
-            timeout=int(endpoint.get("timeout_s") or CURSOR_TIMEOUT_S),
-            env=premium_env(),
-        )
+        done = run_group(argv, cwd=quiet, timeout=limit, env=premium_env())
+        if done.returncode != 0 and keychain_locked(done):
+            # A locked login keychain fails in under a second. Ask macOS to show its own unlock
+            # dialog (Paisty never sees the password), then ask Cursor once more.
+            if unlock_keychain_prompt():
+                done = run_group(argv, cwd=quiet, timeout=limit, env=premium_env())
     if done.returncode != 0:
-        raise ModelOffline("cursor hop failed")
+        raise ModelOffline("cursor keychain locked" if keychain_locked(done) else "cursor hop failed")
     text = only_reply((done.stdout or b"").decode("utf-8", "replace"))
     if not text:
         raise ModelOffline("cursor talked about itself")
     return text
 
 
-CURSOR_TIMEOUT_S = 90
-SLOW_S = 120  # a Cursor call slower than this is not asked again for the same draft
+CURSOR_TIMEOUT_S = 45
+CURSOR_TIMEOUT_MAX_S = 60  # a hung Cursor CLI hands the draft to the next engine fast
+SLOW_S = 40  # a Cursor call slower than this is not asked again for the same draft
 _SLOW: set = set()
 
 
