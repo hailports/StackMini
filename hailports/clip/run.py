@@ -338,6 +338,8 @@ def _draft_scene_once(doc: dict, base_url: str, model: str, copy: bool, cfg: dic
     except (OSError, TimeoutError, ValueError):
         facts = ""
     who = addressee_first(screen + "\n" + sources, me)
+    from hailports.clip.scene import latest_chat_message
+    _latest_who, latest = latest_chat_message(screen, me)
     _note_scene(doc, who)
     choice = screen_has_choice(sources)
     voice = _context_note(route)[:1400]
@@ -350,6 +352,14 @@ def _draft_scene_once(doc: dict, base_url: str, model: str, copy: bool, cfg: dic
         )
     if voice:
         parts.append(voice)
+    if latest:
+        # A channel shows many old asks. Answer the newest message from someone else only.
+        parts.append(
+            "Reply only to the newest message from " + _latest_who + ":\n" + latest[:1200] + "\n"
+            "Older messages on screen are background. Do not answer an older ask from someone else "
+            "unless the newest message continues that same conversation. "
+            "A name after @ is someone they tagged, not the person you are replying to."
+        )
     found = relevant_notes(_lookup_notes(route, sources), sources, who)
     if found:
         parts.append(
@@ -368,7 +378,7 @@ def _draft_scene_once(doc: dict, base_url: str, model: str, copy: bool, cfg: dic
         from hailports.clip.scene import runner_context
         prepared["messages"] = runner_context(prepared.get("messages") or [], note)
     from hailports.clip.board import misses_points, thin_reply, thread_points
-    points = thread_points(sources)
+    points = thread_points(latest) if latest else thread_points(sources)
     from hailports.clip.lookups import apply_facts
     prepared["messages"] = apply_facts(_with_points(prepared.get("messages") or [], points), facts)
     prepared["messages"] = _pin_rules(

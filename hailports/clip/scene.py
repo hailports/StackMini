@@ -438,14 +438,66 @@ def scene_blob(doc: dict | None) -> str:
     return "\n".join(part for part in parts if part)
 
 
-def addressee_first(text: str, me: list[str] | None = None) -> str:
-    """First name of the last other person on screen. The writer is skipped."""
-    # Chat apps label the writer's own messages "You" or "Me" (Zoom: "You 6:59 AM").
+# A chat message header: "Last, First Middle Nov 20, 2:53 PM", "First Last 6:59 AM",
+# "You Today, 9:02 AM". An @mention inside a message body never starts a line like this.
+_CHAT_HEAD = re.compile(
+    r"(?m)^(?P<name>(?:[a-z]{1,3}\s+)?[A-Z][\w'’.-]*,\s+[A-Za-z][\w'’.-]*(?:\s+[A-Za-z][\w'’.-]*){0,2}?"
+    r"|[A-Z][\w'’.-]*(?:\s+[A-Z][\w'’.-]*){0,2}?)"
+    r"(?P<you>\s+\(You\))?\s+"
+    r"(?:(?:Today|Yesterday|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}(?:,\s*\d{4})?),?\s+)?"
+    r"\d{1,2}:\d{2}\s*[AP]M\b[^\n]*$"
+)
+_CHAT_END = re.compile(r"(?im)^\s*(?:\d+\s+repl(?:y|ies)\b|write a message\b|today\s*$|yesterday\s*$)")
+
+
+def chat_first_name(name: str) -> str:
+    """"Claessens, Katie" -> "Katie"; "Mouli Raman" -> "Mouli"."""
+    name = re.sub(r"\s*\(You\)\s*$", "", (name or "").strip())
+    if "," in name:
+        rest = name.split(",", 1)[1].split()
+        return rest[0] if rest else ""
+    parts = name.split()
+    return parts[0] if parts else ""
+
+
+def _me_firsts(me: list[str] | None) -> set[str]:
     skip = {"you", "me"}
     for name in me or []:
-        first = name.strip().split()
-        if first:
-            skip.add(first[0].lower())
+        name = name.strip()
+        if not name:
+            continue
+        skip.add(chat_first_name(name).lower())
+        skip.add(name.split()[0].lower())
+    return skip
+
+
+def latest_chat_message(text: str, me: list[str] | None = None) -> tuple[str, str]:
+    """(first name, message text) of the newest chat message written by someone other than the
+    writer. @mentions inside the message never count as its author. ("", "") when the screen has
+    no chat headers."""
+    skip = _me_firsts(me)
+    heads = list(_CHAT_HEAD.finditer(text or ""))
+    for index in range(len(heads) - 1, -1, -1):
+        head = heads[index]
+        first = chat_first_name(head.group("name"))
+        if head.group("you") or not first or first.lower() in skip:
+            continue
+        stop = heads[index + 1].start() if index + 1 < len(heads) else len(text)
+        body = text[head.end():stop]
+        cut = _CHAT_END.search(body)
+        if cut:
+            body = body[:cut.start()]
+        return first, body.strip()
+    return "", ""
+
+
+def addressee_first(text: str, me: list[str] | None = None) -> str:
+    """First name of the author of the newest message from someone other than the writer."""
+    first, _body = latest_chat_message(text, me)
+    if first:
+        return first
+    # Chat apps label the writer's own messages "You" or "Me" (Zoom: "You 6:59 AM").
+    skip = _me_firsts(me)
     found = []
     for left, right in _WHO.findall(text or ""):
         name = left or right
