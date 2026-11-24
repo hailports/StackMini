@@ -147,6 +147,65 @@ enum PastePath {
         return true
     }
 
+    /// Cmd-C only. No Return, no other keys.
+    static func commandC() -> Bool {
+        guard let source = CGEventSource(stateID: .combinedSessionState),
+              let down = CGEvent(keyboardEventSource: source, virtualKey: 8, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: 8, keyDown: false) else { return false }
+        down.flags = .maskCommand
+        up.flags = .maskCommand
+        down.post(tap: .cgSessionEventTap)
+        Thread.sleep(forTimeInterval: 0.02)
+        up.post(tap: .cgSessionEventTap)
+        return true
+    }
+
+    /// Copy the front app's selection with Cmd-C, then put the user's clipboard back.
+    /// Returns "" when nothing new was copied. Call off the main thread.
+    static func copySelection(pid: pid_t) -> String {
+        guard pid != 0, frontPID() == pid else { return "" }
+        var snapshot: [[NSPasteboard.PasteboardType: Data]] = []
+        var before = 0
+        DispatchQueue.main.sync {
+            let board = NSPasteboard.general
+            before = board.changeCount
+            for item in board.pasteboardItems ?? [] {
+                var types: [NSPasteboard.PasteboardType: Data] = [:]
+                for type in item.types {
+                    if let data = item.data(forType: type) { types[type] = data }
+                }
+                snapshot.append(types)
+            }
+        }
+        guard commandC() else { return "" }
+        var changed = false
+        for _ in 0..<12 {
+            Thread.sleep(forTimeInterval: 0.05)
+            var now = 0
+            DispatchQueue.main.sync { now = NSPasteboard.general.changeCount }
+            if now != before { changed = true; break }
+        }
+        var text = ""
+        if changed {
+            DispatchQueue.main.sync { text = NSPasteboard.general.string(forType: .string) ?? "" }
+        }
+        if changed {
+            DispatchQueue.main.sync {
+                let board = NSPasteboard.general
+                board.clearContents()
+                var items: [NSPasteboardItem] = []
+                for types in snapshot {
+                    let item = NSPasteboardItem()
+                    for (type, data) in types { item.setData(data, forType: type) }
+                    items.append(item)
+                }
+                if !items.isEmpty { board.writeObjects(items) }
+            }
+        }
+        note("copy-selection pid=\(pid) chars=\(text.count) changed=\(changed)")
+        return text
+    }
+
     /// Place text in a field the user already had open. Returns the path that
     /// landed ("ax-insert", "ax-value", "cmdv"), "cmdv-unverified" when the
     /// keystroke went to the right app but AX could not confirm it, or nil when

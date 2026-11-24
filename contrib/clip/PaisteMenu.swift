@@ -756,7 +756,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
     }
 
     /// Replace only the selection the user made. Call off the main thread. Never types somewhere else.
-    func deliverRewrite(_ text: String, pid: pid_t, field: AXUIElement?) -> String {
+    func deliverRewrite(_ text: String, pid: pid_t, field: AXUIElement?, viaCopy: Bool) -> String {
         DispatchQueue.main.sync {
             let board = NSPasteboard.general
             board.clearContents()
@@ -768,9 +768,13 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         }
         let bundle = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? "?"
         var path = "copied"
-        if let field, pid != 0, Self.alive(field, pid: pid),
+        if !viaCopy, let field, pid != 0, Self.alive(field, pid: pid),
            let won = Self.insert(text, into: field, pid: pid) {
             path = won
+        }
+        if path == "copied", pid != 0, PastePath.ensureFront(pid) {
+            Thread.sleep(forTimeInterval: 0.08)
+            if Self.commandV() { path = "cmdv-rewrite" }
         }
         PastePath.note("rewrite app=\(bundle) chars=\(text.count) path=\(path)")
         log.error("rewrite \(path, privacy: .public) app \(bundle, privacy: .public)")
@@ -869,6 +873,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
             : path == "ax-replace" || path == "cmdv-replace" ? "Replaced your earlier draft"
             : path == "copied-untrusted" ? "Copied. Turn on Accessibility to paste automatically."
             : path == "copied" ? "Copied — click the reply box and press Cmd-V"
+            : path == "cmdv-rewrite" ? "Rewritten"
             : path == "cmdv-unverified" ? "Pasted? If it is not in the reply box, press Cmd-V" : "Pasted"
         item?.button?.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: tip)
         item?.button?.toolTip = tip
@@ -953,11 +958,13 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         let text: String
         let pid: pid_t
         let field: AXUIElement?
-        init(style: String, text: String, pid: pid_t, field: AXUIElement?) {
+        let viaCopy: Bool
+        init(style: String, text: String, pid: pid_t, field: AXUIElement?, viaCopy: Bool = false) {
             self.style = style
             self.text = text
             self.pid = pid
             self.field = field
+            self.viaCopy = viaCopy
         }
     }
 
@@ -967,17 +974,22 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         DispatchQueue.global(qos: .userInitiated).async {
             let drafts = Self.loadDrafts()
             let target = AXIsProcessTrusted() && pid != 0 ? Self.focusedInput(pid: pid) : nil
-            let selected = target.flatMap { Self.str($0, kAXSelectedTextAttribute) } ?? ""
+            var selected = target.flatMap { Self.str($0, kAXSelectedTextAttribute) } ?? ""
+            var viaCopy = false
+            if selected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, AXIsProcessTrusted(), pid != 0 {
+                let copied = PastePath.copySelection(pid: pid)
+                if !copied.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { selected = copied; viaCopy = true }
+            }
             DispatchQueue.main.async {
                 guard let item = self.item, let button = item.button else { return }
-                item.menu = self.buildMenu(drafts, pid: pid, field: field, selection: selected, selectionField: target)
+                item.menu = self.buildMenu(drafts, pid: pid, field: field, selection: selected, selectionField: target, selectionViaCopy: viaCopy)
                 button.performClick(nil)
                 item.menu = nil
             }
         }
     }
 
-    func buildMenu(_ drafts: [Draft], pid: pid_t, field: AXUIElement?, selection: String = "", selectionField: AXUIElement? = nil) -> NSMenu {
+    func buildMenu(_ drafts: [Draft], pid: pid_t, field: AXUIElement?, selection: String = "", selectionField: AXUIElement? = nil, selectionViaCopy: Bool = false) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
         menu.addItem(header("Recent drafts"))
@@ -1012,7 +1024,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
             for (title, style) in [("Rewrite", "rewrite"), ("Shorter", "shorter"), ("Fix grammar", "grammar"), ("More formal", "formal")] {
                 let row = NSMenuItem(title: title, action: #selector(rewriteChosen(_:)), keyEquivalent: "")
                 row.target = self
-                row.representedObject = RewriteRef(style: style, text: selection, pid: pid, field: selectionField)
+                row.representedObject = RewriteRef(style: style, text: selection, pid: pid, field: selectionField, viaCopy: selectionViaCopy)
                 row.isEnabled = !busy
                 menu.addItem(row)
             }
@@ -1221,7 +1233,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
                 }
                 return
             }
-            let path2 = self.deliverRewrite(run.out, pid: ref.pid, field: ref.field)
+            let path2 = self.deliverRewrite(run.out, pid: ref.pid, field: ref.field, viaCopy: ref.viaCopy)
             DispatchQueue.main.async { self.finish(path: path2, note: "menu-rewrite") }
         }
     }
