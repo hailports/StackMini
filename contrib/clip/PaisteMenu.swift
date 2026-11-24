@@ -755,6 +755,28 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         return path
     }
 
+    /// Replace only the selection the user made. Call off the main thread. Never types somewhere else.
+    func deliverRewrite(_ text: String, pid: pid_t, field: AXUIElement?) -> String {
+        DispatchQueue.main.sync {
+            let board = NSPasteboard.general
+            board.clearContents()
+            board.setString(text, forType: .string)
+        }
+        if !AXIsProcessTrusted() {
+            PastePath.note("rewrite untrusted clipboard only")
+            return "copied-untrusted"
+        }
+        let bundle = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? "?"
+        var path = "copied"
+        if let field, pid != 0, Self.alive(field, pid: pid),
+           let won = Self.insert(text, into: field, pid: pid) {
+            path = won
+        }
+        PastePath.note("rewrite app=\(bundle) chars=\(text.count) path=\(path)")
+        log.error("rewrite \(path, privacy: .public) app \(bundle, privacy: .public)")
+        return path
+    }
+
     /// Place a redraft over paisty's earlier draft. Call off the main thread. Never appends a second
     /// reply under the first: when the old draft can't be selected safely it stays on the clipboard.
     func deliverRedraft(_ text: String, pid: pid_t, field: AXUIElement?, prior: LastDraft) -> String {
@@ -842,7 +864,8 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         markHandled(draftSig)
         let copied = path == "copied" || path == "cmdv-unverified" || path == "copied-untrusted"
         // cmdv-unverified: Cmd-V was sent but the field could not be read back. Do not invite a second paste.
-        let tip = path == "copied-redraft" ? "Redraft copied — select your earlier draft and press Cmd-V"
+        let tip = note == "menu-rewrite" && path == "copied" ? "Rewrite copied. Select the text again and press Cmd-V"
+            : path == "copied-redraft" ? "Redraft copied — select your earlier draft and press Cmd-V"
             : path == "ax-replace" || path == "cmdv-replace" ? "Replaced your earlier draft"
             : path == "copied-untrusted" ? "Copied. Turn on Accessibility to paste automatically."
             : path == "copied" ? "Copied — click the reply box and press Cmd-V"
@@ -925,21 +948,36 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         }
     }
 
+    final class RewriteRef: NSObject {
+        let style: String
+        let text: String
+        let pid: pid_t
+        let field: AXUIElement?
+        init(style: String, text: String, pid: pid_t, field: AXUIElement?) {
+            self.style = style
+            self.text = text
+            self.pid = pid
+            self.field = field
+        }
+    }
+
     func showMenu() {
         let pid = frontPID
         let field = (pastePID == pid && Date().timeIntervalSince(pasteAt) < 8) ? pasteTarget : nil
         DispatchQueue.global(qos: .userInitiated).async {
             let drafts = Self.loadDrafts()
+            let target = AXIsProcessTrusted() && pid != 0 ? Self.focusedInput(pid: pid) : nil
+            let selected = target.flatMap { Self.str($0, kAXSelectedTextAttribute) } ?? ""
             DispatchQueue.main.async {
                 guard let item = self.item, let button = item.button else { return }
-                item.menu = self.buildMenu(drafts, pid: pid, field: field)
+                item.menu = self.buildMenu(drafts, pid: pid, field: field, selection: selected, selectionField: target)
                 button.performClick(nil)
                 item.menu = nil
             }
         }
     }
 
-    func buildMenu(_ drafts: [Draft], pid: pid_t, field: AXUIElement?) -> NSMenu {
+    func buildMenu(_ drafts: [Draft], pid: pid_t, field: AXUIElement?, selection: String = "", selectionField: AXUIElement? = nil) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
         menu.addItem(header("Recent drafts"))
@@ -965,6 +1003,19 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
             sub.addItem(redo)
             row.submenu = sub
             menu.addItem(row)
+        }
+        menu.addItem(.separator())
+        menu.addItem(header("Rewrite selection"))
+        if selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            menu.addItem(header("Select text in any app, then right-click here"))
+        } else {
+            for (title, style) in [("Rewrite", "rewrite"), ("Shorter", "shorter"), ("Fix grammar", "grammar"), ("More formal", "formal")] {
+                let row = NSMenuItem(title: title, action: #selector(rewriteChosen(_:)), keyEquivalent: "")
+                row.target = self
+                row.representedObject = RewriteRef(style: style, text: selection, pid: pid, field: selectionField)
+                row.isEnabled = !busy
+                menu.addItem(row)
+            }
         }
         menu.addItem(.separator())
         menu.addItem(header("Setup"))
@@ -1147,6 +1198,31 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
             }
             let path = self.deliver(run.out, pid: ref.pid, field: ref.field)
             DispatchQueue.main.async { self.finish(path: path, note: "menu-redo") }
+        }
+    }
+
+    @objc func rewriteChosen(_ sender: NSMenuItem) {
+        guard let ref = sender.representedObject as? RewriteRef, !busy else { return }
+        busy = true
+        startSpin()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let path = NSTemporaryDirectory() + "paisty-rewrite-\(UUID().uuidString).txt"
+            guard FileManager.default.createFile(atPath: path, contents: ref.text.data(using: .utf8),
+                                                 attributes: [.posixPermissions: 0o600]) else {
+                DispatchQueue.main.async { self.fail("Could not read the selection") }
+                return
+            }
+            let run = Self.runPaiste(["rewrite", "--style", ref.style, "--text-file", path], timeout: 90)
+            try? FileManager.default.removeItem(atPath: path)
+            guard run.status == 0, !run.out.isEmpty else {
+                DispatchQueue.main.async {
+                    self.fail(run.status == 2 ? "Nothing selected to rewrite" : "Rewrite failed")
+                    self.log.error("rewrite failed \(run.status, privacy: .public)")
+                }
+                return
+            }
+            let path2 = self.deliverRewrite(run.out, pid: ref.pid, field: ref.field)
+            DispatchQueue.main.async { self.finish(path: path2, note: "menu-rewrite") }
         }
     }
 

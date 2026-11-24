@@ -44,7 +44,7 @@ def _cfg(path: str, base_url: str, model: str) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="paiste", description="Draft from the text near the cursor. Nothing is sent.")
-    parser.add_argument("action", nargs="?", default="draft", choices=["draft", "auto", "menu", "check", "onboard", "drafts", "redo", "shot", "locate", "locks"])
+    parser.add_argument("action", nargs="?", default="draft", choices=["draft", "auto", "menu", "check", "onboard", "drafts", "redo", "rewrite", "shot", "locate", "locks"])
     parser.add_argument("--id", default="")
     parser.add_argument("--scene", default="")
     parser.add_argument("--inbox", default="")
@@ -69,6 +69,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--prior", default="", help="file with paisty's last draft for this window (redraft)")
     parser.add_argument("--field", default="", help="file with the reply box text (locate)")
     parser.add_argument("--locks", default="", help="redraft JSON from the popup: pins list, or fresh")
+    parser.add_argument("--style", default="rewrite", choices=["rewrite", "shorter", "grammar", "formal"])
+    parser.add_argument("--text-file", default="", help="selected text for rewrite; removed after it is read")
     args = parser.parse_args(argv)
     if args.action == "locks":
         # The Redraft popup: the draft's sentences now in the box, edited ones pre-pinned.
@@ -90,6 +92,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.action in {"drafts", "redo"}:
         from hailports.clip.drafts import cmd as drafts_cmd
         return drafts_cmd(args.action, args, cfg)
+    if args.action == "rewrite":
+        from hailports.clip.rewrite import cmd as rewrite_cmd
+        return rewrite_cmd(args, cfg)
     if args.action == "shot":
         from hailports.clip.run import draft_screenshot
         if not args.image:

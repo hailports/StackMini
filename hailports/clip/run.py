@@ -901,6 +901,9 @@ def cmd_paiste(args, cfg, state: Path) -> int:
     if action in {"drafts", "redo"}:
         from hailports.clip.drafts import cmd as drafts_cmd
         return drafts_cmd(action, args, cfg)
+    if action == "rewrite":
+        from hailports.clip.rewrite import cmd as rewrite_cmd
+        return rewrite_cmd(args, cfg)
     if action == "setup":
         from hailports.config import save_file
         from hailports.clip.board import discover, guide
