@@ -10,7 +10,8 @@
   aside). Falls back to iterdump, then to an empty db (schema is recreated by
   the caller) so the daemon always keeps going.
 - hold_reason: LOCAL_ENGINE_HOLD (3h window) / qwen_maint_pause (4h window)
-  flags and severe memory pressure (vm_stat free+inactive+purgeable).
+  flags and severe FREE+purgeable pressure only when the local model is not
+  serving (inactive pages are the model working set — never count them).
 """
 from __future__ import annotations
 
@@ -30,7 +31,9 @@ HOLD_FLAGS = (
     (FLAGS / "LOCAL_ENGINE_HOLD", 3 * 3600),  # local-engine maintenance hold
     (FLAGS / "qwen_maint_pause", 4 * 3600),  # model maintenance pause
 )
-MEM_FLOOR_MB = float(os.environ.get("NEVER_IDLE_MEM_FLOOR_MB", "1536"))
+# Floor on FREE+PURGEABLE only. Counting inactive tripped the hold whenever a
+# large local model was resident and parked the engine for 60s loops.
+MEM_FLOOR_MB = float(os.environ.get("NEVER_IDLE_MEM_FLOOR_MB", "256"))
 _MEM_CACHE: tuple[float, float | None] = (0.0, None)
 
 
@@ -219,7 +222,11 @@ def startup_check(path: Path, log=lambda row: None) -> str:
 
 # ---------------------------------------------------------------- holds
 def _avail_mb() -> float | None:
-    """free + inactive + purgeable + speculative pages, MB (cached 15s)."""
+    """Truly reclaimable pages only: free + purgeable + speculative (MB).
+
+    Inactive is the model working set. Counting it made mem_avail look "low"
+    whenever the engine was healthy and loaded. Cached 15s.
+    """
     global _MEM_CACHE
     now = time.time()
     if now - _MEM_CACHE[0] < 15.0:
@@ -232,7 +239,7 @@ def _avail_mb() -> float | None:
         m = re.search(r"page size of (\d+)", txt)
         page = int(m.group(1)) if m else 16384
         pages = 0
-        for key in ("free", "inactive", "purgeable", "speculative"):
+        for key in ("free", "purgeable", "speculative"):
             mm = re.search(rf"Pages {key}:\s+(\d+)", txt)
             if mm:
                 pages += int(mm.group(1))
@@ -241,6 +248,31 @@ def _avail_mb() -> float | None:
         val = None
     _MEM_CACHE = (now, val)
     return val
+
+
+def _model_serving() -> bool:
+    """True when the configured local health URL answers (model owns the RAM)."""
+    url = os.environ.get(
+        "NEVER_IDLE_HEALTH_URL", "http://127.0.0.1:8080/health"
+    ).strip()
+    if not url:
+        return False
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(url, timeout=1.0) as r:
+            return int(getattr(r, "status", 200) or 200) < 500
+    except Exception:
+        alt = os.environ.get(
+            "NEVER_IDLE_MODELS_URL", "http://127.0.0.1:8080/v1/models"
+        ).strip()
+        if not alt:
+            return False
+        try:
+            with urllib.request.urlopen(alt, timeout=1.0) as r:
+                return int(getattr(r, "status", 200) or 200) < 500
+        except Exception:
+            return False
 
 
 def hold_reason(now: float | None = None) -> str | None:
@@ -252,6 +284,9 @@ def hold_reason(now: float | None = None) -> str | None:
             continue
         if age < max_age:
             return f"hold_{flag.name}"
+    # Model already serving: do not park on reclaimable-page floor.
+    if _model_serving():
+        return None
     avail = _avail_mb()
     if avail is not None and avail < MEM_FLOOR_MB:
         return f"mem_avail_{int(avail)}mb"

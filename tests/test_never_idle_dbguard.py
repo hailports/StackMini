@@ -64,11 +64,15 @@ def test_hold_flags_and_memory(tmp_path: Path, monkeypatch) -> None:
     pause = tmp_path / "qwen_maint_pause"
     monkeypatch.setattr(g, "HOLD_FLAGS", ((hold, 3 * 3600), (pause, 4 * 3600)))
     monkeypatch.setattr(g, "_avail_mb", lambda: 8000.0)
+    monkeypatch.setattr(g, "_model_serving", lambda: False)
     assert g.hold_reason() is None
     pause.touch()
     assert g.hold_reason() == "hold_qwen_maint_pause"
     old = time.time() - 5 * 3600
     os.utime(pause, (old, old))
     assert g.hold_reason() is None
-    monkeypatch.setattr(g, "_avail_mb", lambda: 900.0)
-    assert g.hold_reason() == "mem_avail_900mb"
+    monkeypatch.setattr(g, "_avail_mb", lambda: 100.0)
+    assert g.hold_reason() == "mem_avail_100mb"
+    # Serving model: reclaimable-page floor must not park the engine.
+    monkeypatch.setattr(g, "_model_serving", lambda: True)
+    assert g.hold_reason() is None
