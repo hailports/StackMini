@@ -156,3 +156,10 @@ def test_auto_setup_never_removes_or_replaces_a_saved_address(tmp_path, monkeypa
     # Server on, and the scan also found Ollama first: the saved, answering address stays.
     monkeypatch.setattr(board, "_model_up", lambda url: True)
     assert _auto(dest, {"llm": dict(mine)}, _scan("http://127.0.0.1:11434/v1", "llama3.2"))["llm"] == mine
+
+
+def test_auto_summary_names_the_local_model(tmp_path):
+    scan = {"suggest": {"ai": {"kind": "local", "name": "Qwen3.8-27B-4bit", "url": "http://127.0.0.1:8000/v1", "host": ""},
+                        "notes": {"kind": "folder"}}, "apps": [], "models": [{"url": "http://127.0.0.1:8000/v1"}]}
+    _, summary = board.auto_setup({}, scan, tmp_path, tmp_path / "notes")
+    assert summary["ai"] == "local" and summary["model"] == "Qwen3.8-27B-4bit" and summary["host"] == ""

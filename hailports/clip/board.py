@@ -463,6 +463,8 @@ def auto_setup(current: dict | None, scan: dict, key_dir: Path, notes_dir: Path,
     ai = suggest.get("ai") or {}
     needs: list[str] = []
     picked = ""
+    local_model = ""
+    local_host = ""
     kind = ai.get("kind")
     if kind == "app":
         suggested = str(ai.get("name") or "")
@@ -507,6 +509,8 @@ def auto_setup(current: dict | None, scan: dict, key_dir: Path, notes_dir: Path,
                 hop["spec"]["model"] = str(ai.get("name"))
             out = _use_hop(out, hop["name"], hop["spec"])
             picked = "local"
+            local_model = str(hop["spec"].get("model") or "")
+            local_host = str(ai.get("host") or "")
     if not picked:
         waiting = [row["name"] for row in scan.get("apps") or [] if row.get("drives") and row.get("status") == "login"]
         if waiting:
@@ -539,6 +543,10 @@ def auto_setup(current: dict | None, scan: dict, key_dir: Path, notes_dir: Path,
             needs.append("bring in Apple Notes (Customize, then Notes)")
     out.setdefault("obsidian_vault", "")
     summary = {"ai": picked, "notes": path, "mail": mail, "chat": chat, "needs": needs}
+    if picked == "local":
+        # The setup window names the model it picked, so a wrong pick is visible.
+        summary["model"] = local_model
+        summary["host"] = local_host
     return out, summary
 
 

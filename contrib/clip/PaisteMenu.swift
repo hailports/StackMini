@@ -711,7 +711,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
                     self.explainScreenRecording()
                 }
                 let hint = blocked == "license" ? self.blockedByLicense()
-                    : blocked == "model" ? "Can't reach your AI model. Open Set up and check its address."
+                    : blocked == "model" ? "Can't reach your AI model. Right-click the p icon, pick Open setup…, and check its address."
                     : (captureNote == "need-screen-recording" ? "Allow paisty in Screen Recording" : "Nothing to copy")
                 self.fail(hint)
                 self.log.error("empty \(captureNote, privacy: .public)")

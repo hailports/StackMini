@@ -59,6 +59,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
     var fields: [String: NSTextField] = [:]
     var toggles: [String: NSButton] = [:]
     var extraHeight: CGFloat = 220
+    var scrollHeight: NSLayoutConstraint?
     var linkSaved = false
     var suggestAI: [String: Any] = [:]
     var suggestNotes: [String: Any] = [:]
@@ -222,13 +223,15 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         buttons.addArrangedSubview(nextButton)
         stack.addArrangedSubview(accessButton)
         stack.addArrangedSubview(buttons)
+        let listHeight = scroll.heightAnchor.constraint(equalToConstant: 300)
+        scrollHeight = listHeight
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 28),
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -28),
             stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 24),
             stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -16),
             scroll.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            scroll.heightAnchor.constraint(equalToConstant: 220),
+            listHeight,
         ])
         window.center()
     }
@@ -591,6 +594,8 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         if !body.stringValue.contains("doesn't send or keep your mail") {
             body.stringValue += "\n\npaisty itself doesn't send or keep your mail; your AI model writes the draft."
         }
+        // Save and license pages have a long body: they keep the shorter list so their buttons stay in the window.
+        scrollHeight?.constant = (page >= 3 || licenseOnly) ? 220 : 300
         extra.frame = NSRect(x: 0, y: 0, width: 484, height: max(extraHeight, 40))
         refreshTrust()
     }
@@ -785,11 +790,12 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         if !showManualLocal && !foundModels.isEmpty {
             return tagButton("It is on another computer", #selector(showManual(_:)), 0, y)
         }
-        y = caption("Type the address (and the computer, if it is another one). The name shows after it answers.", y)
+        y = caption("Type the address your model server uses, then press Connect. The model name shows after it answers.", y)
         for (i, row) in locals.enumerated() {
-            y = field("host-\(i)", "ssh host name. Blank if it is on this Mac.", row.host, y)
-            y = field("remote-\(i)", "http://127.0.0.1:18080/v1", row.remote, y)
-            y = field("url-\(i)", "Or on this Mac. http://127.0.0.1:8000/v1", row.url, y)
+            // The address on this Mac comes first; the host pair is for a model on another computer.
+            y = field("url-\(i)", "On this Mac, e.g. http://127.0.0.1:8000/v1", row.url, y)
+            y = field("host-\(i)", "Or on another computer: its ssh host name", row.host, y)
+            y = field("remote-\(i)", "and the address there, e.g. http://127.0.0.1:18080/v1", row.remote, y)
             y = rowButtons(probe: 1000 + i, remove: 3000 + i, showRemove: locals.count > 1, y)
         }
         if locals.count < 4 {
@@ -1142,11 +1148,12 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             }
         }
         if low.contains("local model address") {
+            let top = caption("No running model was found on this Mac.", y)
             let button = NSButton(title: "Enter a local model address", target: self, action: #selector(enterLocal(_:)))
-            button.frame = NSRect(x: 0, y: y, width: 460, height: 36)
+            button.frame = NSRect(x: 0, y: top, width: 460, height: 36)
             button.bezelStyle = .rounded
             extra.addSubview(button)
-            return caption("No running model was found on this Mac.", y + 40)
+            return top + 44
         }
         if low.contains("api key") {
             return tagButton("Paste an API key", #selector(pasteKey(_:)), 0, y)
@@ -1222,7 +1229,12 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         var parts: [String] = []
         let ai = doc["ai"] as? String ?? ""
         if !ai.isEmpty {
-            let name = appLabels[ai] ?? providers.first { $0.id == ai }?.name ?? (ai == "local" ? "a local model" : ai)
+            var name = appLabels[ai] ?? providers.first { $0.id == ai }?.name ?? (ai == "local" ? "a local model" : ai)
+            // Name the model, so a wrong pick (an MTP or embedding id) is visible right here.
+            if ai == "local", let model = doc["model"] as? String, !model.isEmpty {
+                let host = doc["host"] as? String ?? ""
+                name = model + (host.isEmpty ? " on this Mac" : " on " + host)
+            }
             parts.append("AI: " + name + ".")
         }
         let notes = doc["notes"] as? String ?? ""
@@ -1449,13 +1461,17 @@ final class SetupBoard: NSObject, NSWindowDelegate {
 
     @discardableResult
     func caption(_ text: String, _ y: CGFloat) -> CGFloat {
-        let label = NSTextField(labelWithString: text)
-        label.frame = NSRect(x: 0, y: y, width: 460, height: 32)
+        // Wraps to as many lines as the text needs (it used to clip mid-word). One line keeps its 32-point slot.
+        let label = NSTextField(wrappingLabelWithString: text)
+        label.isSelectable = false
         label.font = NSFont.systemFont(ofSize: 12, weight: .medium)
         label.textColor = NSColor(srgbRed: 0.25, green: 0.22, blue: 0.18, alpha: 1)
-        label.maximumNumberOfLines = 2
+        label.preferredMaxLayoutWidth = 460
+        let fit = label.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: 460, height: 400)).height ?? 16
+        let height = max(32, ceil(fit) + 4)
+        label.frame = NSRect(x: 0, y: y, width: 460, height: height)
         extra.addSubview(label)
-        return y + 36
+        return y + height + 4
     }
 
     @discardableResult
