@@ -159,6 +159,7 @@ class Reading:
     draft_so_far: str = ""
     ask: str = ""
     query: str = ""
+    selection: str = ""
 
 
 def _box(raw) -> Box | None:
@@ -284,6 +285,84 @@ def _chrome(text: str) -> bool:
         return True
     role_like = body.lower()
     return role_like in {"search", "chat", "more", "send", "yes", "no", "follow", "save"} and len(body) < 12
+
+
+# Highlighted text is the message the person wants answered. It rides in its own block, first,
+# so a long window can never trim it away and the rest of the window cannot outrank it.
+SELECTED_MAX = 6000
+
+
+def selected_text(scene) -> str:
+    """The highlighted text of a scene (or scene dict); "" when nothing real is selected."""
+    raw = scene.get("selection") if isinstance(scene, dict) else getattr(scene, "selection", "")
+    text = str(raw or "").strip()
+    if not text or _chrome(text):
+        return ""
+    return text[:SELECTED_MAX]
+
+
+# An order or shipping email invites a template reply: it never arrived, a trace, a replacement,
+# a discount. Each of those is a fact. A reply may state one only when the source text does.
+_COMMERCE = re.compile(
+    r"(?i)\b(?:orders?|package|parcel|shipment|shipping|shipped|deliver(?:y|ed|ing)?|tracking|"
+    r"usps|ups|fedex|dhl|refund|purchase|receipt)\b"
+)
+_NOT_ARRIVED = re.compile(
+    r"(?i)\b(?:never\s+(?:arrived|came|showed\s+up|got\s+there|been\s+delivered|delivered|received)"
+    r"|(?:did|does|has|have|had|was|is)\s*n[o'’]?t\s+(?:yet\s+)?(?:been\s+)?"
+    r"(?:arrive[ds]?|delivered|received|come|shown\s+up|show\s+up)"
+    r"|not\s+(?:yet\s+)?(?:been\s+)?(?:arrived|delivered|received)"
+    r"|lost\s+in\s+(?:the\s+)?(?:mail|post|transit)"
+    r"|(?:lost|missing)\s+(?:package|parcel|order|shipment|delivery))\b"
+)
+_REMEDIES = (
+    ("a refund", re.compile(r"(?i)\brefund(?:s|ed|ing)?\b"), re.compile(r"(?i)\brefund")),
+    ("a replacement",
+     re.compile(r"(?i)\b(?:replacement|re-?ship(?:ped|ping|ment)?|send\s+(?:you\s+)?a\s+new\s+(?:one|order|package|item|unit)"
+                r"|replace\s+(?:it|them|the\s+(?:order|item|package|unit)|your\s+(?:order|item|package|unit)))\b"),
+     re.compile(r"(?i)\b(?:replac|re-?ship|new one\b)")),
+    ("a trace",
+     re.compile(r"(?i)\b(?:trace\s+request|(?:open|opened|file|filed|start|started|submit|submitted|request|requested|put\s+in)"
+                r"\s+(?:a\s+)?(?:package\s+|usps\s+|ups\s+|carrier\s+|shipping\s+)?trace|(?:package|usps|ups|fedex|dhl|carrier|shipment)\s+trace)\b"),
+     re.compile(r"(?i)\btrace\b")),
+    ("a discount",
+     re.compile(r"(?i)\b(?:discounts?|coupons?|promo\s+codes?|store\s+credit|vouchers?)\b"),
+     re.compile(r"(?i)\b(?:discount|coupon|promo|credit|voucher|sale\b|deals?\b|offers?\b)|\d\s*%\s*off\b")),
+)
+
+
+def ungrounded_outcomes(reply: str, sources: str) -> list[str]:
+    """Order outcomes and remedies the reply states that the source text never mentions."""
+    src, body = sources or "", reply or ""
+    if not body.strip():
+        return []
+    shop = bool(_COMMERCE.search(src))
+    found = []
+    if _NOT_ARRIVED.search(body) and not _NOT_ARRIVED.search(src):
+        found.append("that it never arrived")
+    for label, said, named in _REMEDIES:
+        if label == "a replacement" and not shop:
+            continue  # "replace the value" or "a replacement part" in a code thread is not order talk
+        if said.search(body) and not named.search(src):
+            found.append(label)
+    return found
+
+
+_LIST_MARK = re.compile(r"^\s*(?:\d+[.)]|[-*•])?\s*$")
+
+
+def drop_ungrounded_outcomes(reply: str, sources: str) -> str:
+    """Remove each sentence that states an outcome the source never mentions. Lines stay lines."""
+    if not ungrounded_outcomes(reply, sources):
+        return reply
+    lines = []
+    for line in (reply or "").split("\n"):
+        parts = re.split(r"(?<=[.!?])\s+", line)
+        kept = " ".join(p for p in parts if not ungrounded_outcomes(p, sources))
+        if line.strip() and _LIST_MARK.match(kept):
+            continue  # the whole line, or the whole list item, was the invented claim
+        lines.append(kept)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
 def _signature_line(raw: str) -> bool:
@@ -502,8 +581,14 @@ def addressee_first(text: str, me: list[str] | None = None) -> str:
     for left, right in _WHO.findall(text or ""):
         name = left or right
         if name and name.lower() not in skip:
-            found.append(name)
-    return found[-1] if found else ""
+            found.append((name, bool(left)))
+    if not found:
+        return ""
+    # Mail quotes the newest message first, each under a "From:" header. Chat apps and web mail
+    # list the newest last. Only a pure run of mail headers is read top-down.
+    if all(header for _name, header in found):
+        return found[0][0]
+    return found[-1][0]
 
 
 def screen_has_choice(sources: str) -> bool:
@@ -724,6 +809,7 @@ def draft_rules(addressee: str = "", choice: bool = False) -> str:
     greet = f"hey {addressee}," if addressee else "hey <first name>,"
     lines = [
         "These rules win. Write only the reply they will paste.",
+        "If text is selected, it is the message you reply to. Take every fact from it. When it says something different from what usually happens, it wins. Never fill a gap with what usually happens: no delivery problem, trace, refund, replacement, discount, date, or number it does not state.",
         "If they name a record link, a ticket, an asset, a case, a serial, or an error, name that item and the concrete next step. Use the human name or number, never a raw CRM id and never a /lightning/ path. A link already in the thread does not need repeating. Never answer with only I'll take a look. Do not invent a finding, a cause, or a status. Do not say that you have not changed anything.",
         "Never offer, promise, or claim to assign a permission set or group, add or reactivate a user, grant access, or share. When a lookup shows missing permission or access, state the cause and say that access change needs a helpdesk ticket. Do not mention a helpdesk ticket when no access change is involved.",
         f'Start with "{greet}". Use their first name. Never "hey there", never "hi", never "hello".',
@@ -1293,13 +1379,18 @@ def choose(scene: Scene) -> Reading:
     if _secure(scene.field_role):
         return Reading("secret")
     page = _page_text(scene)
-    selection = (scene.selection or "").strip()
-    if selection and not _chrome(selection) and selection not in page:
-        page = (selection + "\n\n" + page).strip()
+    picked = selected_text(scene)
+    if picked and picked not in page:
+        page = (picked + "\n\n" + page).strip()
     if not page.strip():
         return Reading("empty")
-    kind = "selection" if selection and not _chrome(selection) else "above"
-    return Reading(kind, page[:PAGE], "", "Write the reply. Cover every point that is still open, not only the last line.", page[:240])
+    if picked:
+        # Notes are searched for the highlighted text, not for the top of the window.
+        return Reading("selection", page[:PAGE], "",
+                       "Write the reply to the selected text. Take every fact from it. "
+                       "Cover every point in it that is still open.",
+                       picked[:240], selection=picked)
+    return Reading("above", page[:PAGE], "", "Write the reply. Cover every point that is still open, not only the last line.", page[:240])
 
 
 def _hits_from(search, query: str) -> list[dict]:
@@ -1561,7 +1652,15 @@ def runner_context(messages: list[dict], note: str) -> list[dict]:
 
 
 def messages_for(reading: Reading, hits: list[dict]) -> list[dict]:
-    user = reading.ask + "\n\nOn screen:\n" + reading.subject
+    if reading.selection:
+        user = (reading.ask + "\n\nSelected text (the message you are replying to; take every fact from it):\n"
+                + reading.selection)
+        rest = reading.subject.replace(reading.selection, " ").strip()
+        if rest:
+            user += ("\n\nRest of the window (background only; it can show other messages, "
+                     "never take a fact from one of those):\n" + rest)
+    else:
+        user = reading.ask + "\n\nOn screen:\n" + reading.subject
     if reading.draft_so_far.strip():
         user += "\n\nAlready in the box:\n" + reading.draft_so_far.strip()
     extra = "\n\n".join(hit["title"] + "\n" + hit["body"] for hit in hits[:3])

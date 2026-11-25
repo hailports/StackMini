@@ -81,14 +81,23 @@ def endpoints_from(cfg: dict) -> list[dict]:
                     hop["timeout_s"] = spec["timeout_s"]
                 key_file = str(spec.get("key_file") or "")
                 if key_file.startswith("/") and ".." not in key_file:
+                    if needs_key(base) and not read_key({"key_file": key_file}):
+                        # The key file is gone or empty: this paid service can only fail.
+                        continue
                     hop["key_file"] = key_file
                 elif needs_key(base):
                     # A paid service with no key can only fail: skip it, try the next engine.
                     continue
                 hops.append(hop)
+    llm = cfg.get("llm") if isinstance(cfg.get("llm"), dict) else {}
     if hops:
+        # A model on this Mac saved under llm still catches the draft when every engine in the
+        # order fails (an expired key, a quota, an outage). A dead cloud engine used to mean no draft.
+        local = str(llm.get("base_url") or "").strip()
+        if local and _url_ok(local) and _loopback(local) and not any(
+                h.get("via") == "http" and str(h.get("base_url") or "").rstrip("/") == local.rstrip("/") for h in hops):
+            hops.append({"name": "llm", "via": "http", "base_url": local, "model": str(llm.get("model") or "local")})
         return hops
-    llm = cfg.get("llm") or {}
     return [{
         "name": "default",
         "via": "http",
@@ -120,6 +129,10 @@ def _reply_text(doc: dict) -> str:
 
 def _user_text(messages: list[dict]) -> str:
     return "\n".join(str(message.get("content") or "") for message in messages)
+
+
+def _loopback(url: str) -> bool:
+    return (urlparse(url or "").hostname or "").lower() in {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
 
 
 def read_key(endpoint: dict) -> str:

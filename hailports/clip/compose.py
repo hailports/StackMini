@@ -27,7 +27,7 @@ from hailports.clip import attach, datafacts, owndraft, rulenotes, shape
 from hailports.clip import thread as threadmod
 
 QUALITY_RULES = """How to write this reply:
-1. Answer the NEWEST message from someone else. Asks from earlier in the thread that a later message already handled are background. Do not answer them again or repeat old requests.
+1. When there is a SELECTED TEXT block, that is the message you answer. Otherwise answer the NEWEST message from someone else. Asks from earlier in the thread that a later message already handled are background. Do not answer them again or repeat old requests.
 2. Lead with the direct answer to their question (yes / no / the number), then the reason in one line.
 3. Use the DATA FACTS, ATTACHMENTS and NOTES blocks for the facts. Quote one or two key figures, not every figure; give one short worked example only when they asked how a rule or calculation works. Do not stay vague when the facts are there, and do not dump them either.
 4. Never say something is missing, not built, not possible or not there unless a block says so in plain words. A code snippet that does not show a rule is not proof it is missing. When the NOTES or DATA FACTS contain the rule, it is part of the logic: say yes and explain it with the numbers. "Your logic" / "your file" means work I did; the NOTES describe it.
@@ -35,7 +35,8 @@ QUALITY_RULES = """How to write this reply:
    For a worked example, use the WORKED EXAMPLE line (a row where the rule applies), not an exception.
 6. Speak to each person listed under "People to answer", by first name. Skip people with nothing open.
 7. Do not ask for files or information that are already in the thread or the blocks. Do not invent names, numbers, dates, links or promises.
-8. Write as me (I). Plain text, no markdown headers or bold. A short numbered list ("1. ...") for steps or a fix. No signature, no subject line. Keep it short: what a busy expert would type."""
+8. Write as me (I). Plain text, no markdown headers or bold. A short numbered list ("1. ...") for steps or a fix. No signature, no subject line. Keep it short: what a busy expert would type.
+9. Every fact comes from the text above: the SELECTED TEXT, the thread and the blocks. When that text says something different from what usually happens, the text wins. If a fact you would need is not there, leave it out or ask for it. Never fill a gap with what usually happens: no delivery problem, trace, refund, replacement, discount, date or number the text does not state."""
 
 _ABSENT = re.compile(
     r"(?i)\b(?:does(?:n'?t| not)|do(?:n'?t| not)|is(?:n'?t| not)|are(?:n'?t| not)|was(?:n'?t| not)|"
@@ -69,6 +70,7 @@ class Context:
     target: int = 120         # words
     cap: int = 180            # hard word cap; over it gets a retry-shorter pass
     examples: str = ""        # real sent replies, local only
+    selection: str = ""       # highlighted text: the message to answer, never trimmed
 
     def sources(self) -> str:
         # The user's own edits to an earlier draft count as source facts.
@@ -76,6 +78,15 @@ class Context:
         kept = "\n".join(self.locks())
         return "\n".join([self.screen, self.thread_block, self.attach_block, self.notes_block,
                           self.facts_block, self.image_block, edited, kept])
+
+    def ground(self) -> str:
+        """Where an outcome may come from. With a selection, the rest of the window does not
+        count: a mail window also shows other messages and their previews."""
+        if not self.selection:
+            return self.sources()
+        edited = str(self.prior.get("placed") or "") if self.prior.get("kind") not in (None, "", "none", "exact") else ""
+        return "\n".join([self.selection, self.thread_block, self.attach_block, self.notes_block,
+                          self.facts_block, self.image_block, edited, "\n".join(self.locks())])
 
     def lock_plan(self) -> dict | None:
         plan = (self.prior or {}).get("locks")
@@ -154,11 +165,14 @@ def gather(doc: dict, cfg: dict | None, lookup=None, extra_dirs: list[Path] | No
     me = [p.strip() for p in str(paiste.get("me") or "").split(",") if p.strip()]
     ctx = Context(me=me)
     ctx.screen = screen_text(doc)
+    from hailports.clip.scene import selected_text
+    ctx.selection = selected_text(doc)
     ctx.subject = _subject(doc, ctx.screen)
     if isinstance(doc.get("prior_draft"), dict):
         ctx.prior = doc["prior_draft"]
         ctx.prior_block = owndraft.prior_note(ctx.prior)
-    field_text = str(doc.get("field_text") or "") or ctx.screen
+    # Outside a reply box, the highlighted text is the conversation; the window around it is not.
+    field_text = str(doc.get("field_text") or "") or ctx.selection or ctx.screen
     ctx.thread = threadmod.parse(field_text, me, subject=ctx.subject)
     if not ctx.thread.ok:
         chat = threadmod.parse_chat(field_text, me)
@@ -172,7 +186,7 @@ def gather(doc: dict, cfg: dict | None, lookup=None, extra_dirs: list[Path] | No
         open_names = {m.first for m in ctx.thread.open_messages()}
         ctx.settled_people = sorted({m.first for m in ctx.thread.settled() if not m.mine and m.first and m.first not in open_names})
     newest = ctx.thread.newest_other() if ctx.thread and ctx.thread.ok else None
-    ask = newest.body if newest else ctx.screen[-2500:]
+    ask = ctx.selection or (newest.body if newest else ctx.screen[-2500:])
 
     # Attachments: names on screen, local folders, then the configured helper.
     names = attach.names_in(ctx.screen)
@@ -231,7 +245,7 @@ def gather(doc: dict, cfg: dict | None, lookup=None, extra_dirs: list[Path] | No
     if voice_file and Path(voice_file).expanduser().is_file():
         ctx.voice = Path(voice_file).expanduser().read_text(encoding="utf-8", errors="replace")[:1800]
     ctx.kind = shape.surface(doc)
-    incoming = shape.words(shape.newest_message(screen_text(doc)))
+    incoming = shape.words(shape.newest_message(ctx.selection or screen_text(doc)))
     ctx.target, ctx.cap = shape.word_cap(ctx.kind, incoming)
     ctx.examples = shape.load_examples(paiste)
     return ctx
@@ -259,8 +273,17 @@ def messages(ctx: Context, rules: str) -> list[dict]:
                    + ctx.examples)
     system += "\n\n" + shape.rules(ctx.kind, ctx.target, ctx.cap)
     blocks = []
+    if ctx.selection:
+        # First and whole: a long window used to push the highlighted message out of the last 9000 characters.
+        blocks.append("SELECTED TEXT (the person highlighted this. It is the message you are replying to. "
+                      "Take every fact from it):\n" + ctx.selection)
     if ctx.thread_block:
         blocks.append(ctx.thread_block)
+    elif ctx.selection:
+        rest = ctx.screen.replace(ctx.selection, " ").strip()
+        if rest:
+            blocks.append("REST OF THE WINDOW (background only. It can show other messages and previews; "
+                          "never take a fact from one of those):\n" + rest[-9000:])
     else:
         blocks.append("ON SCREEN:\n" + ctx.screen[-9000:])
     if ctx.facts_block:
@@ -274,7 +297,7 @@ def messages(ctx: Context, rules: str) -> list[dict]:
     extra = str(ctx.screen)
     if ctx.thread_block and "window_ocr" in extra:
         pass
-    task = "Write the reply now. Only the reply text."
+    task = "Write the reply now, to the SELECTED TEXT. Only the reply text." if ctx.selection else "Write the reply now. Only the reply text."
     if ctx.prior_block:
         blocks.append(ctx.prior_block)
         task = "Write the reply now: the whole text that replaces your earlier draft. Only the reply text."
@@ -315,6 +338,12 @@ def check(text: str, ctx: Context) -> list[str]:
     body = (text or "").strip()
     if not body:
         return ["empty reply"]
+    from hailports.clip.scene import ungrounded_outcomes
+    made_up = ungrounded_outcomes(body, ctx.ground())
+    if made_up:
+        issues.append("the reply states " + ", ".join(made_up) + ", but the "
+                      + ("selected text" if ctx.selection else "thread")
+                      + " never says so. Take every fact from it and leave those out.")
     src_vals = _values(ctx.sources())
     unknown = []
     for v in sorted(_values(body)):
@@ -492,6 +521,10 @@ def draft(doc: dict, cfg: dict | None, rules: str, complete, lookup=None, tries:
         if again and shape.words(again) <= ctx.cap:
             attempts.append({"text": again, "issues": check(again, ctx), "score": score(again, ctx)})
             best = again
+    if best:
+        # Retries can still return the template: drop each sentence that states an outcome the text never does.
+        from hailports.clip.scene import drop_ungrounded_outcomes
+        best = drop_ungrounded_outcomes(best, ctx.ground())
     if ctx.locks():
         # Still missing a kept sentence after the retries: splice it back, in order and place.
         from hailports.clip import locks

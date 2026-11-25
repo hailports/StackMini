@@ -330,6 +330,11 @@ def _draft_scene_once(doc: dict, base_url: str, model: str, copy: bool, cfg: dic
         messages[0]["content"] = rules
     me = [part.strip() for part in str((route.get("paiste") or {}).get("me") or "").split(",") if part.strip()]
     sources = "\n".join(prepared.get("sources") or [])
+    from hailports.clip.scene import drop_ungrounded_outcomes, selected_text, ungrounded_outcomes
+    picked = selected_text(doc)
+    # With a selection, an outcome must come from it or a note, not from other messages in the window.
+    ground = sources if not picked else "\n".join(
+        [picked] + [s for s in (prepared.get("sources") or []) if s.strip() != str(prepared.get("subject_text") or "").strip()])
     screen = scene_blob(doc)
     facts = ""
     try:
@@ -337,7 +342,8 @@ def _draft_scene_once(doc: dict, base_url: str, model: str, copy: bool, cfg: dic
         facts = facts_for_draft(route, screen)
     except (OSError, TimeoutError, ValueError):
         facts = ""
-    who = addressee_first(screen + "\n" + sources, me)
+    # The sender of the highlighted message first; the window only when the selection names nobody.
+    who = (addressee_first(picked, me) if picked else "") or addressee_first(screen + "\n" + sources, me)
     from hailports.clip.scene import latest_chat_message
     _latest_who, latest = latest_chat_message(screen, me)
     _note_scene(doc, who)
@@ -413,6 +419,8 @@ def _draft_scene_once(doc: dict, base_url: str, model: str, copy: bool, cfg: dic
             or intro_narration(text, sources)
             or unasked_remedy(text, sources)
         )
+        made_up = ungrounded_outcomes(text, ground)
+        blocked = blocked or bool(made_up)
         invented = overreach(text, sources) or bounced_choice(text, sources) or bool(gaps) or blocked
         first = text
         if invented or weak:
@@ -427,6 +435,9 @@ def _draft_scene_once(doc: dict, base_url: str, model: str, copy: bool, cfg: dic
                 ask += " Write the intro itself. Do not say you will send it later."
             if unasked_remedy(text, sources):
                 ask += " Do not promise a remedy they did not name. Say you will look."
+            if made_up:
+                ask += (" The " + ("selected text" if picked else "message") + " never says " + ", ".join(made_up)
+                        + ". Take every fact from it and leave those out.")
 
             retry = list(prepared["messages"]) + [
                 {"role": "assistant", "content": text},
@@ -438,6 +449,7 @@ def _draft_scene_once(doc: dict, base_url: str, model: str, copy: bool, cfg: dic
                 # A weak first draft beats nothing. An invented one does not.
                 text = "" if invented else first
         kept = ground_reply(drop_ungrounded(ensure_commits(as_writer(trim_overreach(text, sources), me), sources), screen, who), sources, me)
+        kept = drop_ungrounded_outcomes(kept, ground)
         # Cleanup that removes the whole reply must not put the raw text back.
         if reply_ok(kept):
             text = kept

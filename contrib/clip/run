@@ -44,7 +44,7 @@ def _cfg(path: str, base_url: str, model: str) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="paiste", description="Draft from the text near the cursor. Nothing is sent.")
-    parser.add_argument("action", nargs="?", default="draft", choices=["draft", "auto", "menu", "check", "onboard", "drafts", "redo", "rewrite", "shot", "locate", "locks"])
+    parser.add_argument("action", nargs="?", default="draft", choices=["draft", "auto", "menu", "check", "onboard", "drafts", "redo", "rewrite", "shot", "locate", "locks", "models"])
     parser.add_argument("--id", default="")
     parser.add_argument("--scene", default="")
     parser.add_argument("--inbox", default="")
@@ -92,6 +92,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.action in {"drafts", "redo"}:
         from hailports.clip.drafts import cmd as drafts_cmd
         return drafts_cmd(args.action, args, cfg)
+    if args.action == "models":
+        # The menu's Model list: the chat models the drafting server offers; --use switches to one.
+        from hailports.clip.pick_model import listing, route_path, use
+        doc = use(cfg, args.use, Path(args.route) if args.route else route_path()) if args.use else listing(cfg)
+        print(json.dumps(doc))
+        return 0 if doc.get("ok") else 2
     if args.action == "rewrite":
         from hailports.clip.rewrite import cmd as rewrite_cmd
         return rewrite_cmd(args, cfg)

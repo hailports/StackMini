@@ -222,8 +222,15 @@ def test_keep_choice_rules():
 
 
 def test_no_8080_default_in_app_sources():
-    for rel in ("hailports/clip/board.py", "contrib/clip/Onboard.swift", "contrib/clip/run"):
+    # :8080 is llama.cpp's llama-server default, so setup probes it (after :18080), but it is
+    # never written as a default address.
+    for rel in ("contrib/clip/Onboard.swift", "contrib/clip/run"):
         assert "127.0.0.1:8080" not in (ROOT / rel).read_text(encoding="utf-8"), rel
+    probes = ('"http://127.0.0.1:8080/v1",', '("http://127.0.0.1:8080/v1/models"', 'for url in ("http://127.0.0.1:18080/v1"')
+    for line in (ROOT / "hailports/clip/board.py").read_text(encoding="utf-8").splitlines():
+        if "127.0.0.1:8080" in line:
+            assert line.strip().startswith(probes), line
+    assert routefix.DEFAULT_LOCAL_URL == "http://127.0.0.1:18080/v1"
 
 
 def test_menu_single_instance_fail_reset_and_bundled_runner():

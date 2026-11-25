@@ -66,10 +66,11 @@ def parse_hop(line: str, index: int) -> dict | None:
 
 def _model_up(url: str) -> bool:
     try:
-        with urllib.request.urlopen(url.rstrip("/") + "/models", timeout=0.4) as resp:
+        with urllib.request.urlopen(url.rstrip("/") + "/models", timeout=1.5) as resp:
             if resp.status != 200:
                 return False
-            body = resp.read(8000).decode("utf-8", "replace")
+            # A long model list cut short is not JSON; read it whole or a live server reads as dead.
+            body = resp.read(262144).decode("utf-8", "replace")
     except (OSError, TimeoutError):
         return False
     return bool(model_ids(body))
@@ -97,7 +98,7 @@ def discover(home: Path | None = None) -> dict:
             vault = str(found[0])
             break
     model = ""
-    for url in ("http://127.0.0.1:18080/v1", "http://127.0.0.1:8000/v1"):
+    for url in ("http://127.0.0.1:18080/v1", "http://127.0.0.1:8000/v1", "http://127.0.0.1:8080/v1"):
         if _model_up(url):
             model = url
             break
@@ -113,12 +114,13 @@ def discover(home: Path | None = None) -> dict:
     }
 
 
-# :8000 is the common default for oMLX, vLLM, llama.cpp's server and most OpenAI-compatible servers.
+# :8000 is the common default for oMLX, vLLM and llama-cpp-python; :8080 is llama.cpp's llama-server.
 _LOCAL_URLS = (
     "http://127.0.0.1:18080/v1",
     "http://127.0.0.1:11434/v1",
     "http://127.0.0.1:1234/v1",
     "http://127.0.0.1:8000/v1",
+    "http://127.0.0.1:8080/v1",
 )
 _REMOTE_ENDPOINTS = (
     ("http://127.0.0.1:18080/v1/models", "http://127.0.0.1:18080/v1"),
@@ -126,6 +128,7 @@ _REMOTE_ENDPOINTS = (
     ("http://127.0.0.1:11434/api/tags", "http://127.0.0.1:11434/v1"),
     ("http://127.0.0.1:1234/v1/models", "http://127.0.0.1:1234/v1"),
     ("http://127.0.0.1:8000/v1/models", "http://127.0.0.1:8000/v1"),
+    ("http://127.0.0.1:8080/v1/models", "http://127.0.0.1:8080/v1"),
 )
 
 
@@ -138,7 +141,7 @@ def aux_model(name: str) -> bool:
     return bool(_AUX_MODEL.search(name or ""))
 
 
-def model_ids(body: str) -> list[str]:
+def model_ids(body: str, limit: int = 4) -> list[str]:
     """Names from an OpenAI /models body or an Ollama tags body, chat models first. Nothing else."""
     try:
         doc = json.loads(body or "")
@@ -152,7 +155,7 @@ def model_ids(body: str) -> list[str]:
         if not isinstance(rows, list):
             continue
         for row in rows:
-            if len(names) == 16:
+            if len(names) == max(16, limit):
                 break
             if not isinstance(row, dict):
                 continue
@@ -160,7 +163,7 @@ def model_ids(body: str) -> list[str]:
             if _model_ok(name) and name not in names:
                 names.append(name)
     names.sort(key=aux_model)  # stable: chat models keep the server's order
-    return names[:4]
+    return names[:limit]
 
 
 def ssh_host_names(text: str) -> list[str]:
@@ -185,10 +188,10 @@ def _read_quiet(url: str) -> str:
     if not url.startswith("http://127.0.0.1:"):
         return ""
     try:
-        with urllib.request.urlopen(url, timeout=0.4) as resp:
+        with urllib.request.urlopen(url, timeout=1.5) as resp:
             if int(resp.status) != 200:
                 return ""
-            return resp.read(8000).decode("utf-8", "replace")
+            return resp.read(262144).decode("utf-8", "replace")
     except (OSError, TimeoutError, urllib.error.URLError):
         return ""
 
@@ -207,7 +210,7 @@ def _ssh_body(host: str, url: str) -> str:
         return ""
     if done.returncode != 0:
         return ""
-    return (done.stdout or b"")[:8000].decode("utf-8", "replace")
+    return (done.stdout or b"")[:262144].decode("utf-8", "replace")
 
 
 def _hosts_from_ssh(root: Path) -> list[str]:
@@ -219,6 +222,25 @@ def _hosts_from_ssh(root: Path) -> list[str]:
     return ssh_host_names(text)
 
 
+PER_SERVER = 6
+
+
+def _warm(reader, base: str) -> tuple:
+    """Models a server on this Mac has in memory right now (Ollama, LM Studio). A warm model answers
+    at once; a cold one loads first. Other servers do not say, so they keep their own order."""
+    try:
+        if ":11434/" in base:
+            doc = json.loads(reader("http://127.0.0.1:11434/api/ps") or "{}")
+            return tuple(str(m.get("name") or m.get("model") or "") for m in doc.get("models") or [] if isinstance(m, dict))
+        if ":1234/" in base:
+            doc = json.loads(reader("http://127.0.0.1:1234/api/v0/models") or "{}")
+            return tuple(str(m.get("id") or "") for m in doc.get("data") or []
+                         if isinstance(m, dict) and m.get("state") == "loaded")
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        return ()
+    return ()
+
+
 def scan_models(read_local=None, hosts=None, read_ssh=None) -> list[dict]:
     """Find a running model on this Mac or on an ssh host. The name comes from the server."""
     reader = read_local or _read_quiet
@@ -226,23 +248,24 @@ def scan_models(read_local=None, hosts=None, read_ssh=None) -> list[dict]:
     rows = []
     seen = set()
 
-    def add(where: str, host: str, base: str, body: str) -> None:
+    def add(where: str, host: str, base: str, body: str, warm: tuple = ()) -> None:
         if not body or not body.lstrip().startswith("{"):
             return
-        ids = model_ids(body)
-        if not ids or aux_model(ids[0]):
-            return
-        name = ids[0]
-        key = (host, base, name)
-        if key in seen:
-            return
-        seen.add(key)
-        rows.append({"where": where, "host": host, "url": base, "model": name})
+        # One row per chat model, so a server with several can be picked from. Embedding,
+        # reranker and MTP heads cannot write a reply and are never offered.
+        names = [name for name in model_ids(body, limit=PER_SERVER) if not aux_model(name)]
+        names.sort(key=lambda name: name not in warm)  # loaded now beats a cold load
+        for name in names:
+            key = (host, base, name)
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append({"where": where, "host": host, "url": base, "model": name})
 
     for base in _LOCAL_URLS:
         body = reader(base.rstrip("/") + "/models")
         if body:
-            add("This Mac", "", base, body)
+            add("This Mac", "", base, body, _warm(reader, base))
         if ":11434/" in base:
             tags = reader("http://127.0.0.1:11434/api/tags")
             if tags:
@@ -258,7 +281,7 @@ def scan_models(read_local=None, hosts=None, read_ssh=None) -> list[dict]:
             add(host, host, base, body)
             found_remote = True
             break
-    return rows[:6]
+    return rows[:12]
 
 
 def _vaults(root: Path) -> list[str]:

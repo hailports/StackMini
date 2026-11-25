@@ -1058,6 +1058,13 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         let setup = NSMenuItem(title: "Open setup…", action: #selector(openSetup), keyEquivalent: "")
         setup.target = self
         menu.addItem(setup)
+        // Model: the chat models the drafting server lists. Filled in once the server answers.
+        let modelItem = NSMenuItem(title: "Model", action: nil, keyEquivalent: "")
+        let models = NSMenu(title: "Model")
+        models.addItem(header("Looking…"))
+        modelItem.submenu = models
+        menu.addItem(modelItem)
+        fillModels(models)
         let scan = NSMenuItem(title: "Scan this Mac again", action: #selector(scanAgain), keyEquivalent: "")
         scan.target = self
         menu.addItem(scan)
@@ -1098,6 +1105,54 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         let on = !PaistyUpdater.shared.autoOn
         UserDefaults.standard.set(on, forKey: PaistyUpdater.autoKey)
         sender.state = on ? .on : .off
+    }
+
+    static func modelDoc(_ out: String) -> [String: Any] {
+        let line = out.split(separator: "\n").last.map(String.init) ?? ""
+        return (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] ?? [:]
+    }
+
+    func fillModels(_ sub: NSMenu) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let doc = Self.modelDoc(Self.runPaiste(["models"], timeout: 8).out)
+            DispatchQueue.main.async {
+                sub.removeAllItems()
+                let names = doc["models"] as? [String] ?? []
+                guard !names.isEmpty else {
+                    sub.addItem(self.header(doc["why"] as? String ?? "The model server did not answer."))
+                    return
+                }
+                let current = doc["current"] as? String ?? ""
+                let switchable = doc["switchable"] as? Bool ?? false
+                sub.addItem(self.header("On " + (doc["where"] as? String ?? "this Mac")))
+                for name in names {
+                    let row = NSMenuItem(title: name, action: switchable ? #selector(self.modelChosen(_:)) : nil, keyEquivalent: "")
+                    row.target = self
+                    row.representedObject = name
+                    row.state = name == current ? .on : .off
+                    row.isEnabled = switchable
+                    sub.addItem(row)
+                }
+                if !switchable {
+                    sub.addItem(self.header("Open setup… and save a model to switch here"))
+                }
+            }
+        }
+    }
+
+    @objc func modelChosen(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let doc = Self.modelDoc(Self.runPaiste(["models", "--use", name], timeout: 15).out)
+            DispatchQueue.main.async {
+                guard doc["ok"] as? Bool == true else {
+                    self.fail(doc["why"] as? String ?? "Could not switch the model")
+                    return
+                }
+                PastePath.note("model " + name)
+                self.item?.button?.toolTip = "paisty drafts with " + name
+            }
+        }
     }
 
     static func pasteboardImage() -> Data? {
