@@ -97,7 +97,7 @@ def discover(home: Path | None = None) -> dict:
             vault = str(found[0])
             break
     model = ""
-    for url in ("http://127.0.0.1:18080/v1",):
+    for url in ("http://127.0.0.1:18080/v1", "http://127.0.0.1:8000/v1"):
         if _model_up(url):
             model = url
             break
@@ -113,16 +113,19 @@ def discover(home: Path | None = None) -> dict:
     }
 
 
+# :8000 is the common default for oMLX, vLLM, llama.cpp's server and most OpenAI-compatible servers.
 _LOCAL_URLS = (
     "http://127.0.0.1:18080/v1",
     "http://127.0.0.1:11434/v1",
     "http://127.0.0.1:1234/v1",
+    "http://127.0.0.1:8000/v1",
 )
 _REMOTE_ENDPOINTS = (
     ("http://127.0.0.1:18080/v1/models", "http://127.0.0.1:18080/v1"),
     ("http://127.0.0.1:11434/v1/models", "http://127.0.0.1:11434/v1"),
     ("http://127.0.0.1:11434/api/tags", "http://127.0.0.1:11434/v1"),
     ("http://127.0.0.1:1234/v1/models", "http://127.0.0.1:1234/v1"),
+    ("http://127.0.0.1:8000/v1/models", "http://127.0.0.1:8000/v1"),
 )
 
 
@@ -498,8 +501,12 @@ def auto_setup(current: dict | None, scan: dict, key_dir: Path, notes_dir: Path,
         waiting = [row["name"] for row in scan.get("apps") or [] if row.get("drives") and row.get("status") == "login"]
         if waiting:
             needs.append("sign in to " + _APP_LABELS.get(waiting[0], waiting[0]))
-        elif "paste an API key" not in needs:
-            needs.append("paste an API key")
+        else:
+            if not scan.get("models"):
+                # Say so plainly. A setup that "succeeds" with no reachable model is worse than one that asks.
+                needs.append("enter your local model address (no running model was found on this Mac)")
+            if "paste an API key" not in needs:
+                needs.append("paste an API key")
     mail = list(scan.get("mail_apps") or [])
     chat = list(scan.get("chat_apps") or [])
     for key, path_key, found_apps in (("mail", "email_dir", mail), ("chat", "chat_dir", chat)):
@@ -523,6 +530,27 @@ def auto_setup(current: dict | None, scan: dict, key_dir: Path, notes_dir: Path,
     out.setdefault("obsidian_vault", "")
     summary = {"ai": picked, "notes": path, "mail": mail, "chat": chat, "needs": needs}
     return out, summary
+
+
+def live_llm(llm: dict | None, scan: dict, picked: str, up=None) -> dict | None:
+    """The top-level llm block to save after auto setup, or None to drop it.
+
+    A local model the scan found (on this Mac) becomes the llm block. Otherwise a loopback
+    address that does not answer /v1/models is dropped, so setup never saves a dead default.
+    A saved address that is not loopback (or answers) is kept as it is.
+    """
+    check = up or _model_up
+    ai = (scan.get("suggest") or {}).get("ai") or {}
+    if picked == "local" and not ai.get("host") and str(ai.get("url") or "").startswith("http://127.0.0.1:"):
+        model = str(ai.get("name") or "")
+        return {"base_url": str(ai.get("url")), "model": model if _model_ok(model) else "local"}
+    block = dict(llm or {})
+    base = str(block.get("base_url") or "").strip()
+    if not base:
+        return None
+    if _loopback(base) and not check(base):
+        return None
+    return block
 
 
 _INGEST_OK = {".md", ".txt", ".markdown", ".eml", ".ics", ".pdf", ".csv"}
@@ -1560,6 +1588,8 @@ def apply_board(existing: dict | None, answers: dict) -> dict:
         if not rows:
             raise BoardError("Add the API address, or choose local.")
         old_models = current.get("models") if isinstance(current.get("models"), dict) else {}
+        skipped_hosts: list = []
+        kept_before = len(order)
         for index, row in enumerate(rows):
             url = row["url"]
             if not _url_ok(url) or _loopback(url):
@@ -1575,6 +1605,10 @@ def apply_board(existing: dict | None, answers: dict) -> dict:
                     if isinstance(old, dict) and old.get("base_url") == url and _key_path_ok(str(old.get("key_file") or "")):
                         key_file = str(old.get("key_file"))
                         break
+            if not _key_path_ok(key_file):
+                # A hosted service with no key can only fail. Never put it in the order.
+                skipped_hosts.append(urlparse(url).hostname or url)
+                continue
             spec = {
                 "via": "http",
                 "base_url": url,
@@ -1587,6 +1621,8 @@ def apply_board(existing: dict | None, answers: dict) -> dict:
             name = _unique(_named(current, spec, fallback), models, fallback)
             order.append(name)
             models[name] = spec
+        if skipped_hosts and len(order) == kept_before and not order:
+            raise BoardError("Paste the API key for " + skipped_hosts[0] + ", or choose local.")
     order, models = _prefer_connected_app(current, order, models, answers)
     out["order"] = order
     out["models"] = models

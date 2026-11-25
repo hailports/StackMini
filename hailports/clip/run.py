@@ -634,7 +634,7 @@ def _route_dest(args):
     return Path(raw)
 
 
-def _save_route(dest: Path, route: dict, pick: str = "", edits: bool = False) -> bool:
+def _save_route(dest: Path, route: dict, pick: str = "", edits: bool = False, drop: tuple = ()) -> bool:
     """The one route writer for setup. The saved order and `preferred` always survive (see
     routefix.keep_choice); `pick` is an engine the user just chose, `edits` a setup-form save.
     No duplicate engines, no write when unchanged."""
@@ -650,7 +650,7 @@ def _save_route(dest: Path, route: dict, pick: str = "", edits: bool = False) ->
             old = {}
     if isinstance(old.get("paiste"), dict) and old["paiste"].get("models"):
         for key, value in old.items():
-            if key not in clean:
+            if key not in clean and key not in drop:
                 clean[key] = value
         clean["paiste"] = keep_choice(old["paiste"], clean.get("paiste") or {}, pick=pick, edits=edits)
     else:
@@ -671,7 +671,7 @@ def _save_route(dest: Path, route: dict, pick: str = "", edits: bool = False) ->
 def _onboard_auto(args, cfg, scan: dict | None = None) -> int:
     """One click. Apply what the scan found. Keys go to 0600 files and are never printed."""
     from hailports.config import save_file
-    from hailports.clip.board import BoardError, auto_setup, notes_setup_body, scan_setup, tie_notes
+    from hailports.clip.board import BoardError, auto_setup, live_llm, notes_setup_body, scan_setup, tie_notes
     from hailports.clip.gate import read_entitlement, read_token
     dest = _route_dest(args)
     found = scan if scan is not None else scan_setup()
@@ -692,8 +692,16 @@ def _onboard_auto(args, cfg, scan: dict | None = None) -> int:
         )
         route = dict(cfg)
         route["paiste"] = updated
+        # Only save an llm address that answers (or the model the scan just found).
+        llm = live_llm(cfg.get("llm"), found, summary["ai"])
+        drop: tuple = ()
+        if llm is None:
+            route.pop("llm", None)
+            drop = ("llm",)
+        else:
+            route["llm"] = llm
         dest.parent.mkdir(parents=True, exist_ok=True)
-        _save_route(dest, route)
+        _save_route(dest, route, drop=drop)
         try:
             dest.chmod(0o600)
         except OSError:

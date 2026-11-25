@@ -773,7 +773,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         if scanning {
             y = caption("Looking now.", y)
         } else if foundModels.isEmpty {
-            y = caption("Nothing answered. Start Ollama or LM Studio on this Mac, then press Look again. The AI login above still works if you skip this.", y)
+            y = caption("Nothing answered. Start your model server (oMLX, Ollama, LM Studio, llama.cpp) and press Look again, or type its address below. The AI login above still works if you skip this.", y)
         }
         for (i, row) in foundModels.enumerated() {
             let name = (row["model"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -782,14 +782,14 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             y = tagButton(title, #selector(useFoundModel(_:)), i, y)
         }
         y = tagButton("Look again", #selector(lookAgain(_:)), 0, y)
-        if !showManualLocal {
+        if !showManualLocal && !foundModels.isEmpty {
             return tagButton("It is on another computer", #selector(showManual(_:)), 0, y)
         }
-        y = caption("Type the computer and the address. The name shows after it answers.", y)
+        y = caption("Type the address (and the computer, if it is another one). The name shows after it answers.", y)
         for (i, row) in locals.enumerated() {
             y = field("host-\(i)", "ssh host name. Blank if it is on this Mac.", row.host, y)
             y = field("remote-\(i)", "http://127.0.0.1:18080/v1", row.remote, y)
-            y = field("url-\(i)", "Or on this Mac. http://127.0.0.1:11434/v1", row.url, y)
+            y = field("url-\(i)", "Or on this Mac. http://127.0.0.1:8000/v1", row.url, y)
             y = rowButtons(probe: 1000 + i, remove: 3000 + i, showRemove: locals.count > 1, y)
         }
         if locals.count < 4 {
@@ -1141,6 +1141,13 @@ final class SetupBoard: NSObject, NSWindowDelegate {
                 return y + 44
             }
         }
+        if low.contains("local model address") {
+            let button = NSButton(title: "Enter a local model address", target: self, action: #selector(enterLocal(_:)))
+            button.frame = NSRect(x: 0, y: y, width: 460, height: 36)
+            button.bezelStyle = .rounded
+            extra.addSubview(button)
+            return caption("No running model was found on this Mac.", y + 40)
+        }
         if low.contains("api key") {
             return tagButton("Paste an API key", #selector(pasteKey(_:)), 0, y)
         }
@@ -1148,6 +1155,14 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             return tagButton("Add Apple Notes", #selector(pullSource(_:)), 1, y)
         }
         return caption("• " + need, y)
+    }
+
+    /// No server answered the scan: open the local model page with the address fields showing.
+    @objc func enterLocal(_ sender: NSButton) {
+        page = 2
+        showManualLocal = true
+        statusField.stringValue = "Enter the address your model server uses, for example http://127.0.0.1:8000/v1 (oMLX, vLLM, llama.cpp), http://127.0.0.1:11434/v1 (Ollama) or http://127.0.0.1:1234/v1 (LM Studio). Then press Connect."
+        render()
     }
 
     @objc func pasteKey(_ sender: NSButton) {

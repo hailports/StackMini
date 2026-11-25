@@ -70,6 +70,9 @@ def endpoints_from(cfg: dict) -> list[dict]:
                 key_file = str(spec.get("key_file") or "")
                 if key_file.startswith("/") and ".." not in key_file:
                     hop["key_file"] = key_file
+                elif base.startswith("https://"):
+                    # A hosted service with no key can only fail: skip it, try the next engine.
+                    continue
                 hops.append(hop)
     if hops:
         return hops

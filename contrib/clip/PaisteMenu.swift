@@ -679,7 +679,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
                 blocked = drafted.blocked
             }
             var captureNote = ""
-            if text.isEmpty && blocked != "license" {
+            if text.isEmpty && blocked != "license" && blocked != "model" {
                 if !CGPreflightScreenCaptureAccess() {
                     captureNote = "need-screen-recording"
                 } else {
@@ -708,8 +708,11 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
                 self.stopSpin()
                 if captureNote == "need-screen-recording" {
                     CGRequestScreenCaptureAccess()
+                    self.explainScreenRecording()
                 }
-                let hint = blocked == "license" ? self.blockedByLicense() : (captureNote == "need-screen-recording" ? "Allow paisty in Screen Recording" : "Nothing to copy")
+                let hint = blocked == "license" ? self.blockedByLicense()
+                    : blocked == "model" ? "Can't reach your AI model. Open Set up and check its address."
+                    : (captureNote == "need-screen-recording" ? "Allow paisty in Screen Recording" : "Nothing to copy")
                 self.fail(hint)
                 self.log.error("empty \(captureNote, privacy: .public)")
             }
@@ -909,6 +912,24 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
     }
 
     var failClear: DispatchWorkItem?
+    var screenExplained = false
+
+    /// macOS shows its own Screen Recording prompt only once, ever. After that a missing grant
+    /// just looks like "Nothing to copy". Explain it once per launch and open the right pane.
+    func explainScreenRecording() {
+        if screenExplained || CGPreflightScreenCaptureAccess() { return }
+        screenExplained = true
+        let alert = NSAlert()
+        alert.messageText = "paisty needs Screen Recording"
+        alert.informativeText = "Some apps (Outlook, Slack, Zoom, web pages) don't share their text with accessibility. paisty reads the window you clicked, on this Mac, to see the message you're replying to. Nothing is recorded or sent.\n\nTurn paisty on in Privacy & Security > Screen Recording, then click again. If it already shows on, switch it off and back on."
+        alert.addButton(withTitle: "Open Screen Recording")
+        alert.addButton(withTitle: "Not now")
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn,
+           let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+            NSWorkspace.shared.open(url)
+        }
+    }
 
     /// A failed draft shows the question mark for about 4 s, then the P mark comes back.
     /// The reason stays in the tooltip until the next click and goes to paste-debug.log.
@@ -1687,6 +1708,8 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         let data = out.fileHandleForReading.readDataToEndOfFile()
         let text = (String(data: data, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if text == "license" { return ("", "license") }
+        // The model did not answer: say that, not "Nothing to copy" or a permission prompt.
+        if task.terminationStatus != 0 && text.hasPrefix("model offline") { return ("", "model") }
         return task.terminationStatus == 0 ? (text, "") : ("", "")
     }
 
