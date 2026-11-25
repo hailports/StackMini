@@ -6,6 +6,8 @@ They are not part of the `hailports` command and are not installed by `hailports
 
 ## macOS
 
+- The [native browser keeper](macos/native/README.md) checks a dedicated, single-tab Edge or Chrome instance for Outlook or Zoom. It can reload a crashed app tab and resume a provider sign-in flow. It reports when a person needs to complete sign-in.
+- For crash recovery with the Zoom watchdog, set `ZOOM_WD_HOST` to the Zoom app hostname and `ZOOM_WD_BROWSER_LABEL` to the browser's LaunchAgent label. The watchdog verifies that the job owns the loopback listener and confirms the renderer fault on the same home or chat tab before reloading it.
 - `macos/zoom_session_watchdog.py` and `macos/outlook_session_watchdog.py` run from launchd every 180 seconds. Each tick reads the page over CDP and sorts it into ok, rows0 (signed in but no conversation rows), signed_out, sso_error, page_missing, or browser_down. The read is read-only.
 - After three bad ticks in a row they try one fix inside the same tab: expand the collapsed chat section, reload the same tab, or restore the cookie jar on an endpoint that is not protected. If the local :18812 Zoom page is missing for two ticks, they open one Team Chat tab over CDP (`/json/new`, at most once per 10 minutes) without restarting the browser. If the next tick is still bad, they send one login-link alert for that break and one "back in" note when it recovers.
 - `macos/zoom_session_vault.py` and `macos/owa_session_vault.py` save and restore the site cookies. Files are mode 0600 and the newest three are kept. Restore refuses a protected port.
@@ -23,7 +25,7 @@ Hostnames, users, and paths are placeholders: `mini.tailnet-host.example.invalid
 
 ## Self-test
 
-Each Python script has a `self-test` command that checks the page classifier without touching a browser:
+The following scripts have a `self-test` command that checks the page classifier without touching a browser:
 
 ```sh
 python3 contrib/session_keepers/macos/zoom_session_watchdog.py self-test

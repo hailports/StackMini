@@ -10,7 +10,7 @@ Added 2026-11-03 after the passive reader sat on zoom_passive_source_sidebar_abs
 
 Every tick (launchd, 180 s):
   1. resolve the endpoint the readers use (stack.bridge_endpoints.resolve('zoom')).
-  2. read-only CDP (Runtime.evaluate only): ok | rows0 | signed_out | sso_error | page_missing | browser_down.
+  2. probe the reader DOM and, on an owned local browser, check home/chat renderer status.
   3. bad for MORE than 2 consecutive ticks (>=3) -> one in-tab soft recovery, existing stack paths only:
        rows0 + 'Chats & Channels' header found  -> one pointer click on that header
                                                   (zoom_web_send._DM_SECTION_STATE_JS / _expand_sections)
@@ -21,16 +21,21 @@ Every tick (launchd, 180 s):
   4. still bad on the next bad tick after a heal -> authlink.login_needed('zoom') (private iMessage to the
      Mac's own handle with the Tailscale-only link), ONCE per break. ok again -> authlink.recovered('zoom').
 HARD: never starts/kills/restarts any browser, never touches :18822, never types or sends in Zoom.
+Set ZOOM_WD_HOST to the dedicated Zoom hostname. For local renderer recovery, also set
+ZOOM_WD_BROWSER_LABEL to the browser LaunchAgent label. A reload is limited to the
+same failed home or team-chat page on its verified loopback listener.
 Usage: zoom_session_watchdog.py [tick|--dry|status|self-test]
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
 import urllib.request
+from urllib.parse import SplitResult, urlsplit
 from datetime import datetime
 from pathlib import Path
 
@@ -39,7 +44,10 @@ sys.path[:0] = [str(ROOT), str(ROOT / "tools")]
 RT = ROOT / "data" / "runtime"
 STATE_PATH = Path(os.environ.get("ZOOM_WD_STATE", str(RT / "zoom_session_watchdog.json")))
 LOG_PATH = Path(os.environ.get("ZOOM_WD_LOG", str(Path.home() / "Library/Logs/hailports/zoom-session-watchdog.log")))
-TEAM_CHAT = "https://example.zoom.us/wc/team-chat"
+ZOOM_HOST = os.environ.get("ZOOM_WD_HOST", "example.zoom.us").lower()
+if not re.fullmatch(r"[a-z0-9-]+\.zoom\.us", ZOOM_HOST):
+    raise ValueError("ZOOM_WD_HOST must be a single Zoom subdomain")
+TEAM_CHAT = f"https://{ZOOM_HOST}/wc/team-chat"
 MINI_ZOOM = "http://127.0.0.1:18812"
 FORBIDDEN_PORTS = {"18822"}
 THRESHOLD = 3            # "more than 2 consecutive checks"
@@ -48,8 +56,7 @@ NAV_COOLDOWN_S = 6 * 60   # 2026-11-03: box :9227 Team Chat hang cleared on a la
 VAULT_COOLDOWN_S = 30 * 60
 OPEN_TAB_COOLDOWN_S = 10 * 60
 BAD = ("rows0", "signed_out", "sso_error", "page_missing", "browser_down")
-LOGIN_BITS = ("zoom.us/signin", "zoom.us/login", "zoom.us/saml", "login.microsoftonline", "/adfs/",
-              "idp.corp.example.com", "idp2.corp.example.com", "accounts.google.com")
+IDP_HOSTS = {"login.microsoftonline.com", "accounts.google.com", "idp.corp.example.com", "idp2.corp.example.com"}
 
 PROBE_JS = r"""(()=>{const b=document.body;const t=b?(b.innerText||''):'';
 return JSON.stringify({href:location.href,title:document.title,
@@ -100,19 +107,42 @@ def _guard(ep: str) -> None:
         raise SystemExit(f"refusing forbidden endpoint {ep}")
 
 
+def _https_route(url: str) -> SplitResult | None:
+    try:
+        route = urlsplit(url)
+        if route.scheme == "https" and route.hostname and route.netloc.lower() in (
+            route.hostname, f"{route.hostname}:443"
+        ):
+            return route
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def _zoom_host(host: str) -> bool:
+    return bool(re.fullmatch(r"(?:[a-z0-9-]+\.)*zoom\.us", host))
+
+
 def classify(probe: dict | None, *, pages_ok: bool = True) -> str:
     """Pure classifier (unit-tested). probe = PROBE_JS result for the Zoom tab, or None."""
     if not pages_ok:
         return "browser_down"
     if probe is None:
         return "page_missing"
-    href = str(probe.get("href") or "").lower()
-    if href.startswith("chrome-error://") or probe.get("err") in (True, "true"):
+    href = probe.get("href") or ""
+    if href == "chrome-error://chromewebdata/":
         return "sso_error"
-    if any(bit in href for bit in LOGIN_BITS):
-        return "signed_out"
-    if "example.zoom.us" not in href:
+    route = _https_route(href)
+    if not route:
         return "page_missing"
+    host = route.hostname
+    path_root = route.path.strip("/").partition("/")[0].lower()
+    if host in IDP_HOSTS or (_zoom_host(host) and path_root in {"signin", "login", "saml", "sso"}):
+        return "signed_out"
+    if host != ZOOM_HOST:
+        return "page_missing"
+    if probe.get("err") in (True, "true"):
+        return "sso_error"
     if probe.get("signin_btns") and not probe.get("workplace"):
         return "signed_out"
     if int(probe.get("rows") or 0) > 0:
@@ -120,22 +150,27 @@ def classify(probe: dict | None, *, pages_ok: bool = True) -> str:
     return "rows0"
 
 
-def _ws(page: dict):
+def _ws(page: dict, timeout: float):
     import websocket
-    return websocket.create_connection(page["webSocketDebuggerUrl"], timeout=20, suppress_origin=True)
+    return websocket.create_connection(page["webSocketDebuggerUrl"], timeout=timeout, suppress_origin=True)
 
 
 class _Tab:
-    def __init__(self, page: dict):
-        self.ws = _ws(page)
+    def __init__(self, page: dict, timeout: float = 20):
+        self.ws = _ws(page, timeout)
+        self.timeout = timeout
         self.n = 0
+        self.crashed = False
 
     def call(self, method: str, params: dict | None = None) -> dict:
         self.n += 1
         self.ws.send(json.dumps({"id": self.n, "method": method, "params": params or {}}))
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
+        deadline = time.monotonic() + self.timeout
+        while (remaining := deadline - time.monotonic()) > 0:
+            self.ws.settimeout(remaining)
             r = json.loads(self.ws.recv())
+            if r.get("method") == "Inspector.targetCrashed":
+                self.crashed = True
             if r.get("id") == self.n:
                 return r
         return {}
@@ -151,33 +186,108 @@ class _Tab:
             pass
 
 
-def _zoom_page(ep: str) -> tuple[bool, dict | None]:
+def _pages(ep: str) -> list[dict]:
+    with urllib.request.urlopen(ep + "/json/list", timeout=6) as resp:
+        return [r for r in json.load(resp) if r.get("type") == "page"]
+
+
+def _zoom_page(ep: str, rows: list[dict] | None = None) -> tuple[bool, dict | None]:
     try:
-        with urllib.request.urlopen(ep + "/json/list", timeout=6) as resp:
-            rows = json.load(resp)
+        rows = _pages(ep) if rows is None else rows
     except Exception:
         return False, None
-    pages = [r for r in rows if r.get("type") == "page" and "zoom.us" in str(r.get("url") or "")]
-    pages.sort(key=lambda r: ("team-chat" not in r.get("url", ""), "example.zoom.us" not in r.get("url", "")))
-    if not pages:
-        errs = [r for r in rows if r.get("type") == "page" and str(r.get("url", "")).startswith("chrome-error")]
-        return True, (errs[0] if errs else None)
-    return True, pages[0]
+    candidates = []
+    for page in rows:
+        route = _https_route(page.get("url") or "")
+        if route and _zoom_host(route.hostname):
+            priority = (route.hostname != ZOOM_HOST, route.path.rstrip("/") != "/wc/team-chat")
+            candidates.append((priority, page))
+    selected = min(candidates, key=lambda item: item[0])[1] if candidates else None
+    return True, selected
+
+
+def _managed_route(url: str) -> bool:
+    route = _https_route(url)
+    return bool(route and route.hostname == ZOOM_HOST and
+                route.path.rstrip("/") in ("/wc/home", "/wc/team-chat") and not route.query and not route.fragment)
+
+
+def _managed_target(page: dict) -> bool:
+    target = page.get("id")
+    if not isinstance(target, str) or not target.isalnum() or not _managed_route(page.get("url") or ""):
+        return False
+    return page.get("webSocketDebuggerUrl") == MINI_ZOOM.replace("http:", "ws:") + "/devtools/page/" + target
+
+
+def _owns_listener(ep: str) -> bool:
+    label = os.environ.get("ZOOM_WD_BROWSER_LABEL", "")
+    if ep != MINI_ZOOM or not re.fullmatch(r"[A-Za-z0-9._-]+", label):
+        return False
+    try:
+        job = subprocess.check_output(["/bin/launchctl", "print", f"gui/{os.getuid()}/{label}"],
+                                      text=True, stderr=subprocess.DEVNULL, timeout=3)
+        pid = re.search(r"^\s*pid = ([1-9][0-9]*)\s*$", job, re.M)
+        if not pid:
+            return False
+        port = urlsplit(ep).port
+        listeners = subprocess.check_output(
+            ["/usr/sbin/lsof", "-nP", "-a", "-p", pid[1], f"-iTCP:{port}", "-sTCP:LISTEN", "-Fn"],
+            text=True, stderr=subprocess.DEVNULL, timeout=3)
+        return {line[1:] for line in listeners.splitlines() if line.startswith("n")} == {f"127.0.0.1:{port}"}
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _renderer_fault(tab: _Tab) -> bool:
+    try:
+        tab.call("Inspector.enable")
+        if tab.crashed:
+            return True
+        reply = tab.call("Page.getFrameTree")
+        frame = reply.get("result", {}).get("frameTree", {}).get("frame", {})
+        return tab.crashed or _managed_route(frame.get("unreachableUrl") or "")
+    except Exception:
+        # A slow page alone gives no evidence that it crashed.
+        return tab.crashed
 
 
 def probe(ep: str) -> tuple[str, dict]:
-    pages_ok, page = _zoom_page(ep)
-    if not pages_ok or page is None:
-        return classify(None, pages_ok=pages_ok), {"page": None}
-    tab = _Tab(page)
     try:
+        pages = _pages(ep)
+    except Exception:
+        return "browser_down", {"page": None}
+    if _owns_listener(ep):
+        for candidate in pages:
+            if not _managed_target(candidate):
+                continue
+            tab = None
+            try:
+                tab = _Tab(candidate, timeout=3)
+                if _renderer_fault(tab):
+                    return "page_crashed", {"target": candidate["id"]}
+            except Exception:
+                pass
+            finally:
+                if tab is not None:
+                    tab.close()
+
+    _, page = _zoom_page(ep, pages)
+    if page is None:
+        return "page_missing", {"page": None}
+    tab = None
+    target = str(page.get("id") or "")
+    try:
+        tab = _Tab(page)
         raw = tab.ev(PROBE_JS)
-        data = json.loads(raw) if raw else {"href": page.get("url")}
+        data = json.loads(raw) if raw else None
+        if not isinstance(data, dict):
+            return "probe_error", {"target": target}
     except Exception as exc:
-        data = {"href": page.get("url"), "probe_error": type(exc).__name__}
+        return "probe_error", {"target": target, "probe_error": type(exc).__name__}
     finally:
-        tab.close()
-    data["target"] = str(page.get("id") or "")[:8]
+        if tab is not None:
+            tab.close()
+    data["target"] = target
     return classify(data), data
 
 
@@ -205,9 +315,32 @@ def _open_team_chat_tab(ep: str) -> str:
     return "opened_team_chat_tab"
 
 
-def heal(ep: str, state: str, st: dict, *, dry: bool) -> str:
+def heal(ep: str, state: str, st: dict, *, dry: bool, target: str | None = None) -> str:
     _guard(ep)
     now = _now()
+    if state == "page_crashed":
+        if not target or not _owns_listener(ep):
+            return "reload_unowned"
+        if st.get("reloaded_target") == target and now - st.get("last_reload_at", 0) < NAV_COOLDOWN_S:
+            return "reload_cooldown"
+        if dry:
+            return "would_reload_crashed_tab"
+        tab = None
+        try:
+            page = next((p for p in _pages(ep) if p.get("id") == target and _managed_target(p)), None)
+            if page is None:
+                return "reload_target_changed"
+            tab = _Tab(page, timeout=3)
+            if not _renderer_fault(tab):
+                return "reload_fault_cleared"
+            st.update(reloaded_target=target, last_reload_at=now)
+            reply = tab.call("Page.reload")
+            return "reloaded_tab" if "result" in reply else "reload_failed"
+        except Exception as exc:
+            return f"reload_failed={type(exc).__name__}"
+        finally:
+            if tab is not None:
+                tab.close()
     # :18812 page_missing: open one Team Chat tab (rate-limited). No restart.
     if state == "page_missing" and ep.rstrip("/").endswith(":18812"):
         if now - float(st.get("last_open_at") or 0) < OPEN_TAB_COOLDOWN_S:
@@ -234,8 +367,8 @@ def heal(ep: str, state: str, st: dict, *, dry: bool) -> str:
                             cwd=str(ROOT), env={**os.environ, "ZOOM_WEB_CDP": ep},
                             capture_output=True, text=True, timeout=240).returncode
         return f"vault_restore_rc={rc}"
-    pages_ok, page = _zoom_page(ep)
-    if not page:
+    _, page = _zoom_page(ep)
+    if not page or not target or page.get("id") != target or not _managed_route(page.get("url") or ""):
         return "none_no_page"
     if dry:
         return "would_soft_heal"
@@ -244,6 +377,10 @@ def heal(ep: str, state: str, st: dict, *, dry: bool) -> str:
             return "busy_lock_held"
         tab = _Tab(page)
         try:
+            frame_tree = tab.call("Page.getFrameTree")
+            frame = frame_tree.get("result", {}).get("frameTree", {}).get("frame", {})
+            if not _managed_route(frame.get("unreachableUrl") or frame.get("url") or ""):
+                return "none_target_changed"
             js = _dm_js()
             dm = tab.ev("(" + js + ")()") if (js and state == "rows0") else None
             if isinstance(dm, dict) and dm.get("found") and not dm.get("expanded"):
@@ -273,6 +410,10 @@ def _authlink():
 def step(st: dict, state: str, *, now: float) -> list[str]:
     """Pure state machine (unit-tested). Mutates st, returns actions: heal | alert | recovered."""
     actions: list[str] = []
+    if state == "probe_error":
+        return []
+    if state == "page_crashed":
+        return ["heal"]
     if state == "ok":
         if st.get("alerted"):
             actions.append("recovered")
@@ -311,15 +452,17 @@ def tick(*, dry: bool = False) -> int:
                 st["alerted_at"] = now
             notes.append(f"alert={how}")
         elif act == "heal":
-            how = heal(ep, state, st, dry=dry)
-            st["healed_at"] = st.get("healed_at") or now
+            how = heal(ep, state, st, dry=dry, target=data.get("target"))
+            if state != "page_crashed":
+                st["healed_at"] = st.get("healed_at") or now
             st["last_heal"] = how
             notes.append(f"heal={how}")
-            if not dry and how.startswith(("expand", "navigate", "vault", "opened")):
+            if not dry and how.startswith(("expand", "navigate", "vault", "opened", "reloaded_tab")):
                 time.sleep(20)
-                state2, _ = probe(ep)
+                state2, checked = probe(ep)
                 notes.append(f"recheck={state2}")
                 if state2 == "ok":
+                    state, data = state2, checked
                     if "recovered" in step(st, "ok", now=_now()):
                         notes.append(f"recovered={_authlink().recovered('zoom')}")
         elif act == "recovered":
@@ -340,10 +483,10 @@ def self_test() -> int:
     assert classify(None) == "page_missing"
     assert classify({"href": "chrome-error://chromewebdata/"}) == "sso_error"
     assert classify({"href": "https://idp.corp.example.com/adfs/ls/wia"}) == "signed_out"
-    assert classify({"href": "https://example.zoom.us/wc/", "signin_btns": True, "workplace": False, "rows": 0}) == "signed_out"
-    assert classify({"href": "https://example.zoom.us/wc/team-chat", "workplace": True, "rows": 0}) == "rows0"
-    assert classify({"href": "https://example.zoom.us/wc/team-chat", "workplace": True, "rows": 27}) == "ok"
-    assert classify({"href": "https://example.zoom.us/wc/team-chat", "err": "true"}) == "sso_error"
+    assert classify({"href": f"https://{ZOOM_HOST}/wc/", "signin_btns": True, "workplace": False, "rows": 0}) == "signed_out"
+    assert classify({"href": TEAM_CHAT, "workplace": True, "rows": 0}) == "rows0"
+    assert classify({"href": TEAM_CHAT, "workplace": True, "rows": 27}) == "ok"
+    assert classify({"href": TEAM_CHAT, "err": "true"}) == "sso_error"
     st: dict = {}
     assert step(st, "rows0", now=1) == [] and step(st, "rows0", now=2) == []
     assert step(st, "rows0", now=3) == ["heal"]            # 3rd consecutive bad -> soft heal
