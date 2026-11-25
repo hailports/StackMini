@@ -276,6 +276,7 @@ def messages(ctx: Context, rules: str) -> list[dict]:
     if ctx.selection:
         # First and whole: a long window used to push the highlighted message out of the last 9000 characters.
         blocks.append("SELECTED TEXT (the person highlighted this. It is the message you are replying to. "
+                      "It was sent to you: write back to its sender as yourself, never in the sender's voice. "
                       "Take every fact from it):\n" + ctx.selection)
     if ctx.thread_block:
         blocks.append(ctx.thread_block)
@@ -338,7 +339,11 @@ def check(text: str, ctx: Context) -> list[str]:
     body = (text or "").strip()
     if not body:
         return ["empty reply"]
-    from hailports.clip.scene import ungrounded_outcomes
+    from hailports.clip.scene import ungrounded_outcomes, wrong_side
+    side = wrong_side(body, ctx.selection or ctx.ground())
+    if side:
+        issues.append("the reply speaks as the sender of the message (" + ", ".join(side[:3]) + "). You are the person "
+                      "it was sent to: write back to its sender as yourself.")
     made_up = ungrounded_outcomes(body, ctx.ground())
     if made_up:
         issues.append("the reply states " + ", ".join(made_up) + ", but the "

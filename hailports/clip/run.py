@@ -330,7 +330,7 @@ def _draft_scene_once(doc: dict, base_url: str, model: str, copy: bool, cfg: dic
         messages[0]["content"] = rules
     me = [part.strip() for part in str((route.get("paiste") or {}).get("me") or "").split(",") if part.strip()]
     sources = "\n".join(prepared.get("sources") or [])
-    from hailports.clip.scene import drop_ungrounded_outcomes, selected_text, ungrounded_outcomes
+    from hailports.clip.scene import drop_ungrounded_outcomes, selected_text, ungrounded_outcomes, wrong_side
     picked = selected_text(doc)
     # With a selection, an outcome must come from it or a note, not from other messages in the window.
     ground = sources if not picked else "\n".join(
@@ -420,7 +420,8 @@ def _draft_scene_once(doc: dict, base_url: str, model: str, copy: bool, cfg: dic
             or unasked_remedy(text, sources)
         )
         made_up = ungrounded_outcomes(text, ground)
-        blocked = blocked or bool(made_up)
+        side = wrong_side(text, picked or ground)
+        blocked = blocked or bool(made_up) or bool(side)
         invented = overreach(text, sources) or bounced_choice(text, sources) or bool(gaps) or blocked
         first = text
         if invented or weak:
@@ -438,6 +439,9 @@ def _draft_scene_once(doc: dict, base_url: str, model: str, copy: bool, cfg: dic
             if made_up:
                 ask += (" The " + ("selected text" if picked else "message") + " never says " + ", ".join(made_up)
                         + ". Take every fact from it and leave those out.")
+            if side:
+                ask += (" You wrote as the sender of that message (" + ", ".join(side[:3]) + "). It was sent to you."
+                        " Write back to its sender as yourself.")
 
             retry = list(prepared["messages"]) + [
                 {"role": "assistant", "content": text},

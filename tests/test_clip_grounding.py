@@ -11,6 +11,7 @@ from hailports.clip.scene import (
     draft_rules,
     prepare,
     ungrounded_outcomes,
+    wrong_side,
 )
 
 DELIVERED = (
@@ -138,6 +139,48 @@ def test_full_path_retries_then_drops_a_template_reply(tmp_path, monkeypatch):
     stubborn, _c, _a = compose.draft(doc, {"paiste": {}}, "rules", lambda m: TEMPLATE + "\nThanks for the note.",
                                      extra_dirs=[], code_roots=[])
     assert "never arrived" not in stubborn and "trace" not in stubborn and "discount" not in stubborn
+
+
+# Retest 3: the selection was grounded, but the draft answered as the shop that sent it.
+
+SHOP_VOICE = ("hey WolfMilk, no, it shows as delivered because our records have the tracking number. "
+              "Check your porch and your neighbors.")
+
+
+def test_a_reply_in_the_senders_voice_is_caught():
+    assert wrong_side(SHOP_VOICE, DELIVERED) == ["check your porch", "our records"]
+    assert wrong_side("hey Shop, got it on Friday, thanks.", DELIVERED) == []
+
+
+def test_a_shop_answering_its_customer_may_speak_as_the_shop():
+    customer = "Hi, I ordered a blender last week and my package never arrived. Where is my order?"
+    assert wrong_side("hey Dana, our records show it was delivered Friday. Check your porch.", customer) == []
+
+
+def test_rules_say_the_selection_was_sent_to_you():
+    assert "write back to its sender as yourself, never in the sender's voice" in draft_rules("Sam")
+    out = compose.messages(compose.Context(me=["Scot"], selection=DELIVERED, screen=DELIVERED), "rules")
+    assert "never in the sender's voice" in out[-1]["content"] or "never in the sender's voice" in out[1]["content"]
+
+
+def test_full_path_retries_then_drops_the_senders_voice(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    doc = {"app": "Mail", "selection": DELIVERED, "window_ocr": WINDOW}
+
+    def model(messages):
+        last = str(messages[-1]["content"])
+        if "Return only JSON" in last:
+            return "{}"
+        if "speaks as the sender" in last:
+            return "hey Shop, it came Friday, thanks for the tracking number."
+        return SHOP_VOICE
+
+    text, _c, attempts = compose.draft(doc, {"paiste": {}}, "rules", model, extra_dirs=[], code_roots=[])
+    assert "speaks as the sender" in " ".join(attempts[0]["issues"])
+    assert "it came Friday" in text and not wrong_side(text, DELIVERED)
+    stubborn, _c, _a = compose.draft(doc, {"paiste": {}}, "rules",
+                                     lambda m: SHOP_VOICE + "\nThanks again.", extra_dirs=[], code_roots=[])
+    assert "our records" not in stubborn and "porch" not in stubborn
 
 
 # A dead cloud engine must not block the model on this Mac.

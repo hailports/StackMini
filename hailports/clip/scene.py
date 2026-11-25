@@ -351,14 +351,39 @@ def ungrounded_outcomes(reply: str, sources: str) -> list[str]:
 _LIST_MARK = re.compile(r"^\s*(?:\d+[.)]|[-*•])?\s*$")
 
 
+# A business writing to its customer, and the customer writing back. A reply in the first voice to a message in
+# that same voice was written from the wrong side: the tester highlighted a shop's "delivered" email to him and got
+# a draft telling the customer to check their porch "because our records" show it arrived.
+_SELLER_VOICE = re.compile(
+    r"(?i)\b(?:our (?:records|team|system|systems|store|shop|warehouse|carrier|courier|policy|support team|customer service)"
+    r"|check (?:around )?(?:your|the) (?:porch|doorstep|front door|mailbox|mail room|neighbou?rs?)"
+    r"|your (?:order|package|parcel|shipment|delivery|item|items)(?: #?[\w-]+)? (?:was|were|has been|have been|is|are) "
+    r"(?:delivered|shipped|dispatched|on (?:its|their) way|out for delivery)"
+    r"|we(?:'ve| have)? (?:shipped|delivered|dispatched|processed|refunded|received your)"
+    r"|thank(?:s| you) for (?:your order|your purchase|shopping|choosing))\b")
+_BUYER_VOICE = re.compile(
+    r"(?i)\b(?:my (?:order|package|parcel|shipment|delivery)|where is my"
+    r"|i (?:ordered|bought|purchased|have(?:n't| not) (?:received|gotten)|never (?:received|got)|did(?:n't| not) (?:receive|get)))\b")
+
+
+def wrong_side(reply: str, source: str) -> list[str]:
+    """Phrases where the reply speaks as the sender of the message it answers. Empty when the sides are right."""
+    if not _SELLER_VOICE.search(source or "") or _BUYER_VOICE.search(source or ""):
+        return []
+    return sorted({m.group(0).lower() for m in _SELLER_VOICE.finditer(reply or "")})
+
+
 def drop_ungrounded_outcomes(reply: str, sources: str) -> str:
     """Remove each sentence that states an outcome the source never mentions. Lines stay lines."""
-    if not ungrounded_outcomes(reply, sources):
+    def bad(part: str) -> bool:
+        return bool(ungrounded_outcomes(part, sources) or wrong_side(part, sources))
+
+    if not bad(reply):
         return reply
     lines = []
     for line in (reply or "").split("\n"):
         parts = re.split(r"(?<=[.!?])\s+", line)
-        kept = " ".join(p for p in parts if not ungrounded_outcomes(p, sources))
+        kept = " ".join(p for p in parts if not bad(p))
         if line.strip() and _LIST_MARK.match(kept):
             continue  # the whole line, or the whole list item, was the invented claim
         lines.append(kept)
@@ -809,7 +834,7 @@ def draft_rules(addressee: str = "", choice: bool = False) -> str:
     greet = f"hey {addressee}," if addressee else "hey <first name>,"
     lines = [
         "These rules win. Write only the reply they will paste.",
-        "If text is selected, it is the message you reply to. Take every fact from it. When it says something different from what usually happens, it wins. Never fill a gap with what usually happens: no delivery problem, trace, refund, replacement, discount, date, or number it does not state.",
+        "If text is selected, it is the message you reply to. It was sent to you: write back to its sender as yourself, never in the sender's voice. Take every fact from it. When it says something different from what usually happens, it wins. Never fill a gap with what usually happens: no delivery problem, trace, refund, replacement, discount, date, or number it does not state.",
         "If they name a record link, a ticket, an asset, a case, a serial, or an error, name that item and the concrete next step. Use the human name or number, never a raw CRM id and never a /lightning/ path. A link already in the thread does not need repeating. Never answer with only I'll take a look. Do not invent a finding, a cause, or a status. Do not say that you have not changed anything.",
         "Never offer, promise, or claim to assign a permission set or group, add or reactivate a user, grant access, or share. When a lookup shows missing permission or access, state the cause and say that access change needs a helpdesk ticket. Do not mention a helpdesk ticket when no access change is involved.",
         f'Start with "{greet}". Use their first name. Never "hey there", never "hi", never "hello".',

@@ -86,6 +86,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        fillModels(NSMenu())  // warms the Model submenu so its first open shows names, not Looking…
         NSApp.setActivationPolicy(.accessory)
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.isVisible = true
@@ -1061,7 +1062,11 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         // Model: the chat models the drafting server lists. Filled in once the server answers.
         let modelItem = NSMenuItem(title: "Model", action: nil, keyEquivalent: "")
         let models = NSMenu(title: "Model")
-        models.addItem(header("Looking…"))
+        if let cached = Self.lastModels {
+            showModels(cached, in: models)
+        } else {
+            models.addItem(header("Looking…"))
+        }
         modelItem.submenu = models
         menu.addItem(modelItem)
         fillModels(models)
@@ -1112,30 +1117,47 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         return (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] ?? [:]
     }
 
+    /// The last answer from the model server, so the submenu shows names at once on the next open.
+    static var lastModels: [String: Any]?
+
+    /// Runs `block` on the main run loop even while a menu is open. The menu opens with performClick inside a
+    /// main-queue block and blocks there, so a DispatchQueue.main.async update waits until the menu closes:
+    /// the Model submenu stayed on "Looking…" for as long as it was on screen.
+    static func onMainLoop(_ block: @escaping () -> Void) {
+        let loop = CFRunLoopGetMain()
+        CFRunLoopPerformBlock(loop, CFRunLoopMode.commonModes.rawValue, block)
+        CFRunLoopWakeUp(loop)
+    }
+
+    func showModels(_ doc: [String: Any], in sub: NSMenu) {
+        sub.removeAllItems()
+        let names = doc["models"] as? [String] ?? []
+        guard !names.isEmpty else {
+            sub.addItem(header(doc["why"] as? String ?? "The model server did not answer."))
+            return
+        }
+        let current = doc["current"] as? String ?? ""
+        let switchable = doc["switchable"] as? Bool ?? false
+        sub.addItem(header("On " + (doc["where"] as? String ?? "this Mac")))
+        for name in names {
+            let row = NSMenuItem(title: name, action: switchable ? #selector(modelChosen(_:)) : nil, keyEquivalent: "")
+            row.target = self
+            row.representedObject = name
+            row.state = name == current ? .on : .off
+            row.isEnabled = switchable
+            sub.addItem(row)
+        }
+        if !switchable {
+            sub.addItem(header("Open setup… and save a model to switch here"))
+        }
+    }
+
     func fillModels(_ sub: NSMenu) {
         DispatchQueue.global(qos: .userInitiated).async {
             let doc = Self.modelDoc(Self.runPaiste(["models"], timeout: 8).out)
-            DispatchQueue.main.async {
-                sub.removeAllItems()
-                let names = doc["models"] as? [String] ?? []
-                guard !names.isEmpty else {
-                    sub.addItem(self.header(doc["why"] as? String ?? "The model server did not answer."))
-                    return
-                }
-                let current = doc["current"] as? String ?? ""
-                let switchable = doc["switchable"] as? Bool ?? false
-                sub.addItem(self.header("On " + (doc["where"] as? String ?? "this Mac")))
-                for name in names {
-                    let row = NSMenuItem(title: name, action: switchable ? #selector(self.modelChosen(_:)) : nil, keyEquivalent: "")
-                    row.target = self
-                    row.representedObject = name
-                    row.state = name == current ? .on : .off
-                    row.isEnabled = switchable
-                    sub.addItem(row)
-                }
-                if !switchable {
-                    sub.addItem(self.header("Open setup… and save a model to switch here"))
-                }
+            Self.onMainLoop {
+                if !((doc["models"] as? [String]) ?? []).isEmpty { Self.lastModels = doc }
+                self.showModels(doc, in: sub)
             }
         }
     }
@@ -1150,6 +1172,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
                     return
                 }
                 PastePath.note("model " + name)
+                if var doc = Self.lastModels { doc["current"] = name; Self.lastModels = doc }
                 self.item?.button?.toolTip = "paisty drafts with " + name
             }
         }
