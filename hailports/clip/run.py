@@ -634,7 +634,7 @@ def _route_dest(args):
     return Path(raw)
 
 
-def _save_route(dest: Path, route: dict, pick: str = "", edits: bool = False, drop: tuple = ()) -> bool:
+def _save_route(dest: Path, route: dict, pick: str = "", edits: bool = False) -> bool:
     """The one route writer for setup. The saved order and `preferred` always survive (see
     routefix.keep_choice); `pick` is an engine the user just chose, `edits` a setup-form save.
     No duplicate engines, no write when unchanged."""
@@ -650,11 +650,16 @@ def _save_route(dest: Path, route: dict, pick: str = "", edits: bool = False, dr
             old = {}
     if isinstance(old.get("paiste"), dict) and old["paiste"].get("models"):
         for key, value in old.items():
-            if key not in clean and key not in drop:
+            if key not in clean:
                 clean[key] = value
         clean["paiste"] = keep_choice(old["paiste"], clean.get("paiste") or {}, pick=pick, edits=edits)
     else:
         clean = tidy_route(clean)
+    if "llm" not in old and isinstance(clean.get("llm"), dict):
+        # A first save carries the built-in default address. Keep it only if something answers there.
+        from hailports.clip.board import live_llm
+        if live_llm(clean["llm"], {}, "") is None:
+            clean.pop("llm")
     if old == clean:
         return False
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -670,7 +675,7 @@ def _save_route(dest: Path, route: dict, pick: str = "", edits: bool = False, dr
 
 def _onboard_auto(args, cfg, scan: dict | None = None) -> int:
     """One click. Apply what the scan found. Keys go to 0600 files and are never printed."""
-    from hailports.config import save_file
+    from hailports.config import load_file
     from hailports.clip.board import BoardError, auto_setup, live_llm, notes_setup_body, scan_setup, tie_notes
     from hailports.clip.gate import read_entitlement, read_token
     dest = _route_dest(args)
@@ -692,16 +697,21 @@ def _onboard_auto(args, cfg, scan: dict | None = None) -> int:
         )
         route = dict(cfg)
         route["paiste"] = updated
-        # Only save an llm address that answers (or the model the scan just found).
-        llm = live_llm(cfg.get("llm"), found, summary["ai"])
-        drop: tuple = ()
-        if llm is None:
-            route.pop("llm", None)
-            drop = ("llm",)
-        else:
-            route["llm"] = llm
+        # The model the scan found becomes the llm address, unless the user saved one that answers.
+        # A saved address is never removed; an unsaved default that nothing answers is not written
+        # (_save_route).
+        saved = False
+        if dest.is_file():
+            try:
+                doc = load_file(dest)
+                saved = isinstance(doc, dict) and "llm" in doc
+            except (OSError, ValueError, TypeError):
+                saved = False
+        found_llm = live_llm(None, found, summary["ai"])
+        if found_llm and not (saved and live_llm(cfg.get("llm"), {}, "") is not None):
+            route["llm"] = found_llm
         dest.parent.mkdir(parents=True, exist_ok=True)
-        _save_route(dest, route, drop=drop)
+        _save_route(dest, route)
         try:
             dest.chmod(0o600)
         except OSError:

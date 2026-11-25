@@ -62,3 +62,97 @@ def test_keyless_hosted_hop_is_skipped_at_draft_time():
     }}}
     names = [hop["name"] for hop in endpoints_from(cfg)]
     assert names == ["local"]
+
+
+def test_unloadable_and_embedding_models_are_not_picked_first():
+    body = json.dumps({"data": [{"id": "Qwen3.8-27B-MTP-4bit"}, {"id": "nomic-embed-text"}, {"id": "Qwen3.8-27B-4bit"}]})
+    assert board.model_ids(body)[0] == "Qwen3.8-27B-4bit"
+    rows = board.scan_models(read_local=lambda url: body if url == "http://127.0.0.1:8000/v1/models" else "", hosts=[])
+    assert rows[0]["model"] == "Qwen3.8-27B-4bit"
+
+
+def test_server_with_only_embedding_models_is_not_offered():
+    body = json.dumps({"data": [{"id": "text-embedding-3-small"}, {"id": "bge-m3"}]})
+    assert board.scan_models(read_local=lambda url: body if ":8000/" in url else "", hosts=[]) == []
+
+
+def test_keyless_custom_https_gateway_is_kept():
+    answers = {"link": "api", "apis": [{"url": "https://llm.example.org/v1", "model": "qwen", "key_file": ""}]}
+    out = board.apply_board({}, answers)
+    assert out["order"] == ["api"]
+    cfg = {"paiste": {"order": ["api"], "models": {"api": out["models"]["api"]}}}
+    assert [hop["name"] for hop in endpoints_from(cfg)] == ["api"]
+
+
+def test_every_listed_paid_provider_counts_as_needing_a_key():
+    from hailports.clip.hops import needs_key
+    assert all(needs_key(row[3]) for row in board.API_PROVIDERS)
+
+
+def test_first_save_never_writes_a_dead_default_address(tmp_path, monkeypatch):
+    from hailports.clip import run as cliprun
+    dest = tmp_path / "route.yaml"
+    route = {"llm": {"base_url": "http://127.0.0.1:18080/v1", "model": "local"},
+             "paiste": {"order": ["claude"], "models": {"claude": {"via": "claude", "bin": "/usr/bin/true"}}}}
+    monkeypatch.setattr(board, "_model_up", lambda url: False)
+    cliprun._save_route(dest, dict(route))
+    assert "llm" not in dest.read_text()
+    dest.unlink()
+    monkeypatch.setattr(board, "_model_up", lambda url: True)
+    cliprun._save_route(dest, dict(route))
+    assert "127.0.0.1:18080" in dest.read_text()
+
+
+def test_saved_llm_address_is_never_removed_by_a_later_save(tmp_path, monkeypatch):
+    from hailports.clip import run as cliprun
+    from hailports.config import save_file
+    dest = tmp_path / "route.yaml"
+    save_file(dest, {"llm": {"base_url": "http://127.0.0.1:8000/v1", "model": "q"},
+                     "paiste": {"order": ["local"], "models": {"local": {"via": "http", "base_url": "http://127.0.0.1:8000/v1", "model": "q"}}}})
+    monkeypatch.setattr(board, "_model_up", lambda url: False)
+    cliprun._save_route(dest, {"llm": {"base_url": "http://127.0.0.1:8000/v1", "model": "q"},
+                               "paiste": {"order": ["local"], "models": {"local": {"via": "http", "base_url": "http://127.0.0.1:8000/v1", "model": "q"}}, "copy": True}})
+    assert "127.0.0.1:8000" in dest.read_text().split("paiste:")[0]
+
+
+def _auto(dest: Path, cfg: dict, scan: dict) -> dict:
+    import argparse
+    from hailports.clip import run as cliprun
+    from hailports.config import load_file
+    cliprun._onboard_auto(argparse.Namespace(route_out=str(dest)), cfg, scan)
+    return load_file(dest)
+
+
+def _scan(url: str = "", model: str = "") -> dict:
+    ai = {"kind": "local", "name": model, "url": url, "host": ""} if url else {"kind": "none"}
+    return {"suggest": {"ai": ai, "notes": {"kind": "folder"}}, "apps": [], "models": [{"url": url}] if url else [],
+            "mail_apps": [], "chat_apps": []}
+
+
+def test_auto_setup_writes_the_found_model_on_a_fresh_mac(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(board, "_model_up", lambda url: ":8000/" in url)
+    doc = _auto(tmp_path / "route.yaml", {"llm": {"base_url": "http://127.0.0.1:18080/v1", "model": "local"}},
+                _scan("http://127.0.0.1:8000/v1", "Qwen3.8-27B-4bit"))
+    assert doc["llm"] == {"base_url": "http://127.0.0.1:8000/v1", "model": "Qwen3.8-27B-4bit"}
+
+
+def test_auto_setup_on_a_fresh_mac_with_nothing_running_writes_no_address(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(board, "_model_up", lambda url: False)
+    doc = _auto(tmp_path / "route.yaml", {"llm": {"base_url": "http://127.0.0.1:18080/v1", "model": "local"}}, _scan())
+    assert "llm" not in doc
+
+
+def test_auto_setup_never_removes_or_replaces_a_saved_address(tmp_path, monkeypatch):
+    from hailports.config import save_file
+    monkeypatch.setenv("HOME", str(tmp_path))
+    dest = tmp_path / "route.yaml"
+    mine = {"base_url": "http://127.0.0.1:8000/v1", "model": "Qwen3.8-27B-4bit"}
+    save_file(dest, {"llm": dict(mine)})
+    # Server off: the saved address stays.
+    monkeypatch.setattr(board, "_model_up", lambda url: False)
+    assert _auto(dest, {"llm": dict(mine)}, _scan())["llm"] == mine
+    # Server on, and the scan also found Ollama first: the saved, answering address stays.
+    monkeypatch.setattr(board, "_model_up", lambda url: True)
+    assert _auto(dest, {"llm": dict(mine)}, _scan("http://127.0.0.1:11434/v1", "llama3.2"))["llm"] == mine

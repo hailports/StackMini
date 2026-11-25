@@ -30,6 +30,18 @@ def _url_ok(url: str) -> bool:
     return bool(parsed.hostname)
 
 
+# Paid services that always need a key. A slot for one of these with no key can only fail.
+# A custom https gateway (a tunnel to someone's own server) may need no key and is kept.
+KEYED_HOSTS = frozenset({
+    "api.openai.com", "api.anthropic.com", "api.x.ai", "generativelanguage.googleapis.com",
+    "openrouter.ai", "api.groq.com", "api.mistral.ai", "api.deepseek.com",
+})
+
+
+def needs_key(url: str) -> bool:
+    return (urlparse(url or "").hostname or "").lower() in KEYED_HOSTS
+
+
 def endpoints_from(cfg: dict) -> list[dict]:
     """Ordered hops. An empty or invalid order falls back to llm.base_url."""
     paiste = cfg.get("paiste") or {}
@@ -70,8 +82,8 @@ def endpoints_from(cfg: dict) -> list[dict]:
                 key_file = str(spec.get("key_file") or "")
                 if key_file.startswith("/") and ".." not in key_file:
                     hop["key_file"] = key_file
-                elif base.startswith("https://"):
-                    # A hosted service with no key can only fail: skip it, try the next engine.
+                elif needs_key(base):
+                    # A paid service with no key can only fail: skip it, try the next engine.
                     continue
                 hops.append(hop)
     if hops:

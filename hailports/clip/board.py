@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from hailports.chat_badge import secret_hold
-from hailports.clip.hops import _HOST, _url_ok
+from hailports.clip.hops import _HOST, _url_ok, needs_key
 
 _SURFACES = (
     ("notes", "notes_dir", "Notes your model already has?", "paisty does not connect to notes and does not keep them. Leave this off when your model already has them. A folder is read on the click, then forgotten."),
@@ -129,28 +129,38 @@ _REMOTE_ENDPOINTS = (
 )
 
 
+# Listed by a server but not a chat model, or not loadable on its own (oMLX lists MTP heads it
+# cannot load). Never picked first; a server that lists only these is not offered as the AI.
+_AUX_MODEL = re.compile(r"(?i)(?:^|[-_/.:])(?:embed|embedding|embeddings|rerank|reranker|mtp|draft|whisper|tts|bge)(?:[-_/.:]|$)")
+
+
+def aux_model(name: str) -> bool:
+    return bool(_AUX_MODEL.search(name or ""))
+
+
 def model_ids(body: str) -> list[str]:
-    """Names from an OpenAI /models body or an Ollama tags body. Nothing else."""
+    """Names from an OpenAI /models body or an Ollama tags body, chat models first. Nothing else."""
     try:
         doc = json.loads(body or "")
     except json.JSONDecodeError:
         return []
     if not isinstance(doc, dict):
         return []
-    names = []
+    names: list[str] = []
     for key, field in (("data", "id"), ("models", "name")):
         rows = doc.get(key)
         if not isinstance(rows, list):
             continue
         for row in rows:
+            if len(names) == 16:
+                break
             if not isinstance(row, dict):
                 continue
             name = str(row.get(field) or "").strip()
             if _model_ok(name) and name not in names:
                 names.append(name)
-            if len(names) == 4:
-                return names
-    return names
+    names.sort(key=aux_model)  # stable: chat models keep the server's order
+    return names[:4]
 
 
 def ssh_host_names(text: str) -> list[str]:
@@ -220,7 +230,7 @@ def scan_models(read_local=None, hosts=None, read_ssh=None) -> list[dict]:
         if not body or not body.lstrip().startswith("{"):
             return
         ids = model_ids(body)
-        if not ids:
+        if not ids or aux_model(ids[0]):
             return
         name = ids[0]
         key = (host, base, name)
@@ -1605,8 +1615,8 @@ def apply_board(existing: dict | None, answers: dict) -> dict:
                     if isinstance(old, dict) and old.get("base_url") == url and _key_path_ok(str(old.get("key_file") or "")):
                         key_file = str(old.get("key_file"))
                         break
-            if not _key_path_ok(key_file):
-                # A hosted service with no key can only fail. Never put it in the order.
+            if not _key_path_ok(key_file) and needs_key(url):
+                # A paid service with no key can only fail. Never put it in the order.
                 skipped_hosts.append(urlparse(url).hostname or url)
                 continue
             spec = {
