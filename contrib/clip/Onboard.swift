@@ -559,7 +559,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             if licenseOnly && PaistyAccess.showsKeyEntry(access) {
                 titleField.stringValue = access == .none ? "Start your free trial" : "Your trial ended"
                 body.stringValue = access == .none
-                    ? "Start the 7-day trial at paisty.com with your email and a card. It is $6/month after that unless you cancel. paisty turns itself on. Bought a key? Paste it below."
+                    ? "Start the 7-day free trial at paisty.com with just your email. No card, and nothing is charged when it ends. paisty turns itself on. Bought a key? Paste it below."
                     : "Pick a plan to keep using paisty. If you bought one, paste the key from your email."
             } else {
                 titleField.stringValue = "Save setup."
