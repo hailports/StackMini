@@ -90,7 +90,7 @@ def _window_chars(scene: dict) -> int:
     return total
 
 
-def receipt(scene, secret: bool = False, lookups: int = 0) -> list[str]:
+def receipt(scene, secret: bool = False, lookups: int = 0, files: list[str] | None = None) -> list[str]:
     """What paisty read for one draft, in plain lines for the menu. Kept in drafts.jsonl on this Mac only."""
     if not isinstance(scene, dict) or not scene:
         return []
@@ -109,9 +109,20 @@ def receipt(scene, secret: bool = False, lookups: int = 0) -> list[str]:
     else:
         lines.append("Selected text: none")
     lines.append(f"Window text: {_window_chars(scene):,} characters")
+    from hailports.clip.scene import OFFSCREEN
+    hidden = sum(len(str(b.get("text") or "")) for b in scene.get("blocks") or []
+                 if isinstance(b, dict) and b.get("role") == OFFSCREEN)
+    if hidden:
+        lines.append(f"Text scrolled out of view: {hidden:,} characters (read without scrolling)")
     images = scene.get("images") or []
     if isinstance(images, list) and images:
         lines.append(f"Screenshots: {len(images)}")
+    names = [str(n) for n in (files or []) if str(n).strip()]
+    if names and secret:
+        lines.append(f"Files read: {len(names)}")
+    elif names:
+        shown = ", ".join(names[:4]) + (f" and {len(names) - 4} more" if len(names) > 4 else "")
+        lines.append("Files read: " + shown)
     if lookups:
         lines.append(f"Lookups: {lookups} fact{'s' if lookups != 1 else ''}")
     lines.append("This stays on this Mac.")
@@ -174,7 +185,7 @@ def load(path: Path | None = None) -> list[dict]:
 
 
 def append(text: str, hop: str = "", app: str = "", path: Path | None = None, keep: int = KEEP,
-           scene: dict | None = None, lookups: int = 0) -> dict | None:
+           scene: dict | None = None, lookups: int = 0, files: list[str] | None = None) -> dict | None:
     text = str(text or "").strip()
     if not text:
         return None
@@ -184,7 +195,7 @@ def append(text: str, hop: str = "", app: str = "", path: Path | None = None, ke
     row = {"id": at.replace(":", "").replace("+0000", "Z") + "-" + digest, "at": at, "text": text,
            "hop": str(hop or ""), "app": str(app or ""), "preview": _preview(text)}
     secret = scene_secret(scene)
-    read = receipt(scene, secret=secret, lookups=lookups)
+    read = receipt(scene, secret=secret, lookups=lookups, files=files)
     if read:
         row["read"] = read
     check = check_items(text)

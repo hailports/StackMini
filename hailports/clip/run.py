@@ -140,8 +140,9 @@ def _brain_notes(cfg: dict | None, text: str) -> str:
     return out.strip()[:4000] if code == 0 else ""
 
 
-def full_draft(doc: dict, route: dict, rules: str) -> tuple[str, str]:
-    """The full-context path. Returns (reply, hop). Empty reply means fall back."""
+def full_draft(doc: dict, route: dict, rules: str, info: dict | None = None) -> tuple[str, str]:
+    """The full-context path. Returns (reply, hop). Empty reply means fall back.
+    `info`, when given, gets the names of the files it read (names only) for the draft's receipt."""
     from hailports.clip import compose
     hop = {"name": ""}
     hops = endpoints_from(route)
@@ -151,7 +152,9 @@ def full_draft(doc: dict, route: dict, rules: str) -> tuple[str, str]:
         hop["name"] = name
         return text
 
-    text, _ctx, _attempts = compose.draft(doc, route, rules, run_model, lookup=lambda q: _brain_notes(route, q))
+    text, ctx, _attempts = compose.draft(doc, route, rules, run_model, lookup=lambda q: _brain_notes(route, q))
+    if info is not None:
+        info["files"] = list(dict.fromkeys(getattr(ctx, "files", None) or []))
     return (text if reply_ok(text) else ""), hop["name"]
 
 
@@ -289,7 +292,8 @@ def _draft_scene_once(doc: dict, base_url: str, model: str, copy: bool, cfg: dic
     from hailports.clip import compose
     if compose.wants_full(doc, route):
         try:
-            text, hop_name = full_draft(doc, route, rules)
+            read_info: dict = {}
+            text, hop_name = full_draft(doc, route, rules, read_info)
         except ModelOffline as exc:
             print("model offline: " + str(exc))
             return 2
@@ -307,7 +311,8 @@ def _draft_scene_once(doc: dict, base_url: str, model: str, copy: bool, cfg: dic
                 pass
             try:
                 from hailports.clip.drafts import append as remember_draft
-                remember_draft(text, hop=hop_name, app=str(doc.get("app") or ""), scene=doc)
+                remember_draft(text, hop=hop_name, app=str(doc.get("app") or ""), scene=doc,
+                               files=read_info.get("files"))
             except OSError:
                 pass
             if copy:
