@@ -2025,7 +2025,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
             "selection": selected,
             "origin": "cocoa",
             "field_box": box(el),
-            "blocks": blocks(near: el),
+            "blocks": withOffscreen(blocks(near: el), window: window, field: value),
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: body),
               let text = String(data: data, encoding: .utf8) else { return "{}" }
@@ -2073,6 +2073,72 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         guard let data = try? JSONSerialization.data(withJSONObject: doc),
               let text = String(data: data, encoding: .utf8) else { return fresh }
         return text
+    }
+
+    /// Adds the window's text that is scrolled out of view, as one last block. Web views (Mail's message view, Gmail,
+    /// Outlook and Slack in a browser) hand over their whole page through Accessibility text markers, so nothing
+    /// scrolls and nothing on screen changes. Text a web app has removed from the page (a virtual list, a collapsed
+    /// quote) is not there to read.
+    static let offscreenRole = "AXOffscreenText"
+    static let offscreenCap = 20000
+
+    static func withOffscreen(_ rows: [[String: Any]], window: CFTypeRef?, field: String) -> [[String: Any]] {
+        guard let window, CFGetTypeID(window) == AXUIElementGetTypeID() else { return rows }
+        var known = Set<String>()
+        for text in rows.compactMap({ $0["text"] as? String }) + [field] {
+            for line in text.components(separatedBy: .newlines) {
+                let key = line.trimmingCharacters(in: .whitespaces)
+                if !key.isEmpty { known.insert(key) }
+            }
+        }
+        var areas: [AXUIElement] = []
+        let start = Date()
+        findWebAreas(window as! AXUIElement, into: &areas, depth: 0)
+        var lines: [String] = []
+        var total = 0
+        for area in areas.prefix(4) {
+            // A big mailbox window took 2.8s for four web areas; the draft does not wait that long for hidden text.
+            if Date().timeIntervalSince(start) > 1.2 { break }
+            guard let all = fullText(area) else { continue }
+            for raw in all.components(separatedBy: .newlines) {
+                let line = raw.trimmingCharacters(in: .whitespaces)
+                if line.count < 2 || known.contains(line) || chrome(line) { continue }
+                known.insert(line)
+                lines.append(line)
+                total += line.count + 1
+                if total >= offscreenCap { break }
+            }
+            if total >= offscreenCap { break }
+        }
+        guard !lines.isEmpty else { return rows }
+        return rows + [["text": lines.joined(separator: "\n"), "role": offscreenRole]]
+    }
+
+    static func findWebAreas(_ el: AXUIElement, into out: inout [AXUIElement], depth: Int) {
+        if out.count >= 4 || depth > 14 { return }
+        if (str(el, kAXRoleAttribute) ?? "") == "AXWebArea" {
+            out.append(el)
+            return
+        }
+        var children: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &children) == .success,
+              let list = children as? [AXUIElement] else { return }
+        for child in list.prefix(60) {
+            findWebAreas(child, into: &out, depth: depth + 1)
+            if out.count >= 4 { return }
+        }
+    }
+
+    /// The whole text of one web area, scrolled out of view or not. Read only: no scrolling, no focus change.
+    static func fullText(_ area: AXUIElement) -> String? {
+        AXUIElementSetMessagingTimeout(area, 1.0)
+        var range: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(area, "AXTextMarkerRangeForUIElement" as CFString, area, &range) == .success,
+              let range else { return nil }
+        var text: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(area, "AXStringForTextMarkerRange" as CFString, range, &text) == .success
+        else { return nil }
+        return text as? String
     }
 
     static func blocks(near el: AXUIElement) -> [[String: Any]] {

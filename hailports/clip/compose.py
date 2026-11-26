@@ -135,15 +135,23 @@ def _recipients(doc: dict) -> tuple[list[str], list[str]]:
     return to, cc
 
 
-def screen_text(doc: dict) -> str:
+def screen_text(doc: dict, hidden: bool = True) -> str:
+    from hailports.clip.scene import OFFSCREEN
     parts = [str(doc.get("selection") or ""), str(doc.get("field_text") or ""), str(doc.get("window_ocr") or "")]
+    parts_hidden = []
     seen = set()
     for block in doc.get("blocks") or []:
         text = str((block or {}).get("text") or "").strip() if isinstance(block, dict) else str(block)
-        if text and text not in seen and len(text) > 2:
-            seen.add(text)
+        if not text or text in seen or len(text) <= 2:
+            continue
+        seen.add(text)
+        if isinstance(block, dict) and block.get("role") == OFFSCREEN:
+            if hidden:
+                parts_hidden.append(text)
+        else:
             parts.append(text)
-    return "\n".join(p for p in parts if p.strip())
+    # Scrolled-out-of-view text goes first: the prompt keeps the END of this, so what is on screen always survives.
+    return "\n".join(p for p in parts_hidden + parts if p.strip())
 
 
 def _image_urls(doc: dict) -> list[str]:
@@ -245,7 +253,7 @@ def gather(doc: dict, cfg: dict | None, lookup=None, extra_dirs: list[Path] | No
     if voice_file and Path(voice_file).expanduser().is_file():
         ctx.voice = Path(voice_file).expanduser().read_text(encoding="utf-8", errors="replace")[:1800]
     ctx.kind = shape.surface(doc)
-    incoming = shape.words(shape.newest_message(ctx.selection or screen_text(doc)))
+    incoming = shape.words(shape.newest_message(ctx.selection or screen_text(doc, hidden=False)))
     ctx.target, ctx.cap = shape.word_cap(ctx.kind, incoming)
     ctx.examples = shape.load_examples(paiste)
     return ctx

@@ -18,6 +18,8 @@ from pathlib import Path
 
 CAP = 1600
 PAGE = 6000
+# The app's block for window text that is scrolled out of view (read through Accessibility, nothing scrolls).
+OFFSCREEN = "AXOffscreenText"
 NEAR = 280
 SYSTEM = "Write a short reply. Use only the text on screen. Do not invent facts."
 _CLOSE = {
@@ -1391,10 +1393,14 @@ def _page_text(scene: Scene) -> str:
             parts.append("\n".join(kept))
 
     for block in scene.blocks:
-        if "button" in (block.role or "").lower():
+        if "button" in (block.role or "").lower() or block.role == OFFSCREEN:
             continue
         add(block.text)
     add(scene.field_text or "")
+    # Text scrolled out of view goes last, so it only fills room the visible text left.
+    for block in scene.blocks:
+        if block.role == OFFSCREEN:
+            add(block.text)
     if not parts:
         return ""
     return "\n\n".join(parts)[:PAGE]
