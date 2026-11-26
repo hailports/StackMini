@@ -743,7 +743,13 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
                 remembered = field
                 if let won = Self.insert(text, into: field, pid: pid) { path = won }
             }
-            if path == "copied" {
+            // The remembered box is still open but the paste was refused (focus moved to another
+            // window or app mid-draft): leave the draft on the clipboard. Pasting into whatever is
+            // focused now is exactly how it would land in the wrong compose window.
+            if path == "copied", remembered != nil {
+                PastePath.note("  remembered box alive, paste refused: clipboard only")
+            }
+            if path == "copied", remembered == nil {
                 Self.activate(pid)
                 let fresh = Self.focusedInput(pid: pid, deep: true)
                 PastePath.note("  deep target \(PastePath.describe(fresh))")
@@ -752,7 +758,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
                     path = won
                 }
             }
-            if path == "copied", CGPreflightScreenCaptureAccess(), PastePath.ensureFront(pid),
+            if path == "copied", remembered == nil, CGPreflightScreenCaptureAccess(), PastePath.ensureFront(pid),
                let composer = Self.composerPoint(pid: pid), Self.clickPaste(pid: pid, at: composer) {
                 path = "ocr-cmdv"
             }
@@ -779,9 +785,10 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
            let won = Self.insert(text, into: field, pid: pid) {
             path = won
         }
-        if path == "copied", pid != 0, PastePath.ensureFront(pid) {
+        if path == "copied", pid != 0, PastePath.ensureFront(pid),
+           field.map({ PastePath.refocusWindow(of: $0, pid: pid) }) ?? true {
             Thread.sleep(forTimeInterval: 0.08)
-            if Self.commandV() { path = "cmdv-rewrite" }
+            if field.map({ PastePath.onWindow(of: $0, pid: pid) }) ?? true, Self.commandV() { path = "cmdv-rewrite" }
         }
         PastePath.note("rewrite app=\(bundle) chars=\(text.count) path=\(path)")
         log.error("rewrite \(path, privacy: .public) app \(bundle, privacy: .public)")
@@ -844,7 +851,9 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
             if PastePath.hits(probe, in: el) > before { return "ax-replace" }
         }
         // WebKit and Electron boxes: Cmd-V over the selection.
-        guard PastePath.ensureFront(pid), PastePath.frontPID() == pid, PastePath.commandV() else { return nil }
+        guard PastePath.ensureFront(pid), PastePath.refocusWindow(of: el, pid: pid),
+              PastePath.frontPID() == pid, PastePath.onWindow(of: el, pid: pid),
+              PastePath.commandV() else { return nil }
         for _ in 0..<10 {
             Thread.sleep(forTimeInterval: 0.1)
             if PastePath.hits(probe, in: el) > before { return "cmdv-replace" }

@@ -134,6 +134,60 @@ enum PastePath {
         return frontPID() == pid
     }
 
+    // MARK: same-app window guard
+
+    /// The window that holds `el`: its AXWindow, else the nearest AXWindow ancestor.
+    static func window(of el: AXUIElement) -> AXUIElement? {
+        if let win = element(el, kAXWindowAttribute) { return win }
+        var node: AXUIElement? = el
+        for _ in 0..<40 {
+            guard let cur = node else { break }
+            if str(cur, kAXRoleAttribute) == (kAXWindowRole as String) { return cur }
+            node = element(cur, kAXParentAttribute)
+        }
+        return nil
+    }
+
+    /// The window that gets keystrokes inside `pid`.
+    static func focusedWindow(_ pid: pid_t) -> AXUIElement? {
+        element(AXUIElementCreateApplication(pid), kAXFocusedWindowAttribute)
+    }
+
+    /// True when `pid`'s focused window is the one holding `el`, or when AX can't tell either window.
+    static func onWindow(of el: AXUIElement, pid: pid_t) -> Bool {
+        guard let win = window(of: el), let cur = focusedWindow(pid) else { return true }
+        return CFEqual(win, cur)
+    }
+
+    /// Two compose windows in one app: the user clicked paisty in the first, then moved to the
+    /// second while the draft was generating. Cmd-V follows keyboard focus, so it would land in
+    /// the second window. Bring the remembered window back first, and report false when it would
+    /// not come back, so the caller leaves the draft on the clipboard instead of pasting.
+    static func refocusWindow(of el: AXUIElement, pid: pid_t) -> Bool {
+        guard let win = window(of: el) else {
+            note("  window unknown: no same-app guard")
+            return true
+        }
+        guard let cur = focusedWindow(pid) else {
+            note("  focused window unknown: no same-app guard")
+            return true
+        }
+        if CFEqual(cur, win) { return true }
+        note("  focus is on another window of the app; raising the remembered one")
+        AXUIElementPerformAction(win, kAXRaiseAction as CFString)
+        AXUIElementSetAttributeValue(win, kAXMainAttribute as CFString, kCFBooleanTrue)
+        AXUIElementSetAttributeValue(AXUIElementCreateApplication(pid), kAXFocusedWindowAttribute as CFString, win)
+        for _ in 0..<10 {
+            Thread.sleep(forTimeInterval: 0.05)
+            if let now = focusedWindow(pid), CFEqual(now, win) {
+                note("  remembered window is focused again")
+                return true
+            }
+        }
+        note("  remembered window did not come back: no paste")
+        return false
+    }
+
     /// Cmd-V only. No Return, no other keys.
     static func commandV() -> Bool {
         guard let source = CGEventSource(stateID: .combinedSessionState),
@@ -251,9 +305,10 @@ enum PastePath {
             note("  cmdv skipped: target app not frontmost")
             return nil
         }
+        guard refocusWindow(of: el, pid: pid) else { return nil }
         AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, kCFBooleanTrue)
         Thread.sleep(forTimeInterval: 0.08)
-        guard frontPID() == pid, commandV() else {
+        guard frontPID() == pid, onWindow(of: el, pid: pid), commandV() else {
             note("  cmdv skipped: focus moved")
             return nil
         }
