@@ -429,8 +429,12 @@ def _name_line(line: str) -> bool:
     return all(word[:1].isupper() for word in words)
 
 
+_FILL_IN = re.compile(r"^\s*\[\s*(?:your|my|insert|recipient'?s?|sender'?s?)?\s*[a-z][a-z ]{0,30}\]\s*,?\s*$", re.I)
+
+
 def strip_signoff(text: str) -> str:
-    lines = [line.rstrip() for line in (text or "").splitlines()]
+    # Template models (the starter AI's Llama) sign off with "[Your Name]" lines: never a real reply.
+    lines = [line.rstrip() for line in (text or "").splitlines() if not _FILL_IN.match(line)]
     while lines and not lines[-1].strip():
         lines.pop()
     changed = True
