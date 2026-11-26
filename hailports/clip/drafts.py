@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -16,7 +17,7 @@ KEEP = 30
 MENU = 12
 SCENE_CAP = 16 * 1024
 SCENE_DAYS = 7
-LISTED = ("id", "at", "preview", "app", "hop", "text")
+LISTED = ("id", "at", "preview", "app", "hop", "text", "read", "check")
 
 
 def drafts_path() -> Path:
@@ -53,6 +54,68 @@ def cap_scene(scene, cap: int = SCENE_CAP) -> dict | None:
     except (TypeError, ValueError):
         return None
     return None
+
+
+# Numbers a reader should check before sending: order and tracking numbers, amounts, times, dates.
+_CHECK = re.compile(
+    r"(?i)(?:\$\s?\d[\d,]*(?:\.\d{2})?"
+    r"|#\s?[A-Z0-9][A-Z0-9-]{2,}"
+    r"|\b\d{1,2}(?::\d{2})?\s?(?:am|pm)\b"
+    r"|\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b"
+    r"|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?\b"
+    r"|\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"
+    r"|\b\d[\d,.-]{3,}\d\b"
+    r"|\b\d+(?:\.\d+)?\s?%)")
+
+
+def check_items(text: str, limit: int = 6) -> list[str]:
+    """The numbers, dates and times in a draft, in order, for a 'check these' hint. Nothing else."""
+    out: list[str] = []
+    for m in _CHECK.finditer(str(text or "")):
+        item = " ".join(m.group(0).split()).rstrip(".,")
+        if len(item) > 28:
+            item = item[:27] + "…"
+        if item and item.lower() not in [o.lower() for o in out]:
+            out.append(item)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _window_chars(scene: dict) -> int:
+    total = len(str(scene.get("field_text") or "")) + len(str(scene.get("window_ocr") or ""))
+    for block in scene.get("blocks") or []:
+        if isinstance(block, dict):
+            total += len(str(block.get("text") or ""))
+    return total
+
+
+def receipt(scene, secret: bool = False, lookups: int = 0) -> list[str]:
+    """What paisty read for one draft, in plain lines for the menu. Kept in drafts.jsonl on this Mac only."""
+    if not isinstance(scene, dict) or not scene:
+        return []
+    lines = []
+    app = str(scene.get("app") or "").strip()
+    title = " ".join(str(scene.get("title") or "").split())[:60]
+    if app or title:
+        same = title.lower() == app.lower()
+        lines.append("App: " + (app or "?") + (f" ({title})" if title and not secret and not same else ""))
+    picked = " ".join(str(scene.get("selection") or "").split())
+    if picked and secret:
+        lines.append(f"Selected text: {len(picked):,} characters")
+    elif picked:
+        shown = picked if len(picked) <= 120 else picked[:119].rstrip() + "…"
+        lines.append(f"Selected text ({len(picked):,} characters): {shown}")
+    else:
+        lines.append("Selected text: none")
+    lines.append(f"Window text: {_window_chars(scene):,} characters")
+    images = scene.get("images") or []
+    if isinstance(images, list) and images:
+        lines.append(f"Screenshots: {len(images)}")
+    if lookups:
+        lines.append(f"Lookups: {lookups} fact{'s' if lookups != 1 else ''}")
+    lines.append("This stays on this Mac.")
+    return lines
 
 
 def _strings(value):
@@ -111,7 +174,7 @@ def load(path: Path | None = None) -> list[dict]:
 
 
 def append(text: str, hop: str = "", app: str = "", path: Path | None = None, keep: int = KEEP,
-           scene: dict | None = None) -> dict | None:
+           scene: dict | None = None, lookups: int = 0) -> dict | None:
     text = str(text or "").strip()
     if not text:
         return None
@@ -120,7 +183,14 @@ def append(text: str, hop: str = "", app: str = "", path: Path | None = None, ke
     digest = hashlib.sha1((at + "\n" + text).encode("utf-8")).hexdigest()[:10]
     row = {"id": at.replace(":", "").replace("+0000", "Z") + "-" + digest, "at": at, "text": text,
            "hop": str(hop or ""), "app": str(app or ""), "preview": _preview(text)}
-    kept = None if scene_secret(scene) else cap_scene(scene)
+    secret = scene_secret(scene)
+    read = receipt(scene, secret=secret, lookups=lookups)
+    if read:
+        row["read"] = read
+    check = check_items(text)
+    if check:
+        row["check"] = check
+    kept = None if secret else cap_scene(scene)
     if kept is not None:
         row["scene"] = kept
     rows = (load(path) + [row])[-keep:]

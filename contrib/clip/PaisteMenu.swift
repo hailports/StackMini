@@ -33,6 +33,8 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
     var pasteTarget: AXUIElement?
     var pastePID: pid_t = 0
     var pasteAt = Date.distantPast
+    var lastDelivered = ""         // the newest draft text put on the clipboard, matched to its drafts.jsonl row
+    var nudge: NSPanel?
     let mark = PaisteApp.paperclip()
     var spinTimer: Timer?          // the thinking pulse timer (kept name: the glow checks it)
     var pulse = PulseMachine()
@@ -723,6 +725,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
     /// Puts the text on the clipboard, then tries to place it in the target app's focused field. Call off the main thread. Never presses Return.
     func deliver(_ text: String, pid: pid_t, field: AXUIElement?) -> String {
         DispatchQueue.main.sync {
+            self.lastDelivered = text
             let board = NSPasteboard.general
             board.clearContents()
             board.setString(text, forType: .string)
@@ -884,6 +887,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         item?.button?.appearsDisabled = false
         log.error("\(copied ? "copied" : "pasted", privacy: .public) \(path, privacy: .public) \(note, privacy: .public)")
         busy = false
+        if !note.contains("rewrite") && !path.contains("rewrite") { nudgeNumbers(for: lastDelivered) }
         DispatchQueue.main.asyncAfter(deadline: .now() + (path == "copied-redraft" ? 4 : 1.2)) {
             guard !self.busy else { return }
             self.pulse.send(.settle)
@@ -962,6 +966,8 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         let preview: String
         let app: String
         let text: String
+        var read: [String] = []
+        var check: [String] = []
     }
 
     final class DraftRef: NSObject {
@@ -1035,6 +1041,15 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
             redo.target = self
             redo.representedObject = ref
             sub.addItem(redo)
+            if !draft.read.isEmpty {
+                // What paisty read for this draft. Kept in drafts.jsonl on this Mac; nothing here leaves it.
+                sub.addItem(.separator())
+                sub.addItem(header("What paisty read"))
+                for line in draft.read { sub.addItem(header(Self.menuLine(line))) }
+            }
+            if !draft.check.isEmpty {
+                sub.addItem(header("Check: " + draft.check.joined(separator: ", ")))
+            }
             row.submenu = sub
             menu.addItem(row)
         }
@@ -1081,6 +1096,11 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         look.target = self
         look.state = Self.lookupsOn() ? .on : .off
         menu.addItem(look)
+        let copiedText = NSMenuItem(title: "Draft from copied text", action: #selector(draftFromCopiedText), keyEquivalent: "")
+        copiedText.target = self
+        copiedText.toolTip = "Copy a message anywhere, then pick this. The reply lands on the clipboard. Needs no permissions."
+        copiedText.isEnabled = !busy && !Self.copiedText().isEmpty
+        menu.addItem(copiedText)
         let shot = NSMenuItem(title: "Draft from copied screenshot", action: #selector(draftFromScreenshot), keyEquivalent: "")
         shot.target = self
         shot.isEnabled = !busy && Self.pasteboardImage() != nil
@@ -1212,6 +1232,110 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         }
     }
 
+    static func copiedText() -> String {
+        (NSPasteboard.general.string(forType: .string) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Copied text in, a reply on the clipboard out. Reads nothing on screen, so it works before
+    /// Accessibility or Screen Recording is turned on: a way to try paisty before granting anything.
+    @objc func draftFromCopiedText() {
+        let copied = Self.copiedText()
+        guard !busy, !copied.isEmpty else { return }
+        busy = true
+        draftSig = seenSig
+        startSpin()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("paisty-copied-\(Int(Date().timeIntervalSince1970)).json")
+            let scene: [String: Any] = ["app": "Copied text", "title": "Copied text", "selection": copied, "field_text": copied]
+            guard let data = try? JSONSerialization.data(withJSONObject: scene) else {
+                DispatchQueue.main.async { self.fail("Could not read the copied text") }
+                return
+            }
+            try? data.write(to: url, options: .atomic)
+            defer { try? FileManager.default.removeItem(at: url) }
+            let run = Self.runPaiste(["draft", "--scene", url.path], timeout: 240)
+            let text = run.out.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard run.status == 0, !text.isEmpty else {
+                let why = text == "license" ? "License needed"
+                    : text.hasPrefix("model offline") ? "Can't reach your AI model. Open setup… to check it."
+                    : "No draft from the copied text"
+                DispatchQueue.main.async { self.fail(why) }
+                return
+            }
+            DispatchQueue.main.sync {
+                self.lastDelivered = text
+                let board = NSPasteboard.general
+                board.clearContents()
+                board.setString(text, forType: .string)
+            }
+            DispatchQueue.main.async { self.finish(path: "copied", note: "copied-text") }
+        }
+    }
+
+    /// Menu rows cut long receipt lines so the submenu stays a readable width.
+    static func menuLine(_ line: String) -> String {
+        line.count <= 90 ? line : String(line.prefix(89)) + "…"
+    }
+
+    /// The numbers, dates and times in the draft just delivered, from its drafts.jsonl row.
+    func nudgeNumbers(for text: String) {
+        let delivered = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !delivered.isEmpty else { return }
+        DispatchQueue.global(qos: .utility).async {
+            let row = Self.loadDrafts().first { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == delivered }
+            guard let items = row?.check, !items.isEmpty else { return }
+            Self.onMainLoop { self.showNudge("Check before you send: " + items.joined(separator: ", ")) }
+        }
+    }
+
+    /// A small note under the menu bar icon for 7 s. No focus, no sound, no modal; a click hides it.
+    func showNudge(_ message: String) {
+        nudge?.orderOut(nil)
+        let panel = Self.nudgePanel(message)
+        if let button = item?.button, let window = button.window {
+            let icon = window.convertToScreen(button.convert(button.bounds, to: nil))
+            let screen = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
+            var x = icon.midX - panel.frame.width / 2
+            x = min(max(x, screen.minX + 8), screen.maxX - panel.frame.width - 8)
+            panel.setFrameOrigin(NSPoint(x: x, y: icon.minY - panel.frame.height - 6))
+        }
+        panel.orderFrontRegardless()
+        nudge = panel
+        item?.button?.toolTip = message
+        DispatchQueue.main.asyncAfter(deadline: .now() + 7) { [weak self, weak panel] in
+            panel?.orderOut(nil)
+            if let self, self.nudge === panel { self.nudge = nil }
+        }
+    }
+
+    static func nudgePanel(_ message: String) -> NSPanel {
+        let label = NSTextField(wrappingLabelWithString: message)
+        label.font = NSFont.systemFont(ofSize: 12)
+        label.textColor = .labelColor
+        label.preferredMaxLayoutWidth = 300
+        let size = label.fittingSize
+        let frame = NSRect(x: 0, y: 0, width: min(size.width, 300) + 24, height: size.height + 16)
+        let panel = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isFloatingPanel = true
+        panel.level = .statusBar
+        panel.hidesOnDeactivate = false
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.ignoresMouseEvents = false
+        let box = NSVisualEffectView(frame: frame)
+        box.material = .popover
+        box.state = .active
+        box.wantsLayer = true
+        box.layer?.cornerRadius = 8
+        label.frame = NSRect(x: 12, y: 8, width: frame.width - 24, height: size.height)
+        box.addSubview(label)
+        let hide = NSClickGestureRecognizer(target: panel, action: #selector(NSWindow.orderOut(_:)))
+        box.addGestureRecognizer(hide)
+        panel.contentView = box
+        return panel
+    }
+
     func header(_ title: String) -> NSMenuItem {
         let row = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         row.isEnabled = false
@@ -1269,7 +1393,10 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         return rows.compactMap { row in
             let id = text(row, "id")
             if id.isEmpty { return nil }
-            return Draft(id: id, at: text(row, "at"), preview: text(row, "preview"), app: text(row, "app"), text: text(row, "text"))
+            var draft = Draft(id: id, at: text(row, "at"), preview: text(row, "preview"), app: text(row, "app"), text: text(row, "text"))
+            draft.read = (row["read"] as? [Any] ?? []).compactMap { $0 as? String }
+            draft.check = (row["check"] as? [Any] ?? []).compactMap { $0 as? String }
+            return draft
         }
     }
 

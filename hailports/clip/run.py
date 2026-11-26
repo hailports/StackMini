@@ -485,7 +485,8 @@ def _draft_scene_once(doc: dict, base_url: str, model: str, copy: bool, cfg: dic
         return 0
     try:
         from hailports.clip.drafts import append as remember_draft
-        remember_draft(text, hop=str(hop or ""), app=str(doc.get("app") or ""), scene=doc)
+        remember_draft(text, hop=str(hop or ""), app=str(doc.get("app") or ""), scene=doc,
+                       lookups=len([line for line in str(facts or "").splitlines() if line.strip()]))
     except OSError:
         pass
     if copy and text:

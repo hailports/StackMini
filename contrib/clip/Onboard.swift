@@ -601,7 +601,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
     }
 
     /// Where the menu-bar icon is, and how to get this window back. No global hotkey is registered.
-    static let menuGuide = "The paisty icon is the p icon in the menu bar, at the top right. Click it in a reply box to draft. If the icon is hidden, open paisty from Spotlight or Applications and this window comes back. There is no keyboard shortcut. Press Turn on Accessibility to paste into the reply. Until then a click copies the draft."
+    static let menuGuide = "The paisty icon is the p icon in the menu bar, at the top right. Click it in a reply box to draft. If the icon is hidden, open paisty from Spotlight or Applications and this window comes back. There is no keyboard shortcut. Press Turn on Accessibility to paste into the reply. Until then a click copies the draft. To try it first with copy and paste, before turning anything on: copy a message, right-click the p icon and pick Draft from copied text. The reply lands on the clipboard."
     static let lookupNote = "Look things up before drafting is in the menu. It stays off until you turn it on, and it only reads."
 
     func refreshTrust() {
@@ -610,7 +610,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         if !trusted {
             sawUntrusted = true
             if statusField.stringValue.isEmpty || statusField.stringValue.hasPrefix("Accessibility") {
-                statusField.stringValue = "Accessibility is off. Paste copies until you turn it on."
+                statusField.stringValue = "Accessibility is off. Paste copies until you turn it on. Try it first with copy and paste: copy a message, right-click the p icon, pick Draft from copied text."
             }
             return
         }
