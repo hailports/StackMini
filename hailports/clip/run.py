@@ -755,6 +755,15 @@ def cmd_onboard(args, cfg) -> int:
     if getattr(args, "login", ""):
         print(start_login(str(args.login)))
         return 0
+    if str(getattr(args, "use", "") or "").strip().lower() == "starter":
+        from hailports.clip.board import use_starter
+        dest = _route_dest(args)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        route = dict(cfg)
+        route["paiste"] = use_starter(cfg.get("paiste") or {})
+        _save_route(dest, route, pick="starter", edits=True)
+        print("using")
+        return 0
     if getattr(args, "use", ""):
         name = str(args.use).strip().lower()
         state = app_status(name)

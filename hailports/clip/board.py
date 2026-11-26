@@ -1461,6 +1461,7 @@ def show_board(paiste: dict | None = None, found: dict | None = None) -> dict:
     locals_out = []
     apis_out = []
     app_name = ""
+    starter = False
     for name in order:
         spec = models.get(name)
         if not isinstance(spec, dict):
@@ -1469,6 +1470,9 @@ def show_board(paiste: dict | None = None, found: dict | None = None) -> dict:
         model = str(spec.get("model") or "local")
         if via in {"claude", "codex", "cursor"} and not app_name:
             app_name = via
+            continue
+        if via == "starter":
+            starter = True
             continue
         if via == "ssh":
             host = str(spec.get("ssh_host") or "")
@@ -1485,6 +1489,9 @@ def show_board(paiste: dict | None = None, found: dict | None = None) -> dict:
                     "model": model,
                     "has_key": _key_path_ok(str(spec.get("key_file") or "")),
                 })
+    if starter and not app_name and not locals_out and not apis_out:
+        # The starter AI only runs when nothing else is set up (see hops.endpoints_from).
+        app_name = "starter"
     local = ""
     local_model = "local"
     api_url = ""
@@ -1582,6 +1589,9 @@ def apply_board(existing: dict | None, answers: dict) -> dict:
     _one_surface(out, "notes", "notes_dir", str(answers.get("notes") or ""), str(answers.get("notes_path") or ""))
     _one_surface(out, "calendar", "calendar_dir", str(answers.get("calendar") or ""), str(answers.get("calendar_path") or ""))
     out.setdefault("obsidian_vault", "")
+    if link == "app" and str(answers.get("app") or "").strip().lower() == "starter":
+        # Picked "Start now": the starter AI, with this form's mail, notes, and calendar choices.
+        return use_starter(out)
     if link == "app":
         name = str(answers.get("app") or "").strip().lower()
         if name not in _APP_NAMES:
@@ -1837,6 +1847,19 @@ def use_app(current: dict, name: str, binary: str = "") -> dict:
     out["copy"] = True
     out["order"] = order
     out["models"] = models
+    return out
+
+
+def use_starter(current: dict) -> dict:
+    """Pick paisty's starter AI: no model, key, or app needed. Mail, notes, and context stay.
+    It is the only engine in the order; connecting your own AI later replaces it."""
+    from hailports.clip.hops import STARTER_URL
+    out = dict(current or {})
+    out["enabled"] = True
+    out["copy"] = True
+    out["order"] = ["starter"]
+    out["models"] = {"starter": {"via": "starter", "base_url": STARTER_URL, "model": "starter", "ssh_host": "", "remote_url": ""}}
+    out["preferred"] = "starter"
     return out
 
 

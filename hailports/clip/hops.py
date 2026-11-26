@@ -38,6 +38,33 @@ KEYED_HOSTS = frozenset({
 })
 
 
+# paisty's starter AI: a capped server draft for people with no model of their own. Opt-in only:
+# it is in the order only when the user picked "Start now" in setup. The window text for the click
+# goes to paisty.com/api/draft (Cloudflare Workers AI), which does not store it.
+STARTER_URL = "https://www.paisty.com/api/draft"
+_STARTER_HOSTS = frozenset({"www.paisty.com", "paisty.com"})
+_STARTER_CFG: list = []
+
+
+class StarterCapped(ModelOffline):
+    """Today's starter drafts are used up."""
+
+
+class StarterEnded(ModelOffline):
+    """No running trial or key, so no starter drafts."""
+
+
+def starter_url_ok(url: str) -> bool:
+    """https on paisty.com, or a loopback address (tests and local dev)."""
+    if not _url_ok(url):
+        return False
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme == "https" and host in _STARTER_HOSTS:
+        return True
+    return host in {"127.0.0.1", "localhost", "::1"}
+
+
 def needs_key(url: str) -> bool:
     return (urlparse(url or "").hostname or "").lower() in KEYED_HOSTS
 
@@ -64,6 +91,13 @@ def endpoints_from(cfg: dict) -> list[dict]:
                 if isinstance(spec.get("timeout_s"), int) and 5 <= spec["timeout_s"] <= 600:
                     hop["timeout_s"] = spec["timeout_s"]
                 hops.append(hop)
+            elif via == "starter":
+                url = str(spec.get("base_url") or STARTER_URL).strip()
+                if not starter_url_ok(url):
+                    continue
+                hop = {"name": str(name), "via": "starter", "base_url": url, "model": "starter"}
+                hops.append(hop)
+                _STARTER_CFG[:] = [{"paiste": {"license": str(paiste.get("license") or "")}}]
             elif via in {"cursor", "claude", "codex"}:
                 binary = str(spec.get("bin") or "").strip()
                 if not binary.startswith("/") or ".." in binary:
@@ -89,6 +123,9 @@ def endpoints_from(cfg: dict) -> list[dict]:
                     # A paid service with no key can only fail: skip it, try the next engine.
                     continue
                 hops.append(hop)
+    if any(h.get("via") != "starter" for h in hops):
+        # Your own AI, once connected, replaces the starter AI: no window text goes to paisty.com.
+        hops = [h for h in hops if h.get("via") != "starter"]
     llm = cfg.get("llm") if isinstance(cfg.get("llm"), dict) else {}
     if hops:
         # A model on this Mac saved under llm still catches the draft when every engine in the
@@ -150,6 +187,64 @@ def _http(endpoint: dict, messages: list[dict]) -> str:
     system, user = same_context(*_split_messages(messages))
     return chat(endpoint["base_url"], endpoint["model"], user, timeout=float(endpoint.get("timeout_s") or 120),
                 system=system, key=read_key(endpoint)).text
+
+
+STARTER_MAX_CHARS = 38000  # the server refuses over 40000; keep the newest text of a long thread
+
+
+def starter_fit(messages: list[dict]) -> list[dict]:
+    """Trim the oldest part of the longest message until the whole ask fits the starter's limit."""
+    out = [dict(m) for m in messages]
+    total = sum(len(m["content"]) for m in out)
+    while total > STARTER_MAX_CHARS and out:
+        i = max(range(len(out)), key=lambda k: len(out[k]["content"]))
+        over = total - STARTER_MAX_CHARS
+        text = out[i]["content"]
+        if len(text) <= over:
+            out[i]["content"] = ""
+        else:
+            out[i]["content"] = text[over:]
+        total = sum(len(m["content"]) for m in out)
+    return out
+
+
+def _starter(endpoint: dict, messages: list[dict], urlopen=None) -> str:
+    """Ask paisty's starter AI with this Mac's license key or trial pass. The text is not stored there."""
+    import urllib.error
+    import urllib.request
+    from hailports.clip import gate
+    creds = gate.credentials(_STARTER_CFG[0] if _STARTER_CFG else None)
+    if not creds:
+        raise StarterEnded("starter needs a trial or key")
+    body = dict(creds[0])
+    body["device"] = gate.device_id()
+    body["messages"] = starter_fit([{"role": str(m.get("role") or "user"), "content": str(m.get("content") or "")} for m in messages])
+    req = urllib.request.Request(
+        str(endpoint.get("base_url") or STARTER_URL),
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json", "User-Agent": "paisty/1"},
+        method="POST",
+    )
+    opener = urlopen or urllib.request.urlopen
+    try:
+        with opener(req, timeout=float(endpoint.get("timeout_s") or 60)) as resp:
+            doc = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        try:
+            doc = json.loads(exc.read().decode("utf-8"))
+        except (OSError, ValueError):
+            doc = {}
+        reason = str(doc.get("reason") or "")
+        if exc.code == 429 or reason == "cap":
+            raise StarterCapped("starter cap") from None
+        if exc.code == 403 or reason == "license":
+            raise StarterEnded("starter license") from None
+        raise ModelOffline("starter " + str(exc.code)) from None
+    except (OSError, ValueError, TimeoutError) as exc:
+        raise ModelOffline("starter unreachable") from exc
+    if not isinstance(doc, dict) or doc.get("ok") is not True:
+        raise ModelOffline("starter refused")
+    return str(doc.get("text") or "")
 
 
 def _ssh(endpoint: dict, messages: list[dict], run=None) -> str:
@@ -490,6 +585,7 @@ def complete(endpoints: list[dict], messages: list[dict], http=None, ssh=None) -
     http_call = http or _http
     ssh_call = ssh or _ssh
     last = "offline"
+    held = ""
     import time as _time
     for endpoint in endpoints:
         if str(endpoint.get("name") or "") in _SLOW:
@@ -506,10 +602,15 @@ def complete(endpoints: list[dict], messages: list[dict], http=None, ssh=None) -
                 text = _codex(endpoint, messages)
             elif via == "cursor":
                 text = _cursor(endpoint, messages)
+            elif via == "starter":
+                text = _starter(endpoint, messages)
             else:
                 text = http_call(endpoint, messages)
         except Exception as exc:
             last = str(endpoint.get("name") or "?") + ":" + type(exc).__name__
+            if isinstance(exc, (StarterCapped, StarterEnded)):
+                # The menu explains these; a later local hop failing must not hide why.
+                held = "starter cap" if isinstance(exc, StarterCapped) else "starter ended"
             if endpoint.get("via") == "cursor" and _time.time() - t0 > SLOW_S:
                 _SLOW.add(str(endpoint.get("name") or ""))
             continue
@@ -528,4 +629,4 @@ def complete(endpoints: list[dict], messages: list[dict], http=None, ssh=None) -
                 continue
             return str(text).strip(), str(endpoint.get("name") or "")
         last = str(endpoint.get("name") or "?") + ":empty"
-    raise ModelOffline(last)
+    raise ModelOffline(held or last)

@@ -682,7 +682,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
                 blocked = drafted.blocked
             }
             var captureNote = ""
-            if text.isEmpty && blocked != "license" && blocked != "model" {
+            if text.isEmpty && blocked != "license" && blocked != "model" && !blocked.hasPrefix("starter-") {
                 if !CGPreflightScreenCaptureAccess() {
                     captureNote = "need-screen-recording"
                 } else {
@@ -714,6 +714,7 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
                     self.explainScreenRecording()
                 }
                 let hint = blocked == "license" ? self.blockedByLicense()
+                    : blocked.hasPrefix("starter-") ? Self.starterHint(blocked)
                     : blocked == "model" ? "Can't reach your AI model. Right-click the p icon, pick Open setup…, and check its address."
                     : (captureNote == "need-screen-recording" ? "Allow paisty in Screen Recording" : "Nothing to copy")
                 self.fail(hint)
@@ -1266,6 +1267,8 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
             let text = run.out.trimmingCharacters(in: .whitespacesAndNewlines)
             guard run.status == 0, !text.isEmpty else {
                 let why = text == "license" ? "License needed"
+                    : text.hasPrefix("model offline: starter cap") ? Self.starterHint("starter-cap")
+                    : text.hasPrefix("model offline: starter ended") ? Self.starterHint("starter-ended")
                     : text.hasPrefix("model offline") ? "Can't reach your AI model. Open setup… to check it."
                     : "No draft from the copied text"
                 DispatchQueue.main.async { self.fail(why) }
@@ -1923,8 +1926,18 @@ final class PaisteApp: NSObject, NSApplicationDelegate {
         let text = (String(data: data, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if text == "license" { return ("", "license") }
         // The model did not answer: say that, not "Nothing to copy" or a permission prompt.
+        if task.terminationStatus != 0 && text.hasPrefix("model offline: starter cap") { return ("", "starter-cap") }
+        if task.terminationStatus != 0 && text.hasPrefix("model offline: starter ended") { return ("", "starter-ended") }
         if task.terminationStatus != 0 && text.hasPrefix("model offline") { return ("", "model") }
         return task.terminationStatus == 0 ? (text, "") : ("", "")
+    }
+
+    /// The starter AI said no: today's cap, or the trial is over. Point at connecting your own AI.
+    static func starterHint(_ why: String) -> String {
+        if why == "starter-cap" {
+            return "Today's starter drafts are used up. Right-click the p icon, pick Open setup…, and Connect your own AI for unlimited drafts."
+        }
+        return "Your trial ended, so starter drafts stopped. Buy paisty, or Connect your own AI in Open setup…"
     }
 
     static func usable(_ scene: String) -> Bool {

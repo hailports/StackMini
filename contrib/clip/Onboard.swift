@@ -294,7 +294,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         link = (doc["link"] as? String) ?? "api"
         if !["local", "api", "both", "app"].contains(link) { link = "api" }
         pickedApp = doc["app"] as? String ?? ""
-        if !["claude", "codex", "cursor"].contains(pickedApp) { pickedApp = "" }
+        if !["claude", "codex", "cursor", "starter"].contains(pickedApp) { pickedApp = "" }
         showCustom = false
         if let rows = doc["locals"] as? [[String: Any]], !rows.isEmpty {
             locals = rows.map { row in
@@ -547,7 +547,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             autoPage()
         case 1:
             titleField.stringValue = "Pick your AI."
-            body.stringValue = "Bring your own AI: Claude, ChatGPT, or Cursor. Or paste a key from OpenAI, Anthropic, Grok, Gemini, and more."
+            body.stringValue = "No AI yet? Start now with paisty's starter AI. Or bring your own: Claude, ChatGPT, or Cursor, or paste a key from OpenAI, Anthropic, Grok, Gemini, and more."
             aiPage()
         case 2:
             titleField.stringValue = "A local model is optional."
@@ -641,8 +641,10 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         let apiCount = apis.filter { !$0.url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count
         let model: String
         if !pickedApp.isEmpty {
-            let name = ["claude": "Claude", "codex": "Codex", "cursor": "Cursor"][pickedApp] ?? pickedApp
-            if localCount == 0 {
+            let name = ["claude": "Claude", "codex": "Codex", "cursor": "Cursor", "starter": "paisty's starter AI"][pickedApp] ?? pickedApp
+            if pickedApp == "starter" {
+                model = "paisty's starter AI is the model a click asks, capped per day. Connect your own AI anytime for unlimited, private drafts."
+            } else if localCount == 0 {
                 model = name + " is the model a click asks. A local model is optional and was not added."
             } else {
                 model = name + " is the model a click asks. \(localCount) local " + (localCount == 1 ? "model is" : "models are") + " optional and run after " + name + "."
@@ -709,8 +711,12 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         extraHeight = y + 8
     }
 
+    static let starterNote = "Your selected text goes to paisty's server to draft, is not stored, and is capped per day. Connect your own AI anytime for unlimited, private drafts."
+
     func aiPage() {
-        var y = choiceButton("Connect Claude", "claude", 0)
+        var y = choiceButton("Start now (paisty's starter AI)", "starter", 0)
+        y = caption(Self.starterNote, y)
+        y = choiceButton("Connect Claude", "claude", y)
         y = choiceButton("Connect ChatGPT / Codex", "codex", y)
         y = choiceButton("Connect Cursor", "cursor", y)
         y = choiceButton(showCustom ? "API key" : "Use an API key", "custom", y)
@@ -868,6 +874,8 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         var label = title
         if name == "custom" && showCustom {
             label = "API key"
+        } else if name == "starter" && pickedApp == name {
+            label = "Using paisty's starter AI"
         } else if pickedApp == name {
             label = title.replacingOccurrences(of: "Connect ", with: "") + ", connected"
         }
@@ -890,6 +898,24 @@ final class SetupBoard: NSObject, NSWindowDelegate {
                 apis[0].model = preset.model
             }
             render()
+            return
+        }
+        if name == "starter" {
+            statusField.stringValue = "Turning on the starter AI."
+            DispatchQueue.global(qos: .userInitiated).async {
+                let saved = SetupBoard.run(["onboard", "--use", "starter"])
+                let wrote = saved.out.trimmingCharacters(in: .whitespacesAndNewlines)
+                DispatchQueue.main.async {
+                    if wrote == "using" {
+                        self.pickedApp = "starter"
+                        self.showCustom = false
+                        self.statusField.stringValue = "A click will use paisty's starter AI. Click the p icon in any reply box."
+                        self.render()
+                    } else {
+                        self.statusField.stringValue = "The starter AI was not turned on. Try again, or connect your own AI."
+                    }
+                }
+            }
             return
         }
         guard ["claude", "codex", "cursor"].contains(name) else { return }
