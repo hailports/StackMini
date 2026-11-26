@@ -69,12 +69,21 @@ def mask_state(text: str) -> str:
     return _SECRET.sub("[redacted]", text or "")
 
 
+def _key_files() -> list[Path]:
+    """Key file lookup order from the module docstring: JEV_KEY_FILE, then XDG, then the stack secret."""
+    out = []
+    env_file = os.environ.get("JEV_KEY_FILE", "").strip()
+    if env_file:
+        out.append(Path(env_file).expanduser())
+    return out + [XDG_KEY, STACK_KEY]
+
+
 def _key() -> str:
     for name in ("TYPESAFE_API_KEY", "JEV_API_KEY"):
         v = os.environ.get(name, "").strip()
         if v:
             return v
-    for path in (XDG_KEY, STACK_KEY):
+    for path in _key_files():
         try:
             v = path.read_text(encoding="utf-8").strip()
             if v:

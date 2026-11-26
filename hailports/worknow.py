@@ -48,13 +48,13 @@ def brief(router, cards: list[dict], *, user: str = ""):
     )
 
 
-def pack(cards: list[dict], limit: int = 5, *, user: str = "") -> str:
+def pack(cards: list[dict], limit: int = 5, *, user: str = "", today=None) -> str:
     if not cards:
         return "Nothing on the focus list."
     if _rich(cards):
         from hailports.focus_rank import pack_focus
 
-        return pack_focus(cards, limit=limit, user=user)
+        return pack_focus(cards, limit=limit, user=user, today=today)
     lines = []
     for card in cards[:limit]:
         title = str(card.get("title") or "untitled")

@@ -51,7 +51,7 @@ def test_rank_demotes_wrong_owner_and_stale() -> None:
         {"id": "222222", "title": "Sample active item", "state": "Active (Approved)", "mine": True, "changed": "2026-11-04"},
         {"id": "900002", "title": "Sample stale item", "state": "New (Moved to the backlog)", "mine": True, "changed": "2026-09-01"},
     ]
-    packed = pack(cards)
+    packed = pack(cards, today=TODAY)  # fixed date: the sample cards would age past stale_days
     assert packed.find("222222") < packed.find("900001") < packed.find("900002")
     assert "owner: Example User self" not in packed
     assert fg.owner_is_user("Joanne", ("ann",)) is False
@@ -163,7 +163,8 @@ def test_exact_id_and_owner_equality() -> None:
                 "owner": "Example User",
                 "changed": "2026-11-03",
             },
-        ]
+        ],
+        today=TODAY,
     )
     assert self_name.find("222222") < self_name.find("Lower rank") < self_name.find("111111")
     assert "owner: Example User self" not in self_name

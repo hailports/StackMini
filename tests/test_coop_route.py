@@ -40,7 +40,17 @@ def test_short_unsure_and_high_stay_exact():
     assert high["decision"] == "need_premium" and high["answer"] == "" and high["stakes"] == "high"
 
 
-def test_number_heavy_dig_can_finish_locally():
+def _pin_unsure(monkeypatch):
+    # 9a18b8f made the classifier send simple count digs straight to local (stakes low); pin
+    # stakes to "unsure" so these tests keep exercising the coop jev_gate path they are about.
+    import re as _re
+    monkeypatch.setattr(r, "classify_stakes", lambda *_a, **_k: ("unsure", "stakes_unsure"))
+    monkeypatch.setattr(r, "task_type", lambda *_a, **_k: "other")
+    monkeypatch.setattr(r, "_SOFT_DIG", _re.compile(r"(?!x)x"))
+
+
+def test_number_heavy_dig_can_finish_locally(monkeypatch):
+    _pin_unsure(monkeypatch)
     calls = {"n": 0}
 
     def hook(_prompt):
@@ -67,7 +77,8 @@ def test_number_heavy_dig_can_finish_locally():
     assert "295" in result["answer"]
 
 
-def test_bad_score_falls_back():
+def test_bad_score_falls_back(monkeypatch):
+    _pin_unsure(monkeypatch)
     os.environ.pop("JEV_DISABLE", None)
     gate_dir = str(Path(__file__).resolve().parents[1] / "hailports")
     if gate_dir not in sys.path:
