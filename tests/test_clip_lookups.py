@@ -386,7 +386,10 @@ def test_onboarding_copy_matches_the_p_icon_and_the_toggle():
     assert "the p icon" in onboard
     assert "paperclip" not in onboard
     assert "No mail or notes leave this Mac" not in onboard
-    assert "paisty itself doesn't send or keep your mail; your AI model writes the draft." in onboard
+    assert "paisty doesn't keep your mail. Your AI writes the draft; only the starter AI runs on paisty's server." in onboard
+    assert "doesn't send or keep your mail" not in onboard  # untrue once the starter AI (server) is picked
+    assert "Runs on paisty's server, not on this Mac." in onboard
+    assert "The starter AI runs on paisty's server" in onboard
     assert "Look things up before drafting is in the menu" in onboard
     assert "app found." in onboard
     assert '"Mail: "' not in onboard

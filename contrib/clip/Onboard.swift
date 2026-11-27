@@ -25,7 +25,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
     let titleField = NSTextField(labelWithString: "")
     let body = NSTextField(wrappingLabelWithString: "")
     let extra = FlippedView()
-    let footer = NSTextField(wrappingLabelWithString: "paisty itself doesn't send or keep your mail; your AI model writes the draft.")
+    let footer = NSTextField(wrappingLabelWithString: "paisty doesn't keep your mail. Your AI writes the draft; only the starter AI runs on paisty's server.")
     let statusField = NSTextField(wrappingLabelWithString: "")
     let backButton = NSButton(title: "Back", target: nil, action: nil)
     let nextButton = NSButton(title: "Next", target: nil, action: nil)
@@ -542,7 +542,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             titleField.stringValue = "The icon is in the menu bar."
             let next = autoDone && autoNeeds.isEmpty
                 ? "Click the p icon in any reply box."
-                : "Next, set up the AI you already use. One click can do that. paisty itself doesn't send or keep your mail; your AI model writes the draft."
+                : "Next, set up the AI you already use. One click can do that. paisty doesn't keep your mail. Your AI writes the draft; only the starter AI runs on paisty's server."
             body.stringValue = SetupBoard.menuGuide + " " + next + " " + SetupBoard.lookupNote
             autoPage()
         case 1:
@@ -591,8 +591,8 @@ final class SetupBoard: NSObject, NSWindowDelegate {
                 extraHeight = 160
             }
         }
-        if !body.stringValue.contains("doesn't send or keep your mail") {
-            body.stringValue += "\n\npaisty itself doesn't send or keep your mail; your AI model writes the draft."
+        if !body.stringValue.contains("doesn't keep your mail") {
+            body.stringValue += "\n\npaisty doesn't keep your mail. Your AI writes the draft; only the starter AI runs on paisty's server."
         }
         // Save and license pages have a long body: they keep the shorter list so their buttons stay in the window.
         scrollHeight?.constant = (page >= 3 || licenseOnly) ? 220 : 300
@@ -643,7 +643,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         if !pickedApp.isEmpty {
             let name = ["claude": "Claude", "codex": "Codex", "cursor": "Cursor", "starter": "paisty's starter AI"][pickedApp] ?? pickedApp
             if pickedApp == "starter" {
-                model = "paisty's starter AI is the model a click asks, capped per day. Connect your own AI anytime for unlimited, private drafts."
+                model = "paisty's starter AI is the model a click asks. It runs on paisty's server, stores nothing, and is capped per day. Connect your own AI anytime for unlimited drafts that stay private."
             } else if localCount == 0 {
                 model = name + " is the model a click asks. A local model is optional and was not added."
             } else {
@@ -711,11 +711,12 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         extraHeight = y + 8
     }
 
-    static let starterNote = "Your selected text goes to paisty's server to draft, is not stored, and is capped per day. Connect your own AI anytime for unlimited, private drafts."
+    // Loud on purpose: some buyers come for the offline story, so the one server path says so up front.
+    static let starterNote = "Runs on paisty's server, not on this Mac. The text you select is sent there to draft and is not stored. Capped per day. For drafts that never leave this Mac, connect a local model (Ollama, LM Studio, oMLX) or your own AI."
 
     func aiPage() {
         var y = choiceButton("Start now (paisty's starter AI)", "starter", 0)
-        y = caption(Self.starterNote, y)
+        y = caption(Self.starterNote, y, loud: true)
         y = choiceButton("Connect Claude", "claude", y)
         y = choiceButton("Connect ChatGPT / Codex", "codex", y)
         y = choiceButton("Connect Cursor", "cursor", y)
@@ -901,6 +902,12 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             return
         }
         if name == "starter" {
+            let ask = NSAlert()
+            ask.messageText = "The starter AI runs on paisty's server"
+            ask.informativeText = "It does not run on this Mac. When you click the p, the text you select and the message you are answering are sent to paisty's server to write the draft. Nothing is stored there.\n\nWant drafts that never leave this Mac? Connect a local model like Ollama, LM Studio, or oMLX instead."
+            ask.addButton(withTitle: "Use the starter AI")
+            ask.addButton(withTitle: "Cancel")
+            if ask.runModal() != .alertFirstButtonReturn { return }
             statusField.stringValue = "Turning on the starter AI."
             DispatchQueue.global(qos: .userInitiated).async {
                 let saved = SetupBoard.run(["onboard", "--use", "starter"])
@@ -909,7 +916,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
                     if wrote == "using" {
                         self.pickedApp = "starter"
                         self.showCustom = false
-                        self.statusField.stringValue = "A click will use paisty's starter AI. Click the p icon in any reply box."
+                        self.statusField.stringValue = "A click will use paisty's starter AI, on paisty's server. Click the p icon in any reply box."
                         self.render()
                     } else {
                         self.statusField.stringValue = "The starter AI was not turned on. Try again, or connect your own AI."
@@ -1221,7 +1228,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
             return
         }
         autoRunning = true
-        statusField.stringValue = "Setting up on this Mac. paisty itself doesn't send or keep your mail; your AI model writes the draft."
+        statusField.stringValue = "Setting up on this Mac. paisty doesn't keep your mail. Your AI writes the draft; only the starter AI runs on paisty's server."
         render()
         let route = ProcessInfo.processInfo.environment["PAISTE_ROUTE"] ?? ""
         DispatchQueue.global(qos: .userInitiated).async {
@@ -1486,12 +1493,12 @@ final class SetupBoard: NSObject, NSWindowDelegate {
     }
 
     @discardableResult
-    func caption(_ text: String, _ y: CGFloat) -> CGFloat {
+    func caption(_ text: String, _ y: CGFloat, loud: Bool = false) -> CGFloat {
         // Wraps to as many lines as the text needs (it used to clip mid-word). One line keeps its 32-point slot.
         let label = NSTextField(wrappingLabelWithString: text)
         label.isSelectable = false
-        label.font = NSFont.systemFont(ofSize: 12, weight: .medium)
-        label.textColor = NSColor(srgbRed: 0.25, green: 0.22, blue: 0.18, alpha: 1)
+        label.font = NSFont.systemFont(ofSize: 12, weight: loud ? .bold : .medium)
+        label.textColor = loud ? NSColor(srgbRed: 0.62, green: 0.30, blue: 0.0, alpha: 1) : NSColor(srgbRed: 0.25, green: 0.22, blue: 0.18, alpha: 1)
         label.preferredMaxLayoutWidth = 460
         let fit = label.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: 460, height: 400)).height ?? 16
         let height = max(32, ceil(fit) + 4)
