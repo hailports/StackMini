@@ -4,7 +4,7 @@ import IOKit
 
 /// Keys turn themselves on. Nobody pastes anything:
 /// - first launch asks /api/claim, which hands over the key a paid checkout just issued to this network,
-///   or, after a trial checkout, a trial entitlement (see PaistyEntitlement; it is not a key);
+///   or, after a trial signup, a trial entitlement (see PaistyEntitlement; it is not a key);
 /// - the link in the key email opens paisty://activate?k=…;
 /// - pasting still works as a last resort for paid keys. Nothing is pasted during a trial.
 /// The key lives in ~/.config/paiste/license (0600). Device keys are bound to this Mac by `dev`,
@@ -258,7 +258,7 @@ enum PaistyLicense {
     }
 }
 
-/// A trial has no license. A trial checkout gives the app a signed entitlement instead: the thanks page
+/// A trial has no license. A trial signup gives the app a signed entitlement instead: the thanks page
 /// parks it for this network and /api/claim hands it over, or paisty://trial?e=… from the thanks page.
 /// It lives in ~/.config/paiste/entitlement (0600), never in the license file, and is never shown or pasted.
 /// The draft gate sends it to /api/license. The first paid invoice turns into a normal license, which the

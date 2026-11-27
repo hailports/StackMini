@@ -74,7 +74,7 @@ final class SetupBoard: NSObject, NSWindowDelegate {
     var licenseInput = ""
 
     static let pricingURL = URL(string: "https://www.paisty.com/pricing")!
-    /// The trial starts on the website: email and a card at Stripe Checkout. There is no trial key.
+    /// The trial starts on the website with just an email (on paisty.com since 2026-11-26). There is no trial key.
     static let signupURL = URL(string: "https://www.paisty.com/download")!
 
     enum LicenseState {
@@ -422,10 +422,10 @@ final class SetupBoard: NSObject, NSWindowDelegate {
         NSWorkspace.shared.open(Self.pricingURL)
     }
 
-    /// The trial starts on the website with an email and a card. paisty turns itself on after that.
+    /// The trial starts on the website with just an email. paisty turns itself on after that.
     @objc func startTrial() {
         NSWorkspace.shared.open(Self.signupURL)
-        statusField.stringValue = "After checkout, paisty turns itself on. There is no key to paste."
+        statusField.stringValue = "Enter your email on the page that opened. paisty turns itself on. There is no key to paste."
         PaistyLicense.claimUntilActive { [weak self] in
             self?.licenseOnly = false
             self?.statusField.stringValue = "paisty is on. Nothing to paste."
